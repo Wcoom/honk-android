@@ -1,0 +1,46 @@
+#!/bin/sh
+# zig-link：给 rustc 用的链接器包装器（aarch64-linux-musl 静态链接）
+#
+# 为什么直接调 rust-lld 而不是 zig cc：
+#   zig cc 无论如何都会注入自己的 crt1.o，与 rust 的 self-contained crt1.o
+#   冲突（duplicate symbol: _start），-nostartfiles 也拦不住。
+#
+# 为什么要把 -Wl, 拆开：
+#   rustc 以为链接器是 gcc 风格的 driver，传的是 -Wl,-z,now 这种；
+#   直接调 rust-lld 时它只认裸参数（-z now）。
+#
+# 两处语义改写：
+#  1) -lstdc++ -> zig 预构建的 libc++.a/libc++abi.a（musl 无 libstdc++）
+#  2) 丢掉 gcc 专有的 driver 选项，以及 lld 不认的 --fix-cortex-a53-843419
+set -e
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LLD="$HOME/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
+args=""
+add() { args="$args $1"; }
+
+for a in "$@"; do
+  case "$a" in
+    -lstdc++)
+      add "$ROOT/lib/libc++.a"; add "$ROOT/lib/libc++abi.a" ;;
+    -Wl,*)
+      # 拆开 -Wl,a,b,c 里的逗号（注意 -Wl,-z,now 这种是两段）
+      inner="${a#-Wl,}"
+      old_ifs="$IFS"; IFS=','
+      set -- $inner
+      IFS="$old_ifs"
+      for sub in "$@"; do
+        case "$sub" in
+          --fix-cortex-a53-843419) ;;
+          *) add "$sub" ;;
+        esac
+      done ;;
+    -nostartfiles|-nodefaultlibs|-static-libgcc) ;;
+    *) add "$a" ;;
+  esac
+done
+# shellcheck disable=SC2086
+# aws-lc-sys 里的 jitterentropy 编进了 UBSan 插桩（__ubsan_handle_*），
+# 静态链接时必须显式带上运行时，否则一堆 undefined symbol。
+args="$args $ROOT/lib/libubsan_rt.a $ROOT/lib/libcompiler_rt.a"
+# shellcheck disable=SC2086
+exec "$LLD" -flavor gnu $args

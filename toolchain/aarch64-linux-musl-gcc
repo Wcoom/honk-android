@@ -1,0 +1,43 @@
+#!/bin/sh
+# aarch64-linux-musl-gcc 包装器
+#
+# 用途：boring-sys / aws-lc-sys 的 cc-rs 按名字找 aarch64-linux-musl-gcc，
+# 本机没有 musl 交叉 gcc；用 zig 的 clang 冒充。
+#
+# 两个必须做的参数处理：
+#  1) 剥离 Clang 风格的 --target=<rust triple>：zig 不认识 Rust 三元组拼写
+#     （aarch64-unknown-linux-musl），报 UnknownOperatingSystem；
+#  2) 补上 zig 自带的 musl 头目录：交叉时 clang 默认看的是宿主 glibc 头，
+#     找不到 bits/libc-header-start.h。
+set -e
+TARGET="${ZIGCC_TARGET:-aarch64-linux-musl}"
+CC="${ZIGCC_CC:-zig}"
+MODE="${ZIGCC_MODE:-cc}"
+ZLIB="${ZIG_LIB:-/usr/lib/zig0.16/lib}"
+INC=""
+
+case "$*" in
+  *-c*|*-E*|*-S*|"") INC="-isystem $ZLIB/libc/include/aarch64-linux-musl -isystem $ZLIB/libc/include/generic-musl -isystem $ZLIB/libc/include/any-linux-any" ;;
+esac
+
+args=""
+skip=0
+for a in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    --target=*) continue ;;
+    -target) skip=1; continue ;;
+    -target=*) continue ;;
+    # rustc 给 aarch64-musl 默认塞这个 GNU ld 专有选项，zig 的 lld 不认
+    -Wl,--fix-cortex-a53-843419) continue ;;
+    # aws-lc-sys 的 jitterentropy 被加上 -fsanitize=undefined，
+    # 会把 libubsan 的运行时符号拖进来；静态链接场景下没必要，剥掉。
+    -fsanitize=*) continue ;;
+    -fsanitize) skip=1; continue ;;
+  esac
+  args="$args
+$a"
+done
+
+# shellcheck disable=SC2086
+exec "$CC" "$MODE" -target "$TARGET" $INC $(printf '%s\n' "$args" | sed '/^$/d')
