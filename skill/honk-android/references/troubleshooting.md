@@ -9,7 +9,7 @@
 
 ## 2. Config Validation Failures (`honk -t`)
 
-- **Unquoted non-ASCII or space-containing identifiers**: Wrap node names, group names, and file paths containing spaces, emoji, `/`, or special characters in single quotes (`'...'`).
+- **`routing target is not a declared group or builtin`**: In `honk`'s `.dae` parser (`groups.rs`), `group { ... }` block headers are read raw **without stripping quotes** — write bare group names like `Proxy { ... }` / `Domestic { ... }` / `AdBlock { ... }` (NOT `'Proxy' { ... }`). Single quotes are for `node` names or values inside `name('...')` / `group('...')` filters.
 - **Missing geodata**: `honk` reads `geoip.dat` and `geosite.dat` from `global.data_dir` (`/data/user/0/com.boxproxy.honk/files/box/honk/data`). Ensure both files exist and are mode `0644`.
 - **Geodata download URLs**: Place `geosite` and `geoip` URLs under top-level `assets { geodata { ... } }` (not under `experimental.native_api`, which emits a `legacy-assets-key` deprecation warning).
 

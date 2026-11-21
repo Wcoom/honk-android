@@ -42,39 +42,39 @@ node {
 
 group {
   # 智能综合评分策略组
-  'Auto' {
+  Auto {
     policy: score
     filter: !name('direct', 'block')
   }
   # 最低延迟策略组
-  'UrlTest' {
+  UrlTest {
     policy: urltest
     filter: !name('direct', 'block')
   }
   # 故障转移策略组
-  'Fallback' {
+  Fallback {
     policy: fallback
     filter: !name('direct', 'block')
   }
   # 手动选择策略组
-  'Select' {
+  Select {
     policy: select
     filter: !name('direct', 'block')
   }
   # 主出站策略组
-  'Proxy' {
+  Proxy {
     policy: select
     filter: group('Auto', 'UrlTest', 'Fallback', 'Select')
     filter: name('direct', 'block')
-    default: 'Auto'
+    default: Auto
   }
-  'Domestic' {
+  Domestic {
     policy: select
     filter: name('direct', 'block')
     filter: group('Proxy')
     default: direct
   }
-  'AdBlock' {
+  AdBlock {
     policy: select
     filter: name('block', 'direct')
     default: block

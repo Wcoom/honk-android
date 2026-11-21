@@ -164,7 +164,7 @@ EOF
 ```
 常见原因：
 - `geoip.dat` 或 `geosite.dat` 缺失或路径不对（须位于 `$BOX/honk/data/`）。
-- `config.dae` 语法错误（中文或含空格的节点/组名需加单引号，如 `'香港节点'`）。
+- `config.dae` 语法错误（注意：`group { ... }` 中的**策略组名不要加单引号**，如 `Proxy { ... }` 而非 `'Proxy' { ... }`，否则 `routing` 会报 `routing target is not a declared group or builtin`；`node { ... }` 中含空格或特殊字符的节点名才加单引号）。
 - 手机内核低于 Linux 6.6 或未开启 eBPF。
 
 ### 2. 在 Doona 面板里修改了节点或规则后，为什么直接改 `config.dae` 没变化？
