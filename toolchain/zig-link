@@ -14,7 +14,14 @@
 #  2) 丢掉 gcc 专有的 driver 选项，以及 lld 不认的 --fix-cortex-a53-843419
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LLD="$HOME/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
+if [ -n "${RUST_LLD:-}" ]; then
+  LLD="$RUST_LLD"
+else
+  SYSROOT="$(rustc +1.99.1 --print sysroot 2>/dev/null || rustc --print sysroot)"
+  HOST_TRIPLE="$(rustc +1.99.1 -vV 2>/dev/null | sed -n 's/^host: //p')"
+  [ -n "$HOST_TRIPLE" ] || HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+  LLD="$SYSROOT/lib/rustlib/$HOST_TRIPLE/bin/rust-lld"
+fi
 args=""
 add() { args="$args $1"; }
 

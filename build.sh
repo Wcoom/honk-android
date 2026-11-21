@@ -33,13 +33,37 @@ MUSL_INC="-isystem $ZIG_LIB/libc/include/aarch64-linux-musl -isystem $ZIG_LIB/li
 export BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_musl="$MUSL_INC"
 export BINDGEN_EXTRA_CLANG_ARGS="$MUSL_INC"
 
+# 脱敏编译路径：避免二进制 panic 信息中携带本机用户名/工作目录绝对路径
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=/build --remap-path-prefix=$ROOT=/src"
+
 cd "$SRC"
 # 本机 12 核 / 14 GiB，尽量占满并行
 # feature 组合照抄官方 release.yml：
 #   full 变体 = clash-api,native-ui，再拼 ebpf,rprx，静态目标加 jemalloc
-# 去掉 native-ui：它要求联网拉取 doona 前端资源（HONK_DOONA_DIR），
-# 本机装不了；clash-api 足够（BoxProxy 走的就是 Clash API）。
-FEATURES="ebpf,rprx,clash-api,jemalloc"
+# 当 HONK_DOONA_DIR 未显式指定时，若 src/target/doona-* 已拉取则自动复用；
+# 若设置 FETCH_DOONA=1 则自动调用 ci/fetch-doona.sh 拉取官方预构建 Doona 资源。
+if [ -z "${HONK_DOONA_DIR:-}" ]; then
+    if [ "${FETCH_DOONA:-0}" = "1" ] && [ -x "$SRC/ci/fetch-doona.sh" ]; then
+        HONK_DOONA_DIR="$("$SRC/ci/fetch-doona.sh")"
+        export HONK_DOONA_DIR
+    else
+        for cand in "$SRC"/target/doona-[0-9]*; do
+            if [ -d "$cand" ] && [ -d "${cand}-lite" ]; then
+                HONK_DOONA_DIR="$cand"
+                export HONK_DOONA_DIR
+                break
+            fi
+        done
+    fi
+fi
+
+# 当 HONK_DOONA_DIR 指向已拉取的 doona 资源（及 -lite 同级目录）时启用 native-ui（内嵌 Doona），
+# 否则启用 native-api（仍支持通过 experimental.native_api.ui 指定本地目录加载 Doona）。
+if [ -n "${HONK_DOONA_DIR:-}" ] && [ -d "$HONK_DOONA_DIR" ] && [ -d "${HONK_DOONA_DIR}-lite" ]; then
+    FEATURES="ebpf,rprx,clash-api,native-ui,jemalloc"
+else
+    FEATURES="ebpf,rprx,clash-api,native-api,jemalloc"
+fi
 cargo build --release -p honk-core --no-default-features --features "$FEATURES" \
     --target aarch64-unknown-linux-musl "$@"
 

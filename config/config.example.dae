@@ -1,0 +1,154 @@
+# Honk for Android 正式版推荐配置模板（已完全脱敏）
+#
+# 使用方式：
+# 1. 在 node { ... } 中填入你的节点链接，或在 subscription { ... } 中填入订阅地址；
+# 2. 按需在 dns.upstream { ... } 中替换为你的 DoH / DoH3 / DoT 地址；
+# 3. 将本文件复制为 /data/user/0/com.boxproxy.box/files/box/honk/config.dae 并在 BoxProxy 中启用。
+
+global {
+  tproxy_port: 12345
+  log_level: info
+  wan_interface: auto
+  auto_config_kernel_parameter: true
+  dial_mode: domain++
+  # 首项使用支持 HTTPS/HTTP3 (QUIC) 的探测地址以同时启用节点评分 QUIC 探测
+  tcp_check_url: 'https://cp.cloudflare.com/generate_204', 'http://connectivitycheck.platform.hicloud.com/generate_204'
+  tcp_check_http_method: HEAD
+  udp_check_dns: 'dns.google:53', '1.1.1.1:53'
+  check_interval: 3600s
+  check_tolerance: 50ms
+  tls_implementation: utls
+  utls_imitate: chrome_auto
+  allow_insecure: false
+  nfqueue_enable: false
+  # Android 无 /etc/resolv.conf，强烈建议同时配置主/备直连 Bootstrap DNS
+  bootstrap_resolver: '223.5.5.5:53'
+  fallback_resolver: '119.29.29.29:53'
+  data_dir: '/data/user/0/com.boxproxy.box/files/box/honk/data'
+  preconnect_node_count: 2
+  udp_warm_node_count: 2
+}
+
+# 可选：订阅配置（取消注释并替换为你的订阅链接）
+# subscription {
+#   my_sub: 'https://example.com/your-subscription-url'
+# }
+
+node {
+  # 示例节点（请替换为实际节点链接）
+  'example-vless': 'vless://00000000-0000-0000-0000-000000000000@example.com:443?encryption=none&security=tls&type=ws&sni=example.com&path=%2Fws'
+  'example-anytls': 'anytls://your-password@example.com:443/?sni=example.com'
+}
+
+group {
+  # 智能综合评分策略组
+  'Auto' {
+    policy: score
+    filter: !name('direct', 'block')
+  }
+  # 最低延迟策略组
+  'UrlTest' {
+    policy: urltest
+    filter: !name('direct', 'block')
+  }
+  # 故障转移策略组
+  'Fallback' {
+    policy: fallback
+    filter: !name('direct', 'block')
+  }
+  # 手动选择策略组
+  'Select' {
+    policy: select
+    filter: !name('direct', 'block')
+  }
+  # 主出站策略组
+  'Proxy' {
+    policy: select
+    filter: group('Auto', 'UrlTest', 'Fallback', 'Select')
+    filter: name('direct', 'block')
+    default: 'Auto'
+  }
+  'Domestic' {
+    policy: select
+    filter: name('direct', 'block')
+    filter: group('Proxy')
+    default: direct
+  }
+  'AdBlock' {
+    policy: select
+    filter: name('block', 'direct')
+    default: block
+  }
+}
+
+dns {
+  ipversion_prefer: 4
+  optimistic_cache: true
+  upstream {
+    # 公共加密 DNS 示例（可替换为自定义 DoH / DoH3 / DoT 地址）
+    alidns_doh: 'https://dns.alidns.com/dns-query' -> direct
+    dnspod_doh: 'https://doh.pub/dns-query' -> direct
+    cloudflare_doh: 'https://cloudflare-dns.com/dns-query' -> Proxy
+    bootstrap_udp: 'udp://223.5.5.5:53' -> direct
+  }
+  routing {
+    request {
+      # DNS 服务器域名与节点域名走直连 Bootstrap 解析，避免回环
+      qname(suffix:alidns.com, suffix:doh.pub) -> bootstrap_udp
+      qname(geosite:private, suffix:lan, suffix:localdomain, suffix:localhost, suffix:local, suffix:home.arpa) -> asis
+      qname(geosite:cn, geosite:geolocation-cn, geosite:apple-cn, geosite:googlefcm) -> alidns_doh
+      fallback: cloudflare_doh
+    }
+    response {
+      fallback: accept
+    }
+  }
+}
+
+routing {
+  # 放行 Android USB 共享网络（rndis0/ncm0/usb0）及其内置 dnsmasq，避免劫持热点流量
+  pname('dnsmasq') -> direct(must)
+  sip(192.168.42.0/24) -> direct(must)
+
+  # 局域网 / 私有地址 / 组播直连（排除 53 端口以保证 honk DNS 拦截生效）
+  dip(geoip:private, 100.64.0.0/10, 224.0.0.0/4, 255.255.255.255/32) && !dport(53) -> direct(must)
+  domain(geosite:private) -> direct
+
+  # 广告拦截
+  domain(geosite:category-ads-all) -> AdBlock
+
+  # 国内域名与 IP 直连
+  domain(geosite:cn, geosite:geolocation-cn, geosite:apple-cn, geosite:google-cn) -> Domestic
+  dip(geoip:cn) -> Domestic
+
+  # 其余流量走代理
+  fallback: Proxy
+}
+
+experimental {
+  # 供 BoxProxy 原生「面板」与首页延迟/网速监控使用（仅监听本机回环）
+  clash_api {
+    external_controller: '127.0.0.1:9090'
+    secret: ''
+    default_mode: Rule
+  }
+  # 供 BoxProxy「WebUI」直接打开 honk 原生 Doona 面板（已内嵌至二进制，无需额外前端文件）
+  native_api {
+    enabled: true
+    listen: '127.0.0.1:9527'
+    allow_anonymous_loopback: true
+    config_write: true
+    ui: 'embedded'
+  }
+  cache_file {
+    enabled: true
+    store_dns: true
+  }
+}
+
+assets {
+  geodata {
+    geosite: 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat'
+    geoip: 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat'
+  }
+}

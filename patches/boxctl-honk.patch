@@ -1,0 +1,355 @@
+diff --git a/boxctl/src/cli.rs b/boxctl/src/cli.rs
+index a1be89c..bd0480b 100644
+--- a/boxctl/src/cli.rs
++++ b/boxctl/src/cli.rs
+@@ -19,6 +19,7 @@ pub(crate) enum Command {
+     Monitor,
+     MonitorStop,
+     Wifi(WifiCommand),
++    Clashapi,
+ }
+ 
+ #[derive(Debug)]
+@@ -337,10 +338,15 @@ enum RawCommand {
+         #[command(subcommand)]
+         command: Option<RawMonitorCommand>,
+     },
++    #[command(alias = "network-match")]
+     Wifi {
+         #[command(subcommand)]
+         command: RawWifiCommand,
+     },
++    Clashapi {
++        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
++        _args: Vec<String>,
++    },
+ }
+ 
+ #[derive(Debug, Subcommand)]
+@@ -521,6 +527,7 @@ impl RawCommand {
+                 None => Command::Monitor,
+             },
+             Self::Wifi { command } => Command::Wifi(command.into()),
++            Self::Clashapi { .. } => Command::Clashapi,
+         })
+     }
+ }
+diff --git a/boxctl/src/config.rs b/boxctl/src/config.rs
+index 6eb281a..041f575 100644
+--- a/boxctl/src/config.rs
++++ b/boxctl/src/config.rs
+@@ -269,7 +269,7 @@ impl Config {
+             box_log: paths.run.join("runs.log"),
+             box_user_group: "root:net_admin".to_string(),
+             bin_name: bin_name.clone(),
+-            bin_list: ["mihomo", "sing-box", "xray", "v2fly", "hysteria"]
++            bin_list: ["mihomo", "sing-box", "xray", "v2fly", "hysteria", "honk"]
+                 .iter()
+                 .map(|value| value.to_string())
+                 .collect(),
+@@ -396,7 +396,7 @@ impl Config {
+         self.bin_name = normalize_choice(
+             "core",
+             &self.bin_name,
+-            &["mihomo", "sing-box", "xray", "v2fly", "hysteria"],
++            &["mihomo", "sing-box", "xray", "v2fly", "hysteria", "honk"],
+         )?;
+         self.dns_hijack_mode = normalize_choice(
+             "DNS hijack mode",
+@@ -438,7 +438,7 @@ impl Config {
+ }
+ 
+ fn runtime_config_file_path(paths: &BoxPaths) -> PathBuf {
+-    paths.state.join("startup-config")
++    paths.state.join("config").join("startup-config")
+ }
+ 
+ fn core_uses_runtime_config(bin_name: &str) -> bool {
+@@ -461,7 +461,7 @@ mod tests {
+ 
+         assert_eq!(
+             runtime_config_file_path(&paths),
+-            PathBuf::from("/box/run/state/startup-config")
++            PathBuf::from("/box/run/state/config/startup-config")
+         );
+     }
+ 
+diff --git a/boxctl/src/core_config.rs b/boxctl/src/core_config.rs
+index 3101563..fabe34e 100644
+--- a/boxctl/src/core_config.rs
++++ b/boxctl/src/core_config.rs
+@@ -27,6 +27,17 @@ pub fn sync(config: &Config) -> Result<()> {
+     match config.bin_name.as_str() {
+         "mihomo" => sync_mihomo(config),
+         "sing-box" => sync_sing_box(config),
++        "honk" => {
++            let source = config.source_config_path();
++            if let Ok(content) = fs::read_to_string(source) {
++                let _ = write_atomic_runtime_config(
++                    source,
++                    config.runtime_config_path(),
++                    &content,
++                );
++            }
++            Ok(())
++        }
+         "hysteria" | "xray" | "v2fly" => {
+             if config.auto_sync_config {
+                 logger::warn_key(
+@@ -42,8 +53,10 @@ pub fn sync(config: &Config) -> Result<()> {
+ }
+ 
+ pub(crate) fn ensure_network_mode_supported(config: &Config) -> Result<()> {
+-    if config.network_mode == crate::config::NetworkMode::Ebpf && config.bin_name != "sing-box" {
+-        return Err("eBPF network mode is only supported by sing-box".to_string());
++    if config.network_mode == crate::config::NetworkMode::Ebpf
++        && !matches!(config.bin_name.as_str(), "sing-box" | "mihomo" | "honk")
++    {
++        return Err("eBPF network mode is only supported by mihomo, sing-box, and honk".to_string());
+     }
+     Ok(())
+ }
+diff --git a/boxctl/src/db/read.rs b/boxctl/src/db/read.rs
+index 8ca9272..9978bc4 100644
+--- a/boxctl/src/db/read.rs
++++ b/boxctl/src/db/read.rs
+@@ -16,21 +16,41 @@ pub(super) struct HotspotSettings {
+ }
+ 
+ pub(super) fn load_profile(conn: &Connection) -> Result<RuntimeData> {
++    let has_tproxy_port = conn
++        .prepare("SELECT tproxy_port FROM runtime_profile WHERE id = 1")
++        .is_ok();
++    let sql = if has_tproxy_port {
++        "SELECT
++            core_name, mode, proxy_mode, auto_sync_config, performance_mode,
++            clean_vendor_firewall, ipv6_mode,
++            config_name, tproxy_port, redir_port, quic, mihomo_dns_forward,
++            mihomo_dns_port,
++            proxy_tcp, proxy_udp, dns_hijack_tcp, dns_hijack_udp, dns_hijack_mode,
++            cgroup_memcg, memcg_limit, taskset_cpu, allow_cpu, cgroup_blkio, weight,
++            bypass_cn, tun_device, fake_ip_range, fake_ip6_range,
++            cn.bypass_ipv4, cn.bypass_ipv6, cn.ipv4_file, cn.ipv6_file,
++            cn.cnip_mode
++         FROM runtime_profile
++         LEFT JOIN cnip_settings cn ON cn.id = 1
++         WHERE runtime_profile.id = 1"
++    } else {
++        "SELECT
++            core_name, mode, proxy_mode, auto_sync_config, performance_mode,
++            clean_vendor_firewall, ipv6_mode,
++            config_name, '9898' AS tproxy_port, '9797' AS redir_port, quic, mihomo_dns_forward,
++            '' AS mihomo_dns_port,
++            proxy_tcp, proxy_udp, dns_hijack_tcp, dns_hijack_udp, dns_hijack_mode,
++            cgroup_memcg, memcg_limit, taskset_cpu, allow_cpu, cgroup_blkio, weight,
++            bypass_cn, '' AS tun_device, '' AS fake_ip_range, '' AS fake_ip6_range,
++            cn.bypass_ipv4, cn.bypass_ipv6, cn.ipv4_file, cn.ipv6_file,
++            cn.cnip_mode
++         FROM runtime_profile
++         LEFT JOIN cnip_settings cn ON cn.id = 1
++         WHERE runtime_profile.id = 1"
++    };
+     let row = conn
+         .query_row(
+-            "SELECT
+-                core_name, mode, proxy_mode, auto_sync_config, performance_mode,
+-                clean_vendor_firewall, ipv6_mode,
+-                config_name, tproxy_port, redir_port, quic, mihomo_dns_forward,
+-                mihomo_dns_port,
+-                proxy_tcp, proxy_udp, dns_hijack_tcp, dns_hijack_udp, dns_hijack_mode,
+-                cgroup_memcg, memcg_limit, taskset_cpu, allow_cpu, cgroup_blkio, weight,
+-                bypass_cn, tun_device, fake_ip_range, fake_ip6_range,
+-                cn.bypass_ipv4, cn.bypass_ipv6, cn.ipv4_file, cn.ipv6_file,
+-                cn.cnip_mode
+-             FROM runtime_profile
+-             LEFT JOIN cnip_settings cn ON cn.id = 1
+-             WHERE runtime_profile.id = 1",
++            sql,
+             [],
+             |row| {
+                 Ok(RuntimeData {
+@@ -154,7 +174,7 @@ pub(super) fn read_wifi_settings(conn: &Connection) -> Result<WifiSettings> {
+             enable_network_control_log: enable_network_control_log != 0,
+             list_mode,
+         }),
+-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(WifiSettings {
++        Err(_) => Ok(WifiSettings {
+             network_control_enabled: false,
+             use_on_wifi_disconnect: true,
+             use_on_wifi_connect: true,
+@@ -162,7 +182,6 @@ pub(super) fn read_wifi_settings(conn: &Connection) -> Result<WifiSettings> {
+             enable_network_control_log: true,
+             list_mode: "blacklist".to_string(),
+         }),
+-        Err(err) => Err(format!("read wifi_match_settings failed: {err}")),
+     }
+ }
+ 
+@@ -177,11 +196,10 @@ pub(super) fn read_hotspot_settings(conn: &Connection) -> Result<HotspotSettings
+             mac_filter: mac_filter != 0,
+             mac_mode,
+         }),
+-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(HotspotSettings {
++        Err(_) => Ok(HotspotSettings {
+             mac_filter: false,
+             mac_mode: "blacklist".to_string(),
+         }),
+-        Err(err) => Err(format!("read hotspot_settings failed: {err}")),
+     }
+ }
+ 
+@@ -191,9 +209,9 @@ pub(super) fn read_string_list(
+     column: &str,
+ ) -> Result<Vec<String>> {
+     let sql = format!("SELECT {column} FROM {table} ORDER BY id");
+-    let mut stmt = conn
+-        .prepare(&sql)
+-        .map_err(|err| format!("read {table} failed: {err}"))?;
++    let Ok(mut stmt) = conn.prepare(&sql) else {
++        return Ok(Vec::new());
++    };
+     let rows = stmt
+         .query_map([], |row| {
+             let value: String = row.get(0)?;
+diff --git a/boxctl/src/main.rs b/boxctl/src/main.rs
+index 432f78d..d6eb6f5 100644
+--- a/boxctl/src/main.rs
++++ b/boxctl/src/main.rs
+@@ -82,5 +82,6 @@ fn run() -> Result<()> {
+         Command::Monitor => monitor::run(&config, &runner),
+         Command::MonitorStop => monitor::stop(&config, &runner),
+         Command::Wifi(WifiCommand::Apply) => monitor::apply_wifi_policy(&config, &runner),
++        Command::Clashapi => Ok(()),
+     }
+ }
+diff --git a/boxctl/src/service.rs b/boxctl/src/service.rs
+index 995521e..9b6a73e 100644
+--- a/boxctl/src/service.rs
++++ b/boxctl/src/service.rs
+@@ -24,6 +24,8 @@ const STOP_WAIT_TOTAL_MS: u64 = 1500;
+ const STOP_POLL_MIN_MS: u64 = 10;
+ const STOP_POLL_MAX_MS: u64 = 100;
+ const STARTUP_PROBE_DELAY_MS: u64 = 300;
++const HONK_STARTUP_PROBE_DELAY_MS: u64 = 1500;
++const STARTUP_PROBE_POLL_MS: u64 = 100;
+ 
+ pub fn start(config: &Config, runner: &Runner) -> Result<()> {
+     match start_inner(config, runner) {
+@@ -63,6 +65,14 @@ fn start_inner(config: &Config, runner: &Runner) -> Result<()> {
+     prepare_permissions(config, runner)?;
+     run_config_check(config, runner)?;
+ 
++    if !runner.dry_run() && config.bin_name == "honk" {
++        let runtime = config.runtime_config_path();
++        if let Some(parent) = runtime.parent() {
++            let _ = fs::create_dir_all(parent);
++        }
++        let _ = fs::copy(config.source_config_path(), runtime);
++    }
++
+     let envs = core_env(config);
+     let (program, args) = core_run_command(config);
+     logger::debug_key(
+@@ -94,13 +104,33 @@ fn start_inner(config: &Config, runner: &Runner) -> Result<()> {
+     };
+ 
+     if !runner.dry_run() {
++        let identity = config.paths.run.join("box.identity");
++        if identity.exists() {
++            let _ = fs::remove_file(&identity);
++        }
+         fs::write(&config.box_pid, pid.to_string())
+             .map_err(|err| format!("write PID {} failed: {err}", config.box_pid.display()))?;
+     }
+ 
+     if !runner.dry_run() {
+-        thread::sleep(Duration::from_millis(STARTUP_PROBE_DELAY_MS));
+-        if !pid_matches_core(config, &pid.to_string()) {
++        let probe_total_ms = if config.bin_name == "honk" {
++            HONK_STARTUP_PROBE_DELAY_MS
++        } else {
++            STARTUP_PROBE_DELAY_MS
++        };
++        let deadline = Instant::now() + Duration::from_millis(probe_total_ms);
++        let pid_str = pid.to_string();
++        let exited = loop {
++            let remaining = deadline.saturating_duration_since(Instant::now());
++            if remaining.is_zero() {
++                break !pid_matches_core(config, &pid_str);
++            }
++            thread::sleep(remaining.min(Duration::from_millis(STARTUP_PROBE_POLL_MS)));
++            if !pid_matches_core(config, &pid_str) {
++                break true;
++            }
++        };
++        if exited {
+             let _ = remove_pid(config);
+             let detail = read_log_tail(&config.bin_log);
+             let detail = if detail.is_empty() {
+@@ -252,7 +282,7 @@ fn validate_core(config: &Config) -> Result<()> {
+     );
+ 
+     match config.bin_name.as_str() {
+-        "mihomo" | "sing-box" | "xray" | "v2fly" | "hysteria" => {}
++        "mihomo" | "sing-box" | "xray" | "v2fly" | "hysteria" | "honk" => {}
+         other => return Err(format!("unknown core: {other}")),
+     }
+ 
+diff --git a/boxctl/src/service/command.rs b/boxctl/src/service/command.rs
+index 6dede90..87003d6 100644
+--- a/boxctl/src/service/command.rs
++++ b/boxctl/src/service/command.rs
+@@ -14,6 +14,7 @@ pub(super) fn core_check_command(config: &Config) -> (String, Vec<String>) {
+         "xray" => (bin, vec!["-test".into(), "-confdir".into(), dir]),
+         "v2fly" => (bin, vec!["test".into(), "-d".into(), dir]),
+         "hysteria" => (String::new(), Vec::new()),
++        "honk" => (bin, vec!["-t".into(), "-d".into(), dir, "-f".into(), file]),
+         _ => (String::new(), Vec::new()),
+     }
+ }
+@@ -30,6 +31,14 @@ pub(super) fn core_run_command(config: &Config) -> (String, Vec<String>) {
+         "xray" => args.extend(["run".into(), "-confdir".into(), dir]),
+         "v2fly" => args.extend(["run".into(), "-d".into(), dir]),
+         "hysteria" => args.extend(["-c".into(), file]),
++        "honk" => args.extend([
++            "-d".into(),
++            format!("{dir}/data"),
++            "-c".into(),
++            file,
++            "--store".into(),
++            "db".into(),
++        ]),
+         _ => {}
+     }
+ 
+@@ -51,9 +60,15 @@ pub(super) fn core_run_command(config: &Config) -> (String, Vec<String>) {
+ 
+ pub(super) fn core_env(config: &Config) -> Vec<(&'static str, String)> {
+     let asset_dir = config.core_dir().to_string_lossy().to_string();
++    let run_dir = config.paths.run.to_string_lossy().to_string();
+     match config.bin_name.as_str() {
+         "xray" => vec![("XRAY_LOCATION_ASSET", asset_dir)],
+         "v2fly" => vec![("V2RAY_LOCATION_ASSET", asset_dir)],
++        "honk" => vec![
++            ("HONK_RUN_DIR", run_dir),
++            ("HONK_RECORD_ALWAYS", "1".to_string()),
++            ("SSL_CERT_DIR", "/apex/com.android.conscrypt/cacerts".to_string()),
++        ],
+         _ => Vec::new(),
+     }
+ }
+diff --git a/boxctl/src/service/process.rs b/boxctl/src/service/process.rs
+index 87f4c70..c0fcb1b 100644
+--- a/boxctl/src/service/process.rs
++++ b/boxctl/src/service/process.rs
+@@ -178,6 +178,10 @@ pub(super) fn pid_matches_bin(bin_name: &str, pid: &str) -> bool {
+ }
+ 
+ pub(super) fn remove_pid(config: &Config) -> Result<()> {
++    let identity = config.paths.run.join("box.identity");
++    if identity.exists() {
++        let _ = fs::remove_file(&identity);
++    }
+     if config.box_pid.exists() {
+         fs::remove_file(&config.box_pid)
+             .map_err(|err| format!("delete PID {} failed: {err}", config.box_pid.display()))?;

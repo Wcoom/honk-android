@@ -1,6 +1,8 @@
-# 为什么 honk 的 TC 数据面过不了 6.6 的 verifier
+# 为什么 honk 的 TC 数据面过不了 6.6 的 verifier —— 根因与解法
 
-## 现象
+## 1. 现象
+
+上游 honk v0.1.0-beta.6 的 TC 程序（`wan_egress_l2` / `wan_egress_l3` 等）在 Android GKI **6.6.118** 上加载失败：
 
 ```
 load TC program 'wan_egress_l2':
@@ -8,59 +10,50 @@ load TC program 'wan_egress_l2':
 BPF program is too large. Processed 1000001 insn
 processed 1000001 insns (limit 1000000) max_states_per_insn 50
   total_states 44810 peak_states 4483 mark_read 116
-verification time 3403809 usec
 ```
 
-cgroup 六个程序、TCX 附着、BTF、freplace、map-in-map 全部正常。
-只死在这一个程序上。`BPF_COMPLEXITY_LIMIT_INSNS` 在 6.6 和 7.3 里
-**都是 1000000**，所以不是"版本号"的差别。
+而在 6.12+ 内核上，同一份字节码只需 53K–368K 条验证指令。
 
-## 已经试过、都无效的优化
+## 2. 两大根因
 
-| 改动 | 结果 |
-|---|---|
-| `opt-level=3` + `inline-threshold=1000` | 无变化（仍 1M） |
-| `write_bytes(handoff, 0, 1)` → 结构体赋值 | 无变化 |
-| `ParseTransportCtx` 的 `write_bytes` → 逐字段 `write_volatile` | 无变化 |
-| 两处 handoff 写入改成逐字段直写（去掉栈临时量） | 无变化 |
-| `do_tproxy_wan_egress` 改 `inline(never)` | 1M → **611,514**（有效！但…） |
-| 再把 tcp/udp 也 `inline(never)` | 611K 但 **栈超限**：`combined stack size of 4 calls is 544. Too large` |
-| 只拆 udp | 又回到 1M |
+### 根因 A：单一大函数内联导致分支状态叠加，而纵向拆子程序又撞 512B 栈上限
 
-`inline(never)` 那一档确实把成本砍了 **39%**（1M → 611K），进到了
-上限以内 —— 但拆出子程序后 4 层调用链栈和 544 字节，超过 BPF 的
-512 字节硬上限。而 BPF 没有"只压栈不拆函数"的开关。
+`do_tproxy_wan_egress` 把包解析、前置过滤、TCP conntrack + 编译路由 + handoff、UDP conntrack + 编译路由 + handoff 全部内联在一个函数内，6.6 verifier 状态合并能力较弱，所有路径状态在主函数内笛卡尔积叠加。
 
-## 为什么 6.12 能过
+但如果简单把 `do_tproxy_wan_egress` → `do_tproxy_wan_egress_tcp` → `__mark_tcp_seen` → `send_flow_expired` 纵向拆成嵌套子程序，4 层调用链栈深达到 `352 + 296 + 56 = 704B`（或 `544B`），超过 BPF `MAX_BPF_STACK = 512B` 硬上限。
 
-上游 `doc/en/design/routing.md` 记录，同类策略在 **6.12.107** 上
-verifier 只走 53,741–368,874 条指令。同样的字节码、同一个 LLVM，
-在 6.6 上要 1M+。差别在 verifier 的状态合并能力：
+### 根因 B：`aya_ebpf::memset` 逐字节循环在多分支下的状态乘数爆炸
 
-- 6.6 `regsafe()` 对 `PTR_TO_MAP_VALUE` 只比 `memcmp(rold, rcur, offsetof(id))`
-  + `range_within` + `tnum_in` + `check_ids`；
-- 6.12/7.3 增加了标量/tnum 的更细粒度子集判定，以及状态剪枝的启发式改进。
+即使把 `wan_egress_l2` 压到 ~57 万指令，`wan_egress_l3` 依然会撞 `1000001 insns`。检查 verifier 日志末尾发现，验证器死在 `.text` 中的 `aya_ebpf::memset`：
 
-结果是同一个带大循环 + 多层条件的数据面程序，6.6 的 verifier 要多走
-一个数量级的状态。
+```asm
+0000000000001778 <memset>:
+  if r3 == 0x0 goto +0x6
+  r4 = 0x0
+loop:
+  r5 = r1
+  r5 += r4
+  *(u8 *)(r5 + 0x0) = r2
+  r4 += 0x1
+  if r3 > r4 goto loop
+  exit
+```
 
-## 可行的三条路
+- 在Rust `no_std` eBPF 目标下，无论是 `ptr::write_bytes(p, 0, 1)`、`mem::zeroed()`、`*p = T::default()`，还是未加 `write_volatile` 的逐字段清零，都会被 LLVM `MemCpyOpt` Pass 合并成 `call memset(ptr, 0, N)`。
+- 6.6 verifier 验证这个逐字节循环时，循环计数器 `r4` 从 `0` 递增到 `N`，每一轮都是不同的精确标量，**完全无法状态剪枝**，一次 `memset(72)` 就要原地展开 72 轮（~360 条验证指令）。
+- 在 `wan_egress_l3` 中，入口先调 `l3_link_h_len(&ctx)` 返回 `{0, 14}` 两种可能值，导致后续整个调用树的状态数翻倍；路径上残余的 `ConnState`（72B）、`ConntrackArgs`（56B）、`RedirectEntry`（64B）、`RoutingInput`（96B）、`Tuples`（48B）等各处 `memset` 循环叠加起来，轻松吞掉数百万条验证指令预算。
 
-1. **写一个 6.6 能过的数据面**（工作量最大，但正路）
-   honk 的 TC 程序承担：包解析 → conntrack → 编译路由扩展（freplace）→
-   handoff 发布 → 重定向。可以把「编译路由扩展」这块从 TC 程序里挪走：
-   TC 只做「解析 + 查表 + 重定向」，路由由用户态在 accept 后算（honk 已有
-   用户态 `Router::route_full`，`handoff=None` 时就走它）。
+## 3. 解法（已实测全部 8 个 L2/L3 TC 程序一次通过）
 
-2. **不用 TC，走 iptables TPROXY + 用户态透明 socket**
-   实测本内核支持：`iptables -t mangle -j TPROXY --on-port --tproxy-mark`
-   rc=0，`ip rule fwmark` / `ip route local table` 都可用。
-   honk 已经是 TPROXY 架构（dae0peer + sk_lookup 把包投给 TPROXY 监听），
-   把「选哪些包」从 TC 换成 iptables 规则即可。这需要改 honk：
-   - 新增 `datapath: iptables` 模式
-   - 启动时用 iptables 代替 TC 挂载
-   - 路由决策全走用户态
-
-3. **抬 verifier 上限**（不推荐）
-   `BPF_COMPLEXITY_LIMIT_INSNS` 是编译期常量，改它等于绕过验证器的
-   安全边界。而且 6.6 verifier 本来就慢，抬上去只会让加载时间更长。
+1. **平级子程序分派（Sibling Subprogram Dispatch）**：
+   - 将 `do_tproxy_wan_egress` 拆为三个**平级** `#[inline(never)]` 子程序：
+     - `wan_egress_prelude(ctx, link_h_len) -> c_long`（栈 64B）：只做包解析与前置过滤，返回 `WAN_CONTINUE_TCP` / `WAN_CONTINUE_UDP` 或直接判决；
+     - `do_tproxy_wan_egress_tcp_entry(ctx, link_h_len) -> c_long`（栈 312B）：从 `PKT_SCRATCH_KEY` 取出已解析包，独立完成 TCP 路径；
+     - `do_tproxy_wan_egress_udp_entry(ctx, link_h_len) -> c_long`（栈 296B）：从 `PKT_SCRATCH_KEY` 取出已解析包，独立完成 UDP 路径。
+   - 三个子程序平级调用、栈帧互不叠加；且全部返回单寄存器 `c_long`（避免 Rust `Result<c_long, c_long>` 用 `r0+r2` 双寄存器返回触发 verifier `R2 !read_ok`）。
+2. **`ConnSnapshotSlot` 消除 conntrack 插入时的 80B 栈临时量**：
+   - 将 `CONNTRACK_SNAPSHOT_MAP` 的元素类型改为与 `FlowMapValue<ConnState>` 同布局的 `ConnSnapshotSlot { lock_val: u32, padding: u32, value: ConnState }`（80B）。
+   - `CONN_STATE_MAP.insert` 直接传入该 per-CPU map 槽位指针，不再在栈上构造 `FlowMapValue::new(*new_state)`，使 `__mark_tcp_seen` 栈深从 144B 降到 80B，`__mark_udp_seen` 从 128B 降到 72B，全链最大栈深降至 **432B <= 512B**。
+3. **`zero_in_place_volatile<T>` 彻底消灭大块 `memset` 循环**：
+   - 在 `honk-ebpf-common::conn` 提供 `zero_in_place_volatile<T>(ptr: *mut T)`：在编译期按对齐字宽展开为定长 `u64`/`u32`/`u16`/`u8` 的 `write_volatile(0)` 指令序列。
+   - `volatile` 阻止 LLVM 将连续 store 重新合并为 `call memset`，同时不在栈上产生任何结构体字面量临时对象。

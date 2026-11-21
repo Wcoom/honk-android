@@ -1,2 +1,6 @@
 src/target/
 src/crates/honk-ebpf/target/
+boxproxy/target/
+boxproxy/boxctl/target/
+*.apk
+*.tar.gz

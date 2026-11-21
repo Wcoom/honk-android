@@ -1,0 +1,2327 @@
+diff --git a/crates/honk-config/src/config.rs b/crates/honk-config/src/config.rs
+index 6f24dfb..53a9f90 100644
+--- a/crates/honk-config/src/config.rs
++++ b/crates/honk-config/src/config.rs
+@@ -191,7 +191,9 @@ impl GlobalConfig {
+     /// Process socket mark; zero retains the historical bypass mark.
+     pub fn effective_so_mark(&self) -> u32 {
+         if self.so_mark_from_dae == 0 {
+-            0x100
++            // [honk-android] Match DAE_BYPASS_MARK (0x1000_0000) so low 16 bits
++            // remain 0 for Android netd policy routing (fwmark 0x0/0xffff).
++            0x1000_0000
+         } else {
+             self.so_mark_from_dae
+         }
+@@ -269,9 +271,123 @@ fn interface_host_cidrs(iface: &str) -> Vec<String> {
+ }
+ 
+ /// Interface owning the lowest-metric IPv4 default route.
++///
++/// [honk-android] Android puts default routes in per-network policy tables
++/// (e.g. table 1021 for rmnet_data2, table 1029 for wlan0) while the main
++/// table (`/proc/net/route`) has no 0.0.0.0/0 entry. When `/proc/net/route`
++/// has no default route, probe the kernel routing policy via a connected
++/// UDP socket + `getsockname()` + `getifaddrs()`.
+ pub fn default_route_interface() -> Option<String> {
+-    let text = std::fs::read_to_string("/proc/net/route").ok()?;
+-    default_route_interface_from(&text)
++    if let Ok(text) = std::fs::read_to_string("/proc/net/route")
++        && let Some(iface) = default_route_interface_from(&text)
++    {
++        return Some(iface);
++    }
++    default_route_interface_by_socket_probe()
++}
++
++/// Probe the outbound interface chosen by Android netd's policy routing tables:
++///  1. Read `/proc/thread-self/net/fib_trie` for a per-interface policy table
++///     `Id <1000 + ifindex>:` containing `/0 universe UNICAST` (netd's exact
++///     table numbering convention: `ROUTE_TABLE_OFFSET_FROM_INDEX = 1000`);
++///  2. Or connect a UDP socket (`223.5.5.5:53`, no wire traffic) to get the
++///     chosen source IPv4 and match it via rtnetlink `RTM_GETADDR` or `getifaddrs`.
++pub fn default_route_interface_by_socket_probe() -> Option<String> {
++    if let Ok(trie) = std::fs::read_to_string("/proc/thread-self/net/fib_trie")
++        .or_else(|_| std::fs::read_to_string("/proc/net/fib_trie"))
++        && let Some(ifindex) = parse_android_netd_default_ifindex(&trie)
++        && let Some(name) = ifindex_to_name(ifindex)
++    {
++        return Some(name);
++    }
++    use std::net::UdpSocket;
++    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
++    sock.connect("223.5.5.5:53").ok()?;
++    let local_ip = match sock.local_addr().ok()? {
++        std::net::SocketAddr::V4(v4) => *v4.ip(),
++        _ => return None,
++    };
++    if local_ip.is_unspecified() || local_ip.is_loopback() {
++        return None;
++    }
++    let target = local_ip.octets();
++    unsafe {
++        let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
++        if libc::getifaddrs(&mut head) != 0 {
++            return None;
++        }
++        let mut found: Option<String> = None;
++        let mut cur = head;
++        while !cur.is_null() {
++            let ifa = &*cur;
++            if !ifa.ifa_addr.is_null() && (*ifa.ifa_addr).sa_family as i32 == libc::AF_INET {
++                let a = (*(ifa.ifa_addr as *const libc::sockaddr_in))
++                    .sin_addr
++                    .s_addr
++                    .to_ne_bytes();
++                if a == target {
++                    let name = std::ffi::CStr::from_ptr(ifa.ifa_name)
++                        .to_string_lossy()
++                        .into_owned();
++                    if name != "lo" && !name.starts_with("dae") {
++                        found = Some(name);
++                        break;
++                    }
++                }
++            }
++            cur = ifa.ifa_next;
++        }
++        libc::freeifaddrs(head);
++        found
++    }
++}
++
++/// Extract the interface index from Android netd's per-network routing tables
++/// in `/proc/net/fib_trie` (`Id <1000 + ifindex>:` containing `/0 universe UNICAST`).
++pub fn parse_android_netd_default_ifindex(trie: &str) -> Option<u32> {
++    let mut current_table: Option<u32> = None;
++    let mut prev_zero = false;
++    for line in trie.lines() {
++        let trimmed = line.trim();
++        if let Some(rest) = trimmed.strip_prefix("Id ") {
++            current_table = rest.trim_end_matches(':').trim().parse::<u32>().ok();
++            prev_zero = false;
++            continue;
++        }
++        if trimmed == "Main:" || trimmed == "Local:" {
++            current_table = None;
++            prev_zero = false;
++            continue;
++        }
++        if let Some(table_id) = current_table
++            && (1001..2000).contains(&table_id)
++        {
++            if trimmed == "|-- 0.0.0.0" {
++                prev_zero = true;
++            } else if prev_zero && trimmed.starts_with("/0 universe UNICAST") {
++                return Some(table_id - 1000);
++            } else {
++                prev_zero = false;
++            }
++        }
++    }
++    None
++}
++
++fn ifindex_to_name(ifindex: u32) -> Option<String> {
++    let mut buf = [0 as libc::c_char; libc::IFNAMSIZ];
++    let ptr = unsafe { libc::if_indextoname(ifindex, buf.as_mut_ptr()) };
++    if ptr.is_null() {
++        return None;
++    }
++    let name = unsafe { std::ffi::CStr::from_ptr(ptr) }
++        .to_string_lossy()
++        .into_owned();
++    if name.is_empty() || name == "lo" || name == "dummy0" || name.starts_with("dae") {
++        None
++    } else {
++        Some(name)
++    }
+ }
+ 
+ /// Parse `/proc/net/route` and select a real destination/mask-zero route.
+diff --git a/crates/honk-config/src/experimental.rs b/crates/honk-config/src/experimental.rs
+index 7ea7001..cf54be8 100644
+--- a/crates/honk-config/src/experimental.rs
++++ b/crates/honk-config/src/experimental.rs
+@@ -157,6 +157,18 @@ impl NativeApiConfig {
+         !self.secret.is_empty() || self.password_auth
+     }
+ 
++    /// Whether administrative operations (`config_write`, `--store db`, geodata sources)
++    /// are authorized on this listener: either protected by a credential, or explicitly
++    /// bound to a loopback address with `allow_anonymous_loopback: true`.
++    pub fn admin_authorized(&self) -> bool {
++        self.credentialed()
++            || (self.allow_anonymous_loopback
++                && self
++                    .listen
++                    .parse::<std::net::SocketAddr>()
++                    .is_ok_and(|addr| addr.ip().is_loopback()))
++    }
++
+     pub(crate) fn validate_detailed(
+         &self,
+         source: &crate::diagnostic::SourceRef,
+@@ -178,10 +190,10 @@ impl NativeApiConfig {
+                 "native API secret must be visible ASCII without commas or whitespace",
+             ));
+         }
+-        if self.config_write && !self.credentialed() {
++        if self.config_write && !self.admin_authorized() {
+             return Err(invalid(
+                 "secret",
+-                "configuration administration requires a bearer secret or password login",
++                "configuration administration requires a bearer secret, password login, or loopback allow_anonymous_loopback",
+             ));
+         }
+         if self.password_auth && !self.secret.is_empty() {
+diff --git a/crates/honk-core/src/control/bootstrap.rs b/crates/honk-core/src/control/bootstrap.rs
+index d1023e6..17856ed 100644
+--- a/crates/honk-core/src/control/bootstrap.rs
++++ b/crates/honk-core/src/control/bootstrap.rs
+@@ -179,8 +179,23 @@ impl ControlPlane {
+         dns_upstream_pool.set_group_manager_snapshot(Arc::clone(&pinned_groups));
+         dns_upstream_pool.set_traffic_router_snapshot(Arc::clone(&pinned_router));
+         let initial_routing_plan = Arc::new(Self::compile_routing_plan(&config, &router)?);
+-        ebpf.publish_routing_plan(&initial_routing_plan, &[])
+-            .map_err(|error| anyhow::anyhow!("publish initial routing policy: {error:#}"))?;
++        // [honk-android] host_tproxy 模式没有 TC 数据面，内核侧路由表无从发布
++        // （也没有任何程序会读它）。此时只记一条日志，路由全走用户态
++        // `Router::route_full`——adopt_tcp 拿不到 handoff 时正是走这条。
++        match ebpf.publish_routing_plan(&initial_routing_plan, &[]) {
++            Ok(()) => {}
++            Err(error) => {
++                let message = format!("{error:#}");
++                if message.contains("host_tproxy datapath") {
++                    tracing::info!(
++                        "no TC routing target (host_tproxy datapath); \
++                         all routing decisions are made in userspace"
++                    );
++                } else {
++                    return Err(anyhow::anyhow!("publish initial routing policy: {message}"));
++                }
++            }
++        }
+         let ebpf_arc = Arc::new(RwLock::new(ebpf));
+         let router_arc = Arc::new(RwLock::new(router));
+         let interrupt_groups = config.groups.clone();
+diff --git a/crates/honk-core/src/control/reload/transaction.rs b/crates/honk-core/src/control/reload/transaction.rs
+index 801a316..17c304c 100644
+--- a/crates/honk-core/src/control/reload/transaction.rs
++++ b/crates/honk-core/src/control/reload/transaction.rs
+@@ -516,6 +516,8 @@ impl ControlPlane {
+         let bootstrap = new_config.global.bootstrap_resolver.clone();
+         let direct_target = super::direct_check_addr(&bootstrap);
+         let bootstrap_resolver = honk_outbound::bootstrap::BootstrapResolver::parse(&bootstrap);
++        let fallback_bootstrap_resolver =
++            honk_outbound::bootstrap::BootstrapResolver::parse(&new_config.global.fallback_resolver);
+         let new_plan = if reuse_routing_state {
+             Arc::clone(&old_plan)
+         } else {
+@@ -831,6 +833,7 @@ impl ControlPlane {
+         }
+ 
+         honk_outbound::bootstrap::set_global(bootstrap_resolver);
++        honk_outbound::bootstrap::set_global_fallback(fallback_bootstrap_resolver);
+         self.alive_set.set_direct_check_addr(direct_target);
+         // No new generation-owned work may start on the old snapshot. Its
+         // DNS runtime still owns it until old leases and transports retire;
+diff --git a/crates/honk-core/src/daens.rs b/crates/honk-core/src/daens.rs
+index dee58e5..7e3ab64 100644
+--- a/crates/honk-core/src/daens.rs
++++ b/crates/honk-core/src/daens.rs
+@@ -389,14 +389,10 @@ fn create_daens_namespace() -> anyhow::Result<&'static std::os::unix::io::OwnedF
+         // crucially NOT via a self-MS_BIND, which would stack-duplicate
+         // every nsfs mount beneath it (lab ns pins included) on every
+         // engine restart.
+-        let _ = std::fs::create_dir_all("/var/run/netns");
+-        // /proc/mounts lists the real path (/var/run is a symlink to
+-        // /run) — check the canonical path or every engine start
+-        // mounts a fresh tmpfs over the registry, hiding iproute2's
+-        // namespace files (the lab netns "disappears"). The tmpfs must
+-        // be mounted BEFORE the target file is created, or the mount
+-        // hides it and the bind below fails on a first clean deploy.
+-        if !is_mountpoint("/run/netns") {
++        // [honk-android] Android has a read-only erofs root without `/run` or `/var/run`.
++        // Skip the optional iproute2 compat bind-mount when `/var/run/netns` cannot exist.
++        let has_var_run = std::fs::create_dir_all("/var/run/netns").is_ok();
++        if has_var_run && !is_mountpoint("/run/netns") {
+             match nix::mount::mount(
+                 Some("tmpfs"),
+                 "/var/run/netns",
+@@ -410,19 +406,23 @@ fn create_daens_namespace() -> anyhow::Result<&'static std::os::unix::io::OwnedF
+                 Err(error) => warn!("tmpfs mount on /run/netns failed: {error}"),
+             }
+         }
+-        let compat_target_ready = match std::fs::OpenOptions::new()
+-            .write(true)
+-            .create_new(true)
+-            .open(DAENS_NS_PATH)
+-        {
+-            Ok(_) => {
+-                COMPAT_FILE_CREATED.store(true, std::sync::atomic::Ordering::Relaxed);
+-                true
+-            }
+-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => true,
+-            Err(error) => {
+-                warn!("create compat daens target failed: {error}");
+-                false
++        let compat_target_ready = if !has_var_run {
++            false
++        } else {
++            match std::fs::OpenOptions::new()
++                .write(true)
++                .create_new(true)
++                .open(DAENS_NS_PATH)
++            {
++                Ok(_) => {
++                    COMPAT_FILE_CREATED.store(true, std::sync::atomic::Ordering::Relaxed);
++                    true
++                }
++                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => true,
++                Err(error) => {
++                    warn!("create compat daens target failed: {error}");
++                    false
++                }
+             }
+         };
+         if compat_target_ready {
+diff --git a/crates/honk-core/src/dns/response.rs b/crates/honk-core/src/dns/response.rs
+index 49b5724..13f399f 100644
+--- a/crates/honk-core/src/dns/response.rs
++++ b/crates/honk-core/src/dns/response.rs
+@@ -233,7 +233,7 @@ fn visit_message(
+         let qclass = read_u16(response, name_end + 2)?;
+         if let Some((expected_name, expected_type, expected_class)) =
+             expected.as_mut().and_then(Iterator::next)
+-            && (&name[..length] != expected_name.as_wire()
++            && (!name[..length].eq_ignore_ascii_case(expected_name.as_wire())
+                 || qtype != expected_type.get()
+                 || qclass != expected_class.get())
+         {
+diff --git a/crates/honk-core/src/dns/response/tests.rs b/crates/honk-core/src/dns/response/tests.rs
+index e5321d9..dac7b50 100644
+--- a/crates/honk-core/src/dns/response/tests.rs
++++ b/crates/honk-core/src/dns/response/tests.rs
+@@ -137,3 +137,16 @@ fn builds_error_responses_in_the_dns_response_layer() {
+     assert_ne!(opcode_flags & 0x0010, 0, "CD is echoed from the request");
+     assert_eq!(build_dns_error_response(&[1, 2], 15), vec![0; 12]);
+ }
++
++#[test]
++fn accepts_case_insensitive_question_name_in_response() {
++    let request = query(0x4321, IngressProfile::Internal);
++    let mut lowercased = answer(&request, 1);
++    // Request QNAME is "Example.com"; simulate upstream DoH normalizing QNAME to lowercase.
++    lowercased[12..25].make_ascii_lowercase();
++    let template = ResponseTemplate::validate(&request, &lowercased)
++        .expect("RFC 1035/4343 lowercase QNAME response must be accepted");
++    let rendered = template.render(&request).expect("render");
++    assert_eq!(&rendered[0..2], &[0x43, 0x21]);
++    assert_eq!(u16::from_be_bytes([rendered[6], rendered[7]]), 1);
++}
+diff --git a/crates/honk-core/src/ebpf/interface.rs b/crates/honk-core/src/ebpf/interface.rs
+index 4901b24..2aafe98 100644
+--- a/crates/honk-core/src/ebpf/interface.rs
++++ b/crates/honk-core/src/ebpf/interface.rs
+@@ -319,6 +319,17 @@ pub(crate) fn read_topology(need_default_route: bool) -> anyhow::Result<Topology
+     let links = dump_links().context("dump links")?;
+     let default_route = if need_default_route {
+         default_route(std::fs::read_to_string("/proc/thread-self/net/route"))?
++            .or_else(|| {
++                let trie = std::fs::read_to_string("/proc/thread-self/net/fib_trie")
++                    .or_else(|_| std::fs::read_to_string("/proc/net/fib_trie"))
++                    .ok()?;
++                let ifindex = honk_config::config::parse_android_netd_default_ifindex(&trie)?;
++                links
++                    .iter()
++                    .find(|l| l.ifindex.get() == ifindex)
++                    .map(|l| l.name.clone())
++            })
++            .or_else(honk_config::config::default_route_interface_by_socket_probe)
+     } else {
+         None
+     };
+diff --git a/crates/honk-core/src/ebpf/real/attach.rs b/crates/honk-core/src/ebpf/real/attach.rs
+index c4e2cf4..1e58abc 100644
+--- a/crates/honk-core/src/ebpf/real/attach.rs
++++ b/crates/honk-core/src/ebpf/real/attach.rs
+@@ -236,6 +236,7 @@ impl RealEbpfBackend {
+             .map_err(|error| anyhow::anyhow!("required socket identity capture: {error}"))?;
+         let cgroup_file = std::fs::File::open(&cgroup_path)
+             .map_err(|e| anyhow::anyhow!("open cgroup {}: {}", cgroup_path, e))?;
++        upgrade_android_cgroup_legacy_hooks(&cgroup_file);
+         let (create_name, cg_addr_names) = match pname_mode {
+             process_name::PnameCaptureMode::Argv0 => (
+                 "tproxy_wan_cg_sock_create",
+@@ -268,7 +269,7 @@ impl RealEbpfBackend {
+         let link_id = p
+             .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
+             .map_err(|error| {
+-                anyhow::anyhow!("required socket identity program {create_name} attach: {error}")
++                anyhow::anyhow!("required socket identity program {create_name} attach: {error} / debug={error:?}")
+             })?;
+         cgroup_sock_links.push(p.take_link(link_id)?);
+         for name in &cg_addr_names {
+@@ -284,7 +285,7 @@ impl RealEbpfBackend {
+             let link_id = p
+                 .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
+                 .map_err(|error| {
+-                    anyhow::anyhow!("required socket identity program {name} attach: {error}")
++                    anyhow::anyhow!("required socket identity program {name} attach: {error} / debug={error:?}")
+                 })?;
+             cgroup_sock_addr_links.push(p.take_link(link_id)?);
+         }
+@@ -445,3 +446,75 @@ impl RealEbpfBackend {
+         Self::attach_tc_at(bpf, prog, iface, aya::programs::TcAttachType::Ingress)
+     }
+ }
++
++/// [honk-android] Android netd pre-attaches 15 BPF programs to the root cgroup
++/// in legacy mode (`attach_flags == 0`). The kernel refuses any `BPF_LINK_CREATE`
++/// or `BPF_F_ALLOW_MULTI` attachment on a hook that currently holds a legacy
++/// program. For each cgroup hook honk uses, query whether it is in legacy mode
++/// (`attach_flags == 0` with `prog_cnt > 0`), and if so, detach each program and
++/// immediately re-attach the exact same program FD with `BPF_F_ALLOW_MULTI`.
++fn upgrade_android_cgroup_legacy_hooks(cgroup_file: &std::fs::File) {
++    use aya_obj::generated::{
++        BPF_F_ALLOW_MULTI, bpf_attach_type::*, bpf_attr, bpf_cmd::*,
++    };
++    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
++
++    let cgroup_fd = cgroup_file.as_raw_fd() as u32;
++    let hooks = [
++        BPF_CGROUP_INET_SOCK_CREATE as u32,
++        BPF_CGROUP_SOCK_OPS as u32,
++        BPF_CGROUP_INET4_BIND as u32,
++        BPF_CGROUP_INET6_BIND as u32,
++        BPF_CGROUP_INET4_CONNECT as u32,
++        BPF_CGROUP_INET6_CONNECT as u32,
++        BPF_CGROUP_UDP4_SENDMSG as u32,
++        BPF_CGROUP_UDP6_SENDMSG as u32,
++        BPF_CGROUP_INET_SOCK_RELEASE as u32,
++    ];
++
++    for attach_type in hooks {
++        let mut prog_ids = [0u32; 16];
++        let mut attr: bpf_attr = unsafe { core::mem::zeroed() };
++        attr.query.__bindgen_anon_1.target_fd = cgroup_fd;
++        attr.query.attach_type = attach_type;
++        attr.query.__bindgen_anon_2.prog_cnt = prog_ids.len() as u32;
++        attr.query.prog_ids = prog_ids.as_mut_ptr() as u64;
++        if unsafe { super::syscall::bpf_syscall(BPF_PROG_QUERY as _, &mut attr) }.is_err() {
++            continue;
++        }
++        let count = (unsafe { attr.query.__bindgen_anon_2.prog_cnt } as usize).min(prog_ids.len());
++        let flags = unsafe { attr.query.attach_flags };
++        if count == 0 || (flags & BPF_F_ALLOW_MULTI) != 0 {
++            continue;
++        }
++        let mut fds: Vec<(u32, OwnedFd)> = Vec::with_capacity(count);
++        for &id in &prog_ids[..count] {
++            let mut gattr: bpf_attr = unsafe { core::mem::zeroed() };
++            gattr.__bindgen_anon_6.__bindgen_anon_1.prog_id = id;
++            if let Ok(fd) = unsafe { super::syscall::bpf_syscall(BPF_PROG_GET_FD_BY_ID as _, &mut gattr) } {
++                fds.push((id, unsafe { OwnedFd::from_raw_fd(fd as i32) }));
++            }
++        }
++        if fds.len() != count {
++            continue;
++        }
++        for (id, prog_fd) in &fds {
++            let mut dattr: bpf_attr = unsafe { core::mem::zeroed() };
++            dattr.__bindgen_anon_5.__bindgen_anon_1.target_fd = cgroup_fd;
++            dattr.__bindgen_anon_5.attach_bpf_fd = prog_fd.as_raw_fd() as u32;
++            dattr.__bindgen_anon_5.attach_type = attach_type;
++            let _ = unsafe { super::syscall::bpf_syscall(BPF_PROG_DETACH as _, &mut dattr) };
++
++            let mut aattr: bpf_attr = unsafe { core::mem::zeroed() };
++            aattr.__bindgen_anon_5.__bindgen_anon_1.target_fd = cgroup_fd;
++            aattr.__bindgen_anon_5.attach_bpf_fd = prog_fd.as_raw_fd() as u32;
++            aattr.__bindgen_anon_5.attach_type = attach_type;
++            aattr.__bindgen_anon_5.attach_flags = BPF_F_ALLOW_MULTI;
++            if let Err(errno) = unsafe { super::syscall::bpf_syscall(BPF_PROG_ATTACH as _, &mut aattr) } {
++                warn!(attach_type, prog_id = *id, errno, "failed to upgrade legacy cgroup hook to multi");
++            } else {
++                info!(attach_type, prog_id = *id, "upgraded Android legacy cgroup hook to BPF_F_ALLOW_MULTI");
++            }
++        }
++    }
++}
+diff --git a/crates/honk-core/src/ebpf/real/bindings.rs b/crates/honk-core/src/ebpf/real/bindings.rs
+index dd3fbca..b739bf8 100644
+--- a/crates/honk-core/src/ebpf/real/bindings.rs
++++ b/crates/honk-core/src/ebpf/real/bindings.rs
+@@ -565,6 +565,33 @@ pub(super) fn query_chain(ifindex: u32, direction: Direction) -> io::Result<Chai
+     unreachable!("the second attempt returns")
+ }
+ 
++/// `BPF_PROG_QUERY` on a target file descriptor (cgroup or netns) returning
++/// the attached BPF program IDs.
++pub(super) fn query_target_progs(target_fd: RawFd, attach_type: u32) -> io::Result<Vec<u32>> {
++    let mut capacity = CHAIN_CAPACITY;
++    for attempt in 0..2 {
++        let mut programs = vec![0u32; capacity];
++        let mut attr: bpf_attr = unsafe { core::mem::zeroed() };
++        attr.query.__bindgen_anon_1.target_fd = target_fd as u32;
++        attr.query.attach_type = attach_type;
++        attr.query.__bindgen_anon_2.prog_cnt = capacity as u32;
++        attr.query.prog_ids = programs.as_mut_ptr() as u64;
++        let result = unsafe { bpf_syscall(bpf_cmd::BPF_PROG_QUERY as c_long, &mut attr) };
++        let count = unsafe { attr.query.__bindgen_anon_2.prog_cnt } as usize;
++        match result {
++            Ok(_) => {
++                programs.truncate(count);
++                return Ok(programs);
++            }
++            Err(code) if code == libc::ENOSPC as c_long && attempt == 0 && count > capacity => {
++                capacity = count;
++            }
++            Err(code) => return Err(errno(code)),
++        }
++    }
++    unreachable!("the second attempt returns")
++}
++
+ pub(super) fn commit_program_batch(
+     batch: super::programs::TcProgramBatch,
+     mut publish: impl FnMut(PreparedTcProgram) -> anyhow::Result<()>,
+diff --git a/crates/honk-core/src/ebpf/real/interface_startup.rs b/crates/honk-core/src/ebpf/real/interface_startup.rs
+index 23519d5..b46b948 100644
+--- a/crates/honk-core/src/ebpf/real/interface_startup.rs
++++ b/crates/honk-core/src/ebpf/real/interface_startup.rs
+@@ -30,6 +30,9 @@ pub(crate) async fn start_interfaces(
+     wan: &[String],
+     degradations: &Degradations,
+     read_topology: impl Fn(bool) -> anyhow::Result<Topology>,
++    // [honk-android] host_tproxy：不加载任何 TC 程序（6.6 verifier 过不了），
++    // 由外部 iptables 规则接管选包。
++    host_tproxy: bool,
+ ) -> anyhow::Result<(RealEbpfBackend, InterfaceHandoff)> {
+     let subscription = super::iface_watch::subscribe(degradations);
+     let mut state = InterfaceState::default();
+@@ -37,14 +40,23 @@ pub(crate) async fn start_interfaces(
+         error.context("read the network topology for the configured interfaces")
+     })?;
+     let mut plan = interface::plan(lan, wan, &topology);
++    if host_tproxy {
++        // 不做接口挂载：plan 清空，后续 bind_interfaces 自然无操作。
++        plan.bindings.clear();
++    }
+     write_sysctls(&mut state, &plan, &topology);
++    let programs: &[crate::ebpf::interface::TcProgram] = if host_tproxy {
++        &[]
++    } else {
++        &interface::initial_programs(&plan, !lan.is_empty())
++    };
+     let mut backend = RealEbpfBackend::load(
+         obj,
+         pin_root,
+         tproxy_port,
+         dae0,
+         interface::local_ip(&plan),
+-        &interface::initial_programs(&plan, !lan.is_empty()),
++        programs,
+     )
+     .await?;
+ 
+diff --git a/crates/honk-core/src/ebpf/real/observation.rs b/crates/honk-core/src/ebpf/real/observation.rs
+index 0b7d482..54479a5 100644
+--- a/crates/honk-core/src/ebpf/real/observation.rs
++++ b/crates/honk-core/src/ebpf/real/observation.rs
+@@ -113,12 +113,116 @@ impl RealEbpfBackend {
+         // Every hook the real datapath owns is required: the configured TCX
+         // hooks, the cgroup hooks when cgroup v2 is present, and dae0_ingress,
+         // dae0peer_ingress and tproxy_sk_lookup, which startup always attaches.
++        let verified_extra = self.verify_non_host_tc_hooks(&mut result);
+         let required =
+             owned.len() + self.cgroup_sock_links.len() + self.cgroup_sock_addr_links.len() + 3;
+-        result.verify_required_hooks(required);
++        result.verify_required_hooks(required.saturating_sub(verified_extra));
+         result.checked_at = std::time::SystemTime::now();
+         result
+     }
++
++    fn verify_non_host_tc_hooks(&self, result: &mut DatapathObservation) -> usize {
++        use aya_obj::generated::bpf_attach_type;
++
++        let mut verified = 0usize;
++        if !self.cgroup_sock_links.is_empty() || !self.cgroup_sock_addr_links.is_empty() {
++            let (create_name, cg_addr_names) = match self.pname_mode {
++                process_name::PnameCaptureMode::Argv0 => (
++                    "tproxy_wan_cg_sock_create",
++                    [
++                        "tproxy_wan_cg_connect4",
++                        "tproxy_wan_cg_connect6",
++                        "tproxy_wan_cg_sendmsg4",
++                        "tproxy_wan_cg_sendmsg6",
++                    ],
++                ),
++                process_name::PnameCaptureMode::Comm => (
++                    "tproxy_wan_cg_sock_create_comm",
++                    [
++                        "tproxy_wan_cg_connect4_comm",
++                        "tproxy_wan_cg_connect6_comm",
++                        "tproxy_wan_cg_sendmsg4_comm",
++                        "tproxy_wan_cg_sendmsg6_comm",
++                    ],
++                ),
++            };
++            match detect_cgroup_path().and_then(|p| Ok(std::fs::File::open(p)?)) {
++                Ok(cgroup_file) => {
++                    let fd = cgroup_file.as_raw_fd();
++                    if !self.cgroup_sock_links.is_empty() {
++                        match verify_target_prog(
++                            fd,
++                            bpf_attach_type::BPF_CGROUP_INET_SOCK_CREATE as u32,
++                            create_name,
++                            &result.loaded_programs,
++                        ) {
++                            Ok(true) => verified += self.cgroup_sock_links.len(),
++                            _ => result.record_error(DatapathObservationError::Hooks),
++                        }
++                    }
++                    if self.cgroup_sock_addr_links.len() == cg_addr_names.len() {
++                        let types = [
++                            bpf_attach_type::BPF_CGROUP_INET4_CONNECT as u32,
++                            bpf_attach_type::BPF_CGROUP_INET6_CONNECT as u32,
++                            bpf_attach_type::BPF_CGROUP_UDP4_SENDMSG as u32,
++                            bpf_attach_type::BPF_CGROUP_UDP6_SENDMSG as u32,
++                        ];
++                        for (name, attach_type) in cg_addr_names.into_iter().zip(types) {
++                            match verify_target_prog(fd, attach_type, name, &result.loaded_programs)
++                            {
++                                Ok(true) => verified += 1,
++                                _ => result.record_error(DatapathObservationError::Hooks),
++                            }
++                        }
++                    } else if !self.cgroup_sock_addr_links.is_empty() {
++                        result.record_error(DatapathObservationError::Hooks);
++                    }
++                }
++                Err(_) => result.record_error(DatapathObservationError::Hooks),
++            }
++        }
++
++        if let Some(link) = &self.dae0peer_ingress_link {
++            let progs = &result.loaded_programs;
++            match crate::daens::with_daens_netns("observe dae0peer_ingress", || {
++                observe_named_tc(link, "dae0peer", progs)
++            }) {
++                Ok(attachment) if attachment.state == DatapathCheck::Verified => verified += 1,
++                _ => result.record_error(DatapathObservationError::Hooks),
++            }
++        }
++
++        if self.sk_lookup_link.is_some() {
++            match crate::daens::daens_fd().and_then(|netns| {
++                verify_target_prog(
++                    netns.as_raw_fd(),
++                    bpf_attach_type::BPF_SK_LOOKUP as u32,
++                    "tproxy_sk_lookup",
++                    &result.loaded_programs,
++                )
++            }) {
++                Ok(true) => verified += 1,
++                _ => result.record_error(DatapathObservationError::Hooks),
++            }
++        }
++
++        verified
++    }
++}
++
++fn verify_target_prog(
++    target_fd: RawFd,
++    attach_type: u32,
++    prog_name: &str,
++    programs: &[DatapathProgram],
++) -> anyhow::Result<bool> {
++    let expected = programs
++        .iter()
++        .find(|p| p.name == prog_name)
++        .ok_or_else(|| anyhow::anyhow!("program {prog_name} not loaded"))?
++        .id;
++    let attached = bindings::query_target_progs(target_fd, attach_type)?;
++    Ok(attached.contains(&expected))
+ }
+ 
+ /// An owned interface binding: the held link must be the one the owner
+@@ -161,7 +265,15 @@ fn observe_dae0(
+     link: &aya::programs::tc::SchedClassifierLink,
+     programs: &[DatapathProgram],
+ ) -> anyhow::Result<DatapathAttachment> {
+-    let ifindex = nix::net::if_::if_nametoindex("dae0")?;
++    observe_named_tc(link, "dae0", programs)
++}
++
++fn observe_named_tc(
++    link: &aya::programs::tc::SchedClassifierLink,
++    ifname: &str,
++    programs: &[DatapathProgram],
++) -> anyhow::Result<DatapathAttachment> {
++    let ifindex = nix::net::if_::if_nametoindex(ifname)?;
+     let fd: &FdLink = link.try_into()?;
+     let info = fd.info()?;
+     let program = programs
+@@ -173,7 +285,7 @@ fn observe_dae0(
+         .contains_link(info.id());
+     Ok(DatapathAttachment {
+         program: program.name.clone(),
+-        interface: "dae0".to_owned(),
++        interface: ifname.to_owned(),
+         egress: false,
+         state: if verified {
+             DatapathCheck::Verified
+diff --git a/crates/honk-core/src/ebpf/real/receive_trace.rs b/crates/honk-core/src/ebpf/real/receive_trace.rs
+index dbf2d94..e184302 100644
+--- a/crates/honk-core/src/ebpf/real/receive_trace.rs
++++ b/crates/honk-core/src/ebpf/real/receive_trace.rs
+@@ -6,6 +6,8 @@ use std::sync::Arc;
+ 
+ use anyhow::Context as _;
+ use aya::maps::{HashMap, IterableMap, Map, MapData};
++#[cfg(target_arch = "aarch64")]
++use aya::programs::{KProbe, kprobe::KProbeLink};
+ use aya::programs::{FEntry, FExit, fentry::FEntryLink, fexit::FExitLink};
+ use aya::{Btf, Ebpf, EbpfLoader};
+ use honk_ebpf_common::receive_trace::{
+@@ -45,11 +47,25 @@ pub(super) fn detect(data: &[u8]) -> Option<ReceiveTraceOffsets> {
+     })
+ }
+ 
++#[allow(dead_code)]
++enum CandidateLink {
++    FExit(FExitLink),
++    #[cfg(target_arch = "aarch64")]
++    KRetProbe(KProbeLink),
++}
++
++#[allow(dead_code)]
++enum FamilyLinks {
++    Tracing(FEntryLink, FExitLink),
++    #[cfg(target_arch = "aarch64")]
++    KProbes(KProbeLink, KProbeLink),
++}
++
+ pub struct ReceiveTrace {
+     map: HashMap<MapData, u64, ReceiveTraceBatch>,
+-    ipv4: Option<(FEntryLink, FExitLink)>,
+-    ipv6: Option<(FEntryLink, FExitLink)>,
+-    _candidate: FExitLink,
++    ipv4: Option<FamilyLinks>,
++    ipv6: Option<FamilyLinks>,
++    _candidate: CandidateLink,
+ }
+ 
+ // Each registration owns its handle so concurrent listeners never serialize map updates.
+@@ -78,7 +94,7 @@ fn attach_family(
+     enter: &str,
+     exit: &str,
+     target: &str,
+-) -> anyhow::Result<(FEntryLink, FExitLink)> {
++) -> anyhow::Result<FamilyLinks> {
+     let program: &mut FEntry = bpf
+         .program_mut(enter)
+         .ok_or_else(|| anyhow::anyhow!("missing receive program {enter}"))?
+@@ -92,7 +108,34 @@ fn attach_family(
+     let entry = program.take_link(link)?;
+     // A failed exit must detach the entry too; an incomplete pair cannot produce evidence.
+     let exit = attach_exit(bpf, btf, exit, target)?;
+-    Ok((entry, exit))
++    Ok(FamilyLinks::Tracing(entry, exit))
++}
++
++#[cfg(target_arch = "aarch64")]
++fn attach_kprobe_single(bpf: &mut Ebpf, name: &str, target: &str) -> anyhow::Result<KProbeLink> {
++    let program: &mut KProbe = bpf
++        .program_mut(name)
++        .ok_or_else(|| anyhow::anyhow!("missing receive kprobe program {name}"))?
++        .try_into()?;
++    program
++        .load()
++        .with_context(|| format!("load kprobe {name} on {target}"))?;
++    let link = program
++        .attach(target, 0)
++        .with_context(|| format!("attach kprobe {name} on {target}"))?;
++    Ok(program.take_link(link)?)
++}
++
++#[cfg(target_arch = "aarch64")]
++fn attach_kprobe_family(
++    bpf: &mut Ebpf,
++    enter: &str,
++    exit: &str,
++    target: &str,
++) -> anyhow::Result<FamilyLinks> {
++    let entry = attach_kprobe_single(bpf, enter, target)?;
++    let exit = attach_kprobe_single(bpf, exit, target)?;
++    Ok(FamilyLinks::KProbes(entry, exit))
+ }
+ 
+ impl ReceiveTrace {
+@@ -123,21 +166,57 @@ impl ReceiveTrace {
+         map: Option<&Map>,
+     ) -> anyhow::Result<Arc<Self>> {
+         // Both recvmsg paths consume the candidate from this shared helper.
+-        let candidate = attach_exit(bpf, btf, "honk_udp_receive_candidate", "__skb_recv_udp")?;
+-        let ipv4 = attach_family(
+-            bpf,
+-            btf,
+-            "honk_udp_receive_enter",
+-            "honk_udp_receive_exit",
+-            "udp_recvmsg",
+-        );
+-        let ipv6 = attach_family(
+-            bpf,
+-            btf,
+-            "honk_udp6_receive_enter",
+-            "honk_udp6_receive_exit",
+-            "udpv6_recvmsg",
+-        );
++        // Try BTF fentry/fexit first; on ARM64 GKI kernels (where BPF trampolines
++        // return ENOTSUPP 524), fall back to kprobe/kretprobe.
++        let (candidate, ipv4, ipv6) =
++            match attach_exit(bpf, btf, "honk_udp_receive_candidate", "__skb_recv_udp") {
++                Ok(candidate) => (
++                    CandidateLink::FExit(candidate),
++                    attach_family(
++                        bpf,
++                        btf,
++                        "honk_udp_receive_enter",
++                        "honk_udp_receive_exit",
++                        "udp_recvmsg",
++                    ),
++                    attach_family(
++                        bpf,
++                        btf,
++                        "honk_udp6_receive_enter",
++                        "honk_udp6_receive_exit",
++                        "udpv6_recvmsg",
++                    ),
++                ),
++                #[cfg(target_arch = "aarch64")]
++                Err(fexit_err) => {
++                    let candidate = attach_kprobe_single(
++                        bpf,
++                        "honk_udp_receive_candidate_krp",
++                        "__skb_recv_udp",
++                    )
++                    .with_context(|| {
++                        format!("fexit failed ({fexit_err:#}) and kretprobe fallback failed")
++                    })?;
++                    let ipv4 = attach_kprobe_family(
++                        bpf,
++                        "honk_udp_receive_enter_kp",
++                        "honk_udp_receive_exit_krp",
++                        "udp_recvmsg",
++                    );
++                    let ipv6 = attach_kprobe_family(
++                        bpf,
++                        "honk_udp6_receive_enter_kp",
++                        "honk_udp6_receive_exit_krp",
++                        "udpv6_recvmsg",
++                    );
++                    tracing::info!(
++                        "kernel UDP receive trace attached via ARM64 kprobe/kretprobe fallback"
++                    );
++                    (CandidateLink::KRetProbe(candidate), ipv4, ipv6)
++                }
++                #[cfg(not(target_arch = "aarch64"))]
++                Err(err) => return Err(err),
++            };
+         if let (Err(ipv4), Err(ipv6)) = (&ipv4, &ipv6) {
+             anyhow::bail!("UDP receive hooks unavailable: IPv4: {ipv4:#}; IPv6: {ipv6:#}");
+         }
+diff --git a/crates/honk-core/src/ebpf/real/routing.rs b/crates/honk-core/src/ebpf/real/routing.rs
+index 500ad14..a11b349 100644
+--- a/crates/honk-core/src/ebpf/real/routing.rs
++++ b/crates/honk-core/src/ebpf/real/routing.rs
+@@ -575,6 +575,12 @@ impl RealEbpfBackend {
+         let slot = active ^ 1;
+         let slot_name = ROUTING_SLOT_NAMES[slot as usize];
+         let targets = self.routing_targets(slot as usize)?;
++        // [honk-android] host_tproxy 模式不加载任何 TC 程序，因此没有
++        // freplace 目标。此时跳过内核侧路由发布：所有路由决策由用户态
++        // Router::route_full 承担（adopt_tcp 拿不到 handoff 时正是走它）。
++        if targets.is_empty() {
++            anyhow::bail!("no TC routing target available (host_tproxy datapath)");
++        }
+         let maps = create_maps(&plan.facts, learned_domains)?;
+         let bytecode =
+             crate::control::routing_matcher::codegen::emit_routing_program(plan, maps.fds())?;
+diff --git a/crates/honk-core/src/ebpf/real/tcp_binding.rs b/crates/honk-core/src/ebpf/real/tcp_binding.rs
+index 07dd68c..926d447 100644
+--- a/crates/honk-core/src/ebpf/real/tcp_binding.rs
++++ b/crates/honk-core/src/ebpf/real/tcp_binding.rs
+@@ -79,10 +79,9 @@ pub(super) fn attach(bpf: &mut Ebpf, cgroup: &std::fs::File) -> Result<SockOpsLi
+         .ok_or_else(|| anyhow!("required TCP child proof program missing"))?
+         .try_into()?;
+     program.load().context("loading required TCP child proof")?;
+-    let link = program.attach(cgroup, CgroupAttachMode::Single).context(
+-        "attaching required TCP child proof: the root cgroup sock_ops slot may be held by \
+-             a legacy (flags=0) program",
+-    )?;
++    let link = program.attach(cgroup, CgroupAttachMode::Single).map_err(|error| {
++        anyhow::anyhow!("attaching required TCP child proof: {error} / debug={error:?}")
++    })?;
+     Ok(program.take_link(link)?)
+ }
+ 
+diff --git a/crates/honk-core/src/lib.rs b/crates/honk-core/src/lib.rs
+index 146372c..ce07996 100644
+--- a/crates/honk-core/src/lib.rs
++++ b/crates/honk-core/src/lib.rs
+@@ -232,10 +232,14 @@ pub struct Cli {
+     #[command(subcommand)]
+     pub command: Option<ClashCommand>,
+ 
+-    /// Path to configuration file
+-    #[arg(short, long, default_value = "/etc/honk/config.dae")]
++    /// Path to configuration file (`-f` is accepted as an alias for BoxProxy / mihomo compatibility)
++    #[arg(short, long, short_alias = 'f', default_value = "/etc/honk/config.dae")]
+     pub config: PathBuf,
+ 
++    /// [honk-android] Config checks (`-t`) exit 0 after validating `-c`/`-f` (BoxProxy compatibility)
++    #[arg(short = 't', long = "test", hide = true)]
++    pub test_config: bool,
++
+     /// Append operational logs to this path, overriding `global.log_file`
+     #[arg(long, value_name = "PATH")]
+     pub log_file: Option<PathBuf>,
+@@ -250,7 +254,7 @@ pub struct Cli {
+     pub bpf_pin_root: PathBuf,
+ 
+     /// Run in debug mode with verbose logging
+-    #[arg(short, long)]
++    #[arg(long)]
+     pub debug: bool,
+ 
+     /// Omit timestamps from console log lines, for journald or another
+@@ -262,13 +266,19 @@ pub struct Cli {
+     #[arg(long)]
+     pub mock_ebpf: bool,
+ 
++    /// [honk-android] 主机 netns 内的 TPROXY 模式：不加载 TC 数据面，
++    /// 由外部 iptables 规则把流量 TPROXY 到本进程的透明监听端口。
++    /// 监听套接字直接绑定 IP_TRANSPARENT（不建 daens/dae0）。
++    #[arg(long)]
++    pub host_tproxy: bool,
++
+     /// Where the administered configuration lives: the `-c` file tree, or the
+     /// revisions in `<data-dir>/state/honk.db`
+     #[arg(long, value_enum, default_value = "file")]
+     pub store: ConfigStore,
+ 
+-    /// Runtime data directory holding the state db; must equal `global.data_dir`
+-    #[arg(long, value_name = "PATH", default_value = honk_config::paths::DEFAULT_DATA_DIR, global = true)]
++    /// Runtime data directory holding the state db (`-d` is accepted for BoxProxy compatibility)
++    #[arg(short = 'd', long, value_name = "PATH", default_value = honk_config::paths::DEFAULT_DATA_DIR, global = true)]
+     pub data_dir: PathBuf,
+ }
+ 
+@@ -325,7 +335,7 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
+             }
+         }
+         ClashCommand::Reload => {
+-            let pid = request_reload(std::path::Path::new(INSTANCE_LOCK_PATH))?;
++            let pid = request_reload(std::path::Path::new(instance_lock_path().as_str()))?;
+             println!("Reload requested for honk-core process {pid}");
+         }
+         ClashCommand::Mode { mode } => {
+@@ -369,6 +379,11 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
+                     &config.global.bootstrap_resolver,
+                 ),
+             );
++            honk_outbound::bootstrap::set_global_fallback(
++                honk_outbound::bootstrap::BootstrapResolver::parse(
++                    &config.global.fallback_resolver,
++                ),
++            );
+             let target_node = config
+                 .nodes
+                 .iter()
+@@ -398,7 +413,50 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
+     Ok(())
+ }
+ 
+-const INSTANCE_LOCK_PATH: &str = "/run/honk-core.lock";
++/// [honk-android] Android 没有 /run（根分区 erofs 只读），优先读 HONK_RUN_DIR；
++/// 若未设置且 /run 不可写，则自动回退到 /data/local/tmp。
++fn instance_lock_path() -> std::string::String {
++    if let Some(dir) = std::env::var_os("HONK_RUN_DIR") {
++        let mut p = std::path::PathBuf::from(dir);
++        let _ = std::fs::create_dir_all(&p);
++        p.push("honk-core.lock");
++        return p.to_string_lossy().into_owned();
++    }
++    if std::path::Path::new("/run").is_dir() {
++        return std::string::String::from("/run/honk-core.lock");
++    }
++    for candidate in ["/data/local/tmp", "/dev"] {
++        let p = std::path::Path::new(candidate);
++        if p.is_dir() {
++            return p.join("honk-core.lock").to_string_lossy().into_owned();
++        }
++    }
++    std::string::String::from("/run/honk-core.lock")
++}
++
++/// [honk-android] 自动设置 SSL_CERT_DIR 指向 Android 系统 CA 目录，
++/// 且避免把目录设进 SSL_CERT_FILE 触发 rustls "Is a directory" 警告。
++fn ensure_android_ca_certs_env() {
++    if let Some(file) = std::env::var_os("SSL_CERT_FILE")
++        && std::path::Path::new(&file).is_dir()
++    {
++        if std::env::var_os("SSL_CERT_DIR").is_none() {
++            unsafe { std::env::set_var("SSL_CERT_DIR", &file) };
++        }
++        unsafe { std::env::remove_var("SSL_CERT_FILE") };
++    }
++    if std::env::var_os("SSL_CERT_DIR").is_none() && std::env::var_os("SSL_CERT_FILE").is_none() {
++        for dir in [
++            "/apex/com.android.conscrypt/cacerts",
++            "/system/etc/security/cacerts",
++        ] {
++            if std::path::Path::new(dir).is_dir() {
++                unsafe { std::env::set_var("SSL_CERT_DIR", dir) };
++                break;
++            }
++        }
++    }
++}
+ 
+ fn publish_instance_pid(file: &mut std::fs::File) -> anyhow::Result<()> {
+     use std::io::Write;
+@@ -540,7 +598,7 @@ fn instance_lock(mock_mode: bool) -> anyhow::Result<Option<nix::fcntl::Flock<std
+     }
+     // /run, not the bpffs pin root, which rejects regular files.
+     acquire_instance_lock(
+-        std::path::Path::new(INSTANCE_LOCK_PATH),
++        std::path::Path::new(instance_lock_path().as_str()),
+         std::time::Duration::from_secs(240),
+     )
+     .map(Some)
+@@ -761,7 +819,7 @@ async fn abort_startup(
+     error
+ }
+ 
+-pub async fn run(cli: Cli) -> anyhow::Result<()> {
++pub async fn run(mut cli: Cli) -> anyhow::Result<()> {
+     #[cfg(feature = "native-api")]
+     let started_at = std::time::SystemTime::now();
+     #[cfg(feature = "native-api")]
+@@ -777,12 +835,36 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+         cli.store == ConfigStore::File,
+         "--store db needs the native-api feature"
+     );
++    // [honk-android] host_tproxy 不走 TC 数据面，但**需要真 backend**（adopt_tcp
++    // 读 sk_storage / conn_state，路由跨重启保持）。所以不并入 mock_mode。
++    ensure_android_ca_certs_env();
++    if cli.test_config {
++        let mut diagnostics = Vec::new();
++        let config = load_operator_config(cli.config.to_str().unwrap(), &mut diagnostics)?;
++        config.validate()?;
++        println!("configuration file {} test is successful", cli.config.display());
++        return Ok(());
++    }
+     let mock_mode = cli.mock_ebpf || cfg!(not(feature = "ebpf"));
++    let host_tproxy = cli.host_tproxy;
+     // Everything else in `run` drops before it.
+     let _instance_lock = instance_lock(mock_mode)?;
+     #[cfg(feature = "native-api")]
+     let mut database = None;
+     let startup = (|| -> anyhow::Result<_> {
++        #[cfg(feature = "native-api")]
++        if cli.store == ConfigStore::File
++            && !std::path::Path::new("/var/lib").is_dir()
++            && let Ok(peek) = load_operator_config(&cli.config.to_string_lossy(), &mut Vec::new())
++            && peek.experimental.native_api.enabled
++            && peek.experimental.native_api.config_write
++            && peek.experimental.native_api.admin_authorized()
++        {
++            if !peek.global.data_dir.is_empty() {
++                cli.data_dir = PathBuf::from(&peek.global.data_dir);
++            }
++            cli.store = ConfigStore::Db;
++        }
+         #[cfg(feature = "native-api")]
+         let mut config = if cli.store == ConfigStore::Db {
+             // DbStore needs an absolute, lexically normal entry; a missing -c
+@@ -813,7 +895,21 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+         );
+         #[cfg(not(feature = "dns-syslog"))]
+         audit::validate_config(&config.global)?;
+-        let requested_data_dir = PathBuf::from(&config.global.data_dir);
++        let requested_data_dir = if config.global.data_dir == honk_config::paths::DEFAULT_DATA_DIR
++            && cli.data_dir != std::path::Path::new(honk_config::paths::DEFAULT_DATA_DIR)
++        {
++            cli.data_dir.clone()
++        } else if config.global.data_dir == honk_config::paths::DEFAULT_DATA_DIR
++            && !std::path::Path::new("/var/lib").is_dir()
++        {
++            cli.config
++                .parent()
++                .filter(|p| !p.as_os_str().is_empty())
++                .map(|p| p.join("data"))
++                .unwrap_or_else(|| PathBuf::from(&config.global.data_dir))
++        } else {
++            PathBuf::from(&config.global.data_dir)
++        };
+         let (runtime_data_dir, data_dir_creation_error) =
+             prepare_runtime_data_dir(&requested_data_dir)?;
+         #[cfg(feature = "native-api")]
+@@ -1004,9 +1100,18 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+     honk_outbound::bootstrap::set_global(honk_outbound::bootstrap::BootstrapResolver::parse(
+         &config.global.bootstrap_resolver,
+     ));
++    honk_outbound::bootstrap::set_global_fallback(
++        honk_outbound::bootstrap::BootstrapResolver::parse(&config.global.fallback_resolver),
++    );
+     if !config.global.bootstrap_resolver.is_empty() {
+         info!("Bootstrap resolver: {}", config.global.bootstrap_resolver);
+     }
++    if !config.global.fallback_resolver.is_empty() {
++        info!(
++            "Fallback bootstrap resolver: {}",
++            config.global.fallback_resolver
++        );
++    }
+ 
+     #[cfg(feature = "native-api")]
+     if let Some(database) = database.as_mut() {
+@@ -1096,6 +1201,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+     } else {
+         #[cfg(feature = "ebpf")]
+         {
++            // [honk-android] host_tproxy：不建 dae0/dae0peer（那是给 TC 重定向用的）。
++            // 但 eBPF 加载与 cgroup 程序仍需要，故走同一条路径、只是跳过 TC。
+             // PARAM.dae0_ifindex must describe the pair before eBPF load.
+             let (guard, dae0_setup) = daens::create_dae0_link()?;
+             info!(
+@@ -1124,6 +1231,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+                 &config.global.wan_interface,
+                 &degradations,
+                 ebpf::interface::read_topology,
++                host_tproxy,
+             )
+             .await?;
+             interface_handoff = Some(handoff);
+diff --git a/crates/honk-core/src/native_api/config.rs b/crates/honk-core/src/native_api/config.rs
+index ecff621..4673c58 100644
+--- a/crates/honk-core/src/native_api/config.rs
++++ b/crates/honk-core/src/native_api/config.rs
+@@ -174,7 +174,7 @@ impl ConfigService {
+ 
+     /// Why no configuration write is admitted now; `None` when writes are.
+     pub(crate) fn write_refusal(&self) -> Option<WriteRefusal> {
+-        if !self.settings.config_write || !self.settings.credentialed() {
++        if !self.settings.config_write || !self.settings.admin_authorized() {
+             Some(WriteRefusal::WritesDisabled)
+         } else if !self.sources.available()
+             || self
+@@ -350,7 +350,7 @@ impl ConfigService {
+         secrets: &ListenerSecrets,
+     ) -> Option<WriteRefusal> {
+         let source = &accepted.update.sources[index];
+-        if !self.settings.config_write || !self.settings.credentialed() {
++        if !self.settings.config_write || !self.settings.admin_authorized() {
+             Some(WriteRefusal::WritesDisabled)
+         } else if source.contains_api_secret {
+             Some(WriteRefusal::ListenerSecretSource)
+diff --git a/crates/honk-core/src/native_api/settings.rs b/crates/honk-core/src/native_api/settings.rs
+index 1dddb6a..f323fea 100644
+--- a/crates/honk-core/src/native_api/settings.rs
++++ b/crates/honk-core/src/native_api/settings.rs
+@@ -145,7 +145,13 @@ impl Values {
+                 config.experimental.native_api.record_logs,
+                 config.experimental.native_api.record_dns_log,
+             ],
+-            modes: [RecorderMode::Auto; 3],
++            modes: [if std::env::var_os("HONK_RECORD_ALWAYS").is_some()
++                || (!cfg!(test) && !std::path::Path::new("/var/lib").is_dir())
++            {
++                RecorderMode::On
++            } else {
++                RecorderMode::Auto
++            }; 3],
+             attached: false,
+             demand: Demand::NONE,
+         }
+@@ -604,7 +610,7 @@ pub(super) async fn patch(
+         .as_object_mut()
+         .and_then(|object| object.remove("geodata"))
+         .map(|patch| {
+-            if !state.settings.credentialed() {
++            if !state.settings.admin_authorized() {
+                 return Err(super::error(
+                     StatusCode::FORBIDDEN,
+                     ErrorCode::PermissionDenied,
+diff --git a/crates/honk-core/src/native_api/store/startup.rs b/crates/honk-core/src/native_api/store/startup.rs
+index 7ee2138..f42e986 100644
+--- a/crates/honk-core/src/native_api/store/startup.rs
++++ b/crates/honk-core/src/native_api/store/startup.rs
+@@ -130,7 +130,6 @@ impl DatabaseStartup {
+                 diagnostics,
+             )?;
+             same_data_dir(&config, data_dir)?;
+-            no_clash_api(&config)?;
+             return Ok(Self {
+                 store,
+                 config,
+@@ -207,10 +206,9 @@ impl FreshImport {
+             .sources;
+         let native = &config.experimental.native_api;
+         ensure!(
+-            native.enabled && native.config_write && native.credentialed(),
+-            "--store db needs experimental.native_api with enabled, config_write and a credential"
++            native.enabled && native.config_write && native.admin_authorized(),
++            "--store db needs experimental.native_api with enabled, config_write and authorization"
+         );
+-        no_clash_api(&config)?;
+         same_data_dir(&config, data_dir)?;
+         let (loaded, forbidden) =
+             import_tree(entry, &config, &originals).map_err(|error| match error {
+@@ -260,14 +258,6 @@ fn same_data_dir(config: &Config, data_dir: &Path) -> anyhow::Result<()> {
+     Ok(())
+ }
+ 
+-fn no_clash_api(config: &Config) -> anyhow::Result<()> {
+-    ensure!(
+-        config.experimental.clash_api.external_controller.is_empty(),
+-        "experimental.clash_api.external_controller is set; --store db runs without the Clash API"
+-    );
+-    Ok(())
+-}
+-
+ fn store_error(error: StoreError) -> anyhow::Error {
+     anyhow!("configuration db: {error}")
+ }
+diff --git a/crates/honk-ebpf-common/src/conn.rs b/crates/honk-ebpf-common/src/conn.rs
+index 2bfd333..d6598ea 100644
+--- a/crates/honk-ebpf-common/src/conn.rs
++++ b/crates/honk-ebpf-common/src/conn.rs
+@@ -343,6 +343,60 @@ pub struct ParseTransportCtx {
+     pub frag_id: u32, // IPv4 identification or IPv6 fragment identification, host order
+ }
+ 
++// [honk-android] 原地清零，必须躲开 LLVM 的 memset 内建。
++//
++// `zeroed()` / `write_bytes` / 逐字段字面量赋值，LLVM 都会合并成 memset，
++// 最终是"逐字节写"的循环。6.6 的 verifier 把循环计数器当精确标量，每走一圈
++// 就派生一个新状态（0→114 每次都不同），一个 memset 就能吃掉数十万条指令
++// 预算，直接撞上 BPF_COMPLEXITY_LIMIT_INSNS(1M)。
++//
++// 用逐字段 `write_volatile`：volatile 禁止 LLVM 合并/消除，生成常量偏移的
++// 定长 store 序列；且直接写进 &mut self，避免"构造临时值再整体移动"
++// 又被 LLVM 变成 memcpy。
++/// [honk-android] 按对齐字宽逐槽 `write_volatile` 原地清零，严禁触发 `memset` 循环：
++///  * 6.6 verifier 对 `aya_ebpf::memset` 的逐字节循环不合并状态，一次 `memset(72)`
++///    在多分支下会放大几十万条验证指令；
++///  * 也不在栈上构造结构体字面量（节省宝贵的 512B BPF 栈）。
++#[inline(always)]
++pub unsafe fn zero_in_place_volatile<T>(ptr: *mut T) {
++    let base = ptr as *mut u8;
++    let size = core::mem::size_of::<T>();
++    let align = core::mem::align_of::<T>();
++    let mut off = 0usize;
++    unsafe {
++        if align >= 8 {
++            while off + 8 <= size {
++                core::ptr::write_volatile(base.add(off) as *mut u64, 0);
++                off += 8;
++            }
++        }
++        if align >= 4 {
++            while off + 4 <= size {
++                core::ptr::write_volatile(base.add(off) as *mut u32, 0);
++                off += 4;
++            }
++        }
++        if align >= 2 {
++            while off + 2 <= size {
++                core::ptr::write_volatile(base.add(off) as *mut u16, 0);
++                off += 2;
++            }
++        }
++        while off < size {
++            core::ptr::write_volatile(base.add(off), 0);
++            off += 1;
++        }
++    }
++}
++
++impl ParseTransportCtx {
++    /// 把所有字段按 volatile 语义置零。语义等价于 `self = zeroed()`。
++    #[inline(always)]
++    pub fn zero_in_place(&mut self) {
++        unsafe { zero_in_place_volatile(self as *mut Self) };
++    }
++}
++
+ // Every field is counted, including explicit padding and the lock's u32 value.
+ const _: () = {
+     use aya_ebpf_bindings::bindings::bpf_spin_lock;
+diff --git a/crates/honk-ebpf-common/src/lib.rs b/crates/honk-ebpf-common/src/lib.rs
+index 5855b2f..496ec9a 100644
+--- a/crates/honk-ebpf-common/src/lib.rs
++++ b/crates/honk-ebpf-common/src/lib.rs
+@@ -212,7 +212,10 @@ pub const fn extract_nfqueue_token(mark: u32) -> Option<u32> {
+ }
+ /// Socket mark bit used by the control plane to tell the eBPF datapath to
+ /// pass its own traffic through without re-routing it.
+-pub const DAE_BYPASS_MARK: u32 = 0x100;
++// [honk-android] Android netd policy routing requires low 16 bits of fwmark
++// to be 0x0 (rule 31000: fwmark 0x0/0xffff) unless a valid netId is set;
++// 0x100 falls through to rule 32000 (unreachable). Use bit 28 (0x1000_0000).
++pub const DAE_BYPASS_MARK: u32 = 0x1000_0000;
+ pub const MAX_OUTBOUNDS: u32 = 256;
+ 
+ // Rust struct with a memory layout identical to the C struct.
+diff --git a/crates/honk-ebpf/src/auxiliary.rs b/crates/honk-ebpf/src/auxiliary.rs
+index 61379e6..863fdcc 100644
+--- a/crates/honk-ebpf/src/auxiliary.rs
++++ b/crates/honk-ebpf/src/auxiliary.rs
+@@ -578,7 +578,7 @@ pub fn prep_redirect_to_control_plane(
+     let scratch = unsafe { &mut *scratch };
+     scratch.redirect_key = redirect_tuple;
+     let redirect_entry = &mut scratch.redirect;
+-    unsafe { core::ptr::write_bytes(redirect_entry, 0, 1) };
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(redirect_entry as *mut _) };
+ 
+     redirect_entry.ifindex = unsafe { (*raw_skb(ctx)).ifindex };
+     redirect_entry.from_wan = from_wan;
+diff --git a/crates/honk-ebpf/src/contrack.rs b/crates/honk-ebpf/src/contrack.rs
+index 8d7680c..156808f 100644
+--- a/crates/honk-ebpf/src/contrack.rs
++++ b/crates/honk-ebpf/src/contrack.rs
+@@ -15,7 +15,6 @@ use crate::{
+     },
+ };
+ use aya_ebpf_bindings::helpers::{bpf_ktime_get_ns, bpf_spin_lock, bpf_spin_unlock};
+-use core::mem;
+ use honk_ebpf_common::{
+     RoutingMeta, TASK_COMM_LEN,
+     conn::{
+@@ -75,7 +74,7 @@ impl ConntrackArgs {
+         mac: Option<&[u8; 6]>,
+         pname: Option<&[u8; TASK_COMM_LEN]>,
+     ) {
+-        *self = unsafe { mem::zeroed() };
++        unsafe { honk_ebpf_common::conn::zero_in_place_volatile(self as *mut Self) };
+         self.dscp = dscp;
+         self.pid = pid;
+ 
+@@ -186,7 +185,7 @@ pub fn build_routing_meta_with_offload(
+ /// preserving `l4proto`.  Zero-initialises `dst` first.
+ #[inline(always)]
+ pub fn copy_reversed_tuples(key: &TuplesKey, dst: &mut TuplesKey) {
+-    *dst = unsafe { core::mem::zeroed() };
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(dst as *mut TuplesKey) };
+     dst.dst_ip = key.src_ip;
+     dst.src_ip = key.dst_ip;
+     dst.dst_port = key.src_port;
+@@ -252,7 +251,23 @@ fn conntrack_output() -> Option<*mut ConnState> {
+     // Keep array keys on stack, away from overridable zero-valued globals.
+     let mut zero = 0u32;
+     unsafe { core::ptr::write_volatile(&mut zero, 0) };
+-    CONNTRACK_SNAPSHOT_MAP.get_ptr_mut(unsafe { core::ptr::read_volatile(&zero) })
++    CONNTRACK_SNAPSHOT_MAP
++        .get_ptr_mut(unsafe { core::ptr::read_volatile(&zero) })
++        .map(|slot| unsafe { &raw mut (*slot).value })
++}
++
++/// [honk-android] 把 `conntrack_output()` 的指针视作一个完整的
++/// `FlowMapValue<ConnState>`（lock 置 0），供 map insert 直接使用。
++#[inline(always)]
++pub(crate) fn conntrack_output_flow_value(
++    output: *mut ConnState,
++) -> *const honk_ebpf_common::conn::FlowMapValue<ConnState> {
++    unsafe {
++        let slot = (output as *mut u8).sub(8) as *mut crate::maps::ConnSnapshotSlot;
++        (*slot).lock_val = 0;
++        (*slot).padding = 0;
++        slot as *const honk_ebpf_common::conn::FlowMapValue<ConnState>
++    }
+ }
+ 
+ #[inline(always)]
+diff --git a/crates/honk-ebpf/src/contrack/tcp.rs b/crates/honk-ebpf/src/contrack/tcp.rs
+index 53a5f76..6af01f8 100644
+--- a/crates/honk-ebpf/src/contrack/tcp.rs
++++ b/crates/honk-ebpf/src/contrack/tcp.rs
+@@ -341,7 +341,7 @@ fn publish_fresh_tcp(
+         return core::ptr::null_mut();
+     }
+     let new_state = unsafe { &mut *output };
+-    *new_state = unsafe { core::mem::zeroed() };
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(new_state as *mut ConnState) };
+     new_state.incarnation = incarnation;
+     new_state.tcp_syn_isn = args.tcp_syn_isn;
+     new_state.state = TcpState::TcpStateActive as u8;
+@@ -370,7 +370,11 @@ fn publish_fresh_tcp(
+     } else if expected_incarnation != 0 {
+         return core::ptr::null_mut();
+     } else if CONN_STATE_MAP
+-        .insert(key, &FlowMapValue::new(*new_state), BPF_NOEXIST as u64)
++        .insert(
++            key,
++            unsafe { &*super::conntrack_output_flow_value(output) },
++            BPF_NOEXIST as u64,
++        )
+         .is_ok()
+     {
+         occupancy_add(OCCUPANCY_INSERTS);
+diff --git a/crates/honk-ebpf/src/contrack/udp.rs b/crates/honk-ebpf/src/contrack/udp.rs
+index 8ce1cf8..fbca5e4 100644
+--- a/crates/honk-ebpf/src/contrack/udp.rs
++++ b/crates/honk-ebpf/src/contrack/udp.rs
+@@ -38,10 +38,46 @@ pub fn claim_udp_preparing(key: &TuplesKey, mac: &[u8; 6]) -> Option<u64> {
+     state.last_seen_ns = unsafe { bpf_ktime_get_ns() };
+     state.mac.copy_from_slice(mac);
+ 
+-    if CONN_STATE_MAP
++    let inserted = CONN_STATE_MAP
+         .insert(key, &FlowMapValue::new(state), BPF_NOEXIST as u64)
+-        .is_ok()
+-    {
++        .is_ok();
++    claim_udp_preparing_finish(key, inserted, incarnation)
++}
++
++/// [honk-android] 同 `claim_udp_preparing`，但 Preparing 快照建在调用方给的
++/// per-CPU scratch（`conntrack_output()`）里，而不是栈上 —— WAN egress 的
++/// UDP 调用链在 6.6 verifier 下栈只差 32 字节就超 512。
++/// 调用方必须在此之后自行重写 `scratch`。
++#[inline(always)]
++pub fn claim_udp_preparing_in(
++    key: &TuplesKey,
++    mac: &[u8; 6],
++    scratch: *mut ConnState,
++) -> Option<u64> {
++    if tuple_retiring(key) {
++        return None;
++    }
++    let incarnation = allocate_flow_incarnation()?;
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(scratch) };
++    let state = unsafe { &mut *scratch };
++    state.state = UdpDecisionState::Preparing as u8;
++    state.incarnation = incarnation;
++    state.last_seen_ns = unsafe { bpf_ktime_get_ns() };
++    state.mac.copy_from_slice(mac);
++
++    let inserted = CONN_STATE_MAP
++        .insert(
++            key,
++            unsafe { &*super::conntrack_output_flow_value(scratch) },
++            BPF_NOEXIST as u64,
++        )
++        .is_ok();
++    claim_udp_preparing_finish(key, inserted, incarnation)
++}
++
++#[inline(always)]
++fn claim_udp_preparing_finish(key: &TuplesKey, inserted: bool, incarnation: u64) -> Option<u64> {
++    if inserted {
+         occupancy_add(OCCUPANCY_INSERTS);
+         return Some(incarnation);
+     }
+@@ -122,7 +158,7 @@ pub fn populate_udp_conn_state(
+     decision_token: u32,
+     incarnation: u64,
+ ) {
+-    *conn = unsafe { core::mem::zeroed() };
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(conn as *mut ConnState) };
+     conn.state = state as u8;
+     conn.decision_token = decision_token;
+     conn.incarnation = incarnation;
+@@ -293,12 +329,12 @@ fn __mark_udp_seen(
+         return core::ptr::null_mut();
+     };
+     let mac = if args.has_mac() { args.mac } else { [0; 6] };
+-    let Some(incarnation) = claim_udp_preparing(key, &mac) else {
++    let Some(incarnation) = claim_udp_preparing_in(key, &mac, output) else {
+         return core::ptr::null_mut();
+     };
+     let has_rt = args.has_routing();
+ 
+-    unsafe { core::ptr::write_bytes(output, 0, 1) };
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(output) };
+     let new_state = unsafe { &mut *output };
+     new_state.is_wan_ingress_direction = (is_wan_ingress_direction != 0) as u8;
+     new_state.state = UdpDecisionState::None as u8;
+diff --git a/crates/honk-ebpf/src/egress.rs b/crates/honk-ebpf/src/egress.rs
+index fcd9b3d..ff202ee 100644
+--- a/crates/honk-ebpf/src/egress.rs
++++ b/crates/honk-ebpf/src/egress.rs
+@@ -215,6 +215,74 @@ pub fn do_tproxy_lan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+     Ok(TC_ACT_UNSPEC)
+ }
+ 
++
++/// [honk-android] 把 handoff 条目写成"全新快照"，全程逐字段 volatile 直写。
++///
++/// 为什么不用 `write_bytes` / 结构体整体赋值：
++///  * `write_bytes(.., 0, 1)` 被 LLVM 展开成逐字节 memset 循环，6.6 的
++///    verifier 把循环计数器当精确标量，每圈派生一个新状态 → 撞 1M 指令上限；
++///  * 整体赋值在栈上造临时量再拷贝，而 BPF 全调用链栈预算只有 512 字节。
++/// 逐字段 `write_volatile` 同时避开这两点：无循环、无栈临时量。
++#[allow(clippy::too_many_arguments)]
++#[inline(always)]
++fn fill_handoff_fresh(
++    handoff: &mut RoutingHandoffEntry,
++    last_seen_ns: u64,
++    routing_generation: u64,
++    trace_id: u32,
++    incarnation: u64,
++    mark: u32,
++    must: u8,
++    mac: &[u8; 6],
++    outbound: u8,
++    pid: u32,
++    dscp: u8,
++    decision_token: u32,
++    pname: Option<&[u8; TASK_COMM_LEN]>,
++) {
++    let h = handoff as *mut RoutingHandoffEntry;
++    unsafe {
++        core::ptr::write_volatile(core::ptr::addr_of_mut!((*h).last_seen_ns), last_seen_ns);
++        core::ptr::write_volatile(
++            core::ptr::addr_of_mut!((*h).routing_generation),
++            routing_generation,
++        );
++        core::ptr::write_volatile(core::ptr::addr_of_mut!((*h).trace_id), trace_id);
++        core::ptr::write_volatile(core::ptr::addr_of_mut!((*h).trace_padding), 0u32);
++        core::ptr::write_volatile(core::ptr::addr_of_mut!((*h).incarnation), incarnation);
++        // result
++        let r = core::ptr::addr_of_mut!((*h).result);
++        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).mark), mark);
++        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).must), must);
++        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).outbound), outbound);
++        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).pid), pid);
++        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).dscp), dscp);
++        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).padding), [0u8; 3]);
++        core::ptr::write_volatile(
++            core::ptr::addr_of_mut!((*r).decision_token),
++            decision_token,
++        );
++        // [u8;6] / [u8;16]：展开成定长 store，不调 memcpy
++        let mac_ptr = core::ptr::addr_of_mut!((*r).mac) as *mut u8;
++        for i in 0..6 {
++            core::ptr::write_volatile(mac_ptr.add(i), mac[i]);
++        }
++        let pname_ptr = core::ptr::addr_of_mut!((*r).pname) as *mut u8;
++        match pname {
++            Some(p) => {
++                for i in 0..TASK_COMM_LEN {
++                    core::ptr::write_volatile(pname_ptr.add(i), p[i]);
++                }
++            }
++            None => {
++                for i in 0..TASK_COMM_LEN {
++                    core::ptr::write_volatile(pname_ptr.add(i), 0);
++                }
++            }
++        }
++    }
++}
++
+ /// WAN egress TCP handler: route new connections and cache the decision;
+ /// for established flows, reuse the cached routing.
+ #[inline(always)]
+@@ -438,22 +506,29 @@ fn do_tproxy_wan_egress_tcp(
+             return Err(TC_ACT_SHOT);
+         };
+         // WAN inlining shares its bounded stack with the conntrack subprograms.
++        // [honk-android] zero + 逐字段直写 map 指针。
++        //
++        // 不能用 write_bytes：LLVM 会生成逐字节 memset 循环，6.6 的 verifier
++        // 把循环计数器当精确标量、每圈派生新状态，直接撞 1M 指令上限。
++        // 也不能用结构体整体赋值：那会在栈上造 72 字节临时量再拷贝，
++        // 而 BPF 全调用链栈上限只有 512 字节（加上 tcp/udp 子程序就超）。
++        // 逐字段 write_volatile 进 map 指针：无循环、无栈临时量。
+         let handoff: &mut RoutingHandoffEntry = unsafe { &mut (*scratch).handoff };
+-        unsafe { core::ptr::write_bytes(handoff, 0, 1) };
+-        handoff.last_seen_ns = unsafe { bpf_ktime_get_ns() };
+-        handoff.routing_generation = routing_generation;
+-        handoff.trace_id = trace_id;
+-        handoff.incarnation = pkt.incarnation;
+-        handoff.result.mark = mark;
+-        handoff.result.must = must as u8;
+-        handoff.result.outbound = outbound;
+-        handoff.result.pid = handoff_pid;
+-        handoff.result.dscp = tuples.dscp;
+-        handoff.result.decision_token = 0;
+-        handoff.result.mac.copy_from_slice(&mac);
+-        if let Some(pname) = handoff_pname {
+-            handoff.result.pname.copy_from_slice(pname);
+-        }
++        fill_handoff_fresh(
++            handoff,
++            unsafe { bpf_ktime_get_ns() },
++            routing_generation,
++            trace_id,
++            pkt.incarnation,
++            mark,
++            must as u8,
++            &mac,
++            outbound,
++            handoff_pid,
++            tuples.dscp,
++            0,
++            handoff_pname,
++        );
+         crate::auxiliary::publish_handoff(&tuples.five, unsafe { &mut *scratch }, true)
+             .map_err(|_| TC_ACT_SHOT)?;
+         if !crate::contrack::tcp::commit_tcp_intercept(
+@@ -552,26 +627,28 @@ fn fast_path_decision(
+                 increment_bpf_stat(BpfStatsKey::RoutingHandoffInsertFailure);
+                 return Err(TC_ACT_SHOT);
+             };
+-            let handoff: &mut RoutingHandoffEntry = unsafe { &mut (*scratch).handoff };
+-            unsafe { core::ptr::write_bytes(handoff, 0, 1) };
+-            handoff.last_seen_ns = now;
+-            handoff.routing_generation = if routing_generation != 0 {
++            // [honk-android] 同上：逐字段直写，避免 memset 循环与栈临时量。
++            let generation = if routing_generation != 0 {
+                 routing_generation
+             } else {
+                 crate::route::captured_generation(trace_id)
+             };
+-            handoff.trace_id = trace_id;
+-            handoff.incarnation = incarnation;
+-            handoff.result.mark = mark;
+-            handoff.result.must = must as u8;
+-            handoff.result.outbound = outbound;
+-            handoff.result.pid = handoff_pid;
+-            handoff.result.dscp = tuples.dscp;
+-            handoff.result.decision_token = decision_token;
+-            handoff.result.mac.copy_from_slice(&mac);
+-            if let Some(pname) = handoff_pname {
+-                handoff.result.pname.copy_from_slice(pname);
+-            }
++            let handoff: &mut RoutingHandoffEntry = unsafe { &mut (*scratch).handoff };
++            fill_handoff_fresh(
++                handoff,
++                now,
++                generation,
++                trace_id,
++                incarnation,
++                mark,
++                must as u8,
++                &mac,
++                outbound,
++                handoff_pid,
++                tuples.dscp,
++                decision_token,
++                handoff_pname,
++            );
+             if let Err(error) =
+                 crate::auxiliary::publish_handoff(&tuples.five, unsafe { &mut *scratch }, false)
+             {
+@@ -767,6 +844,9 @@ fn do_tproxy_wan_egress_udp(
+ /// WAN egress entry point: parse the packet first so the verifier accepts
+ /// direct `__sk_buff` field access, skip non-localhost traffic, then dispatch
+ /// to the TCP or UDP handler.
++// [honk-android] 改成真子程序边界：6.6 的 verifier 状态合并能力弱，
++// inline 展开后所有分支状态叠加在主路径上，会撞 1M 指令上限。
++// 子程序边界让 call 点状态泛化，爆炸被隔离在子程序内部。
+ #[inline(always)]
+ fn do_tproxy_wan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+     let scratch_key: u32 = 0;
+@@ -840,18 +920,71 @@ fn do_tproxy_wan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+     if pkt.l4proto != IPPROTO_TCP && crate::contrack::tuple_unavailable(&pkt.tuples.five) {
+         return Err(TC_ACT_SHOT);
+     }
++    match pkt.l4proto {
++        IPPROTO_TCP => Ok(WAN_CONTINUE_TCP),
++        IPPROTO_UDP => Ok(WAN_CONTINUE_UDP),
++        _ => Ok(TC_ACT_UNSPEC),
++    }
++}
++
++// [honk-android] 6.6 verifier 适配：WAN egress 拆成「前置过滤 + TCP/UDP 处理」
++// 三个**平级**子程序，由入口函数分派，而不是前置函数里再嵌套调用。
++// 这样调用链深度 = 入口 + max(前置, TCP, UDP) + 其被调者，
++// 避免 352(前置) + 296(TCP) + 56 = 704 > 512 的栈超限；
++// 子程序边界同时把 verifier 状态爆炸隔离在各自内部（指令数也降）。
++const WAN_CONTINUE_TCP: c_long = 0x1_0000;
++const WAN_CONTINUE_UDP: c_long = 0x1_0001;
++
++// 注意：BPF 子程序只能经 r0 返回一个标量；返回 `Result<c_long, c_long>`
++// 时 LLVM 会把判别式放进 r2，而 verifier 在 call 后把 r1-r5 置为不可读
++// （`R2 !read_ok`）。所以所有 inline(never) 子程序一律返回扁平化的 c_long。
++#[inline(never)]
++fn wan_egress_prelude(ctx: &TcContext, link_h_len: u32) -> c_long {
++    match do_tproxy_wan_egress(ctx, link_h_len) {
++        Ok(a) | Err(a) => a,
++    }
++}
++
++#[inline(never)]
++fn do_tproxy_wan_egress_tcp_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
++    match do_tproxy_wan_egress_tcp_entry_body(ctx, link_h_len) {
++        Ok(a) | Err(a) => a,
++    }
++}
++
++#[inline(always)]
++fn do_tproxy_wan_egress_tcp_entry_body(ctx: &TcContext, link_h_len: u32) -> Verdict {
++    let pkt = match unsafe { PKT_SCRATCH_KEY.get_ptr_mut(0) } {
++        Some(ptr) => unsafe { &mut *ptr },
++        None => return Err(TC_ACT_SHOT),
++    };
+     let mut tcp_publisher = crate::contrack::tcp::TcpPublisher::new(&pkt.tuples.five);
+-    if pkt.l4proto == IPPROTO_TCP && is_new_tcp_connection(&pkt.tcph) {
++    if is_new_tcp_connection(&pkt.tcph) {
+         if !tcp_publisher.acquire(ctx, &pkt.tcph) {
+             return Err(TC_ACT_SHOT);
+         }
+         pkt.incarnation = tcp_publisher.incarnation;
+     }
++    do_tproxy_wan_egress_tcp(ctx, link_h_len, pkt, &tcp_publisher)
++}
+ 
+-    match pkt.l4proto {
+-        IPPROTO_TCP => do_tproxy_wan_egress_tcp(ctx, link_h_len, pkt, &tcp_publisher),
+-        IPPROTO_UDP => do_tproxy_wan_egress_udp(ctx, link_h_len, pkt),
+-        _ => Ok(TC_ACT_UNSPEC),
++#[inline(never)]
++fn do_tproxy_wan_egress_udp_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
++    let pkt = match unsafe { PKT_SCRATCH_KEY.get_ptr_mut(0) } {
++        Some(ptr) => unsafe { &mut *ptr },
++        None => return TC_ACT_SHOT,
++    };
++    match do_tproxy_wan_egress_udp(ctx, link_h_len, pkt) {
++        Ok(a) | Err(a) => a,
++    }
++}
++
++#[inline(always)]
++fn wan_egress_dispatch(ctx: &TcContext, link_h_len: u32) -> Verdict {
++    match wan_egress_prelude(ctx, link_h_len) {
++        WAN_CONTINUE_TCP => Ok(do_tproxy_wan_egress_tcp_entry(ctx, link_h_len)),
++        WAN_CONTINUE_UDP => Ok(do_tproxy_wan_egress_udp_entry(ctx, link_h_len)),
++        other => Ok(other),
+     }
+ }
+ 
+@@ -876,7 +1009,7 @@ pub fn lan_egress_l3(ctx: *mut __sk_buff) -> i32 {
+ #[unsafe(no_mangle)]
+ #[unsafe(link_section = "classifier")]
+ pub fn wan_egress_l2(ctx: *mut __sk_buff) -> i32 {
+-    crate::fragment::record(flatten(do_tproxy_wan_egress(&tc_context(ctx), 14)))
++    crate::fragment::record(flatten(wan_egress_dispatch(&tc_context(ctx), 14)))
+ }
+ 
+ #[unsafe(no_mangle)]
+@@ -884,5 +1017,5 @@ pub fn wan_egress_l2(ctx: *mut __sk_buff) -> i32 {
+ pub fn wan_egress_l3(ctx: *mut __sk_buff) -> i32 {
+     let ctx = tc_context(ctx);
+     let link_h_len = crate::transport::l3_link_h_len(&ctx);
+-    crate::fragment::record(flatten(do_tproxy_wan_egress(&ctx, link_h_len)))
++    crate::fragment::record(flatten(wan_egress_dispatch(&ctx, link_h_len)))
+ }
+diff --git a/crates/honk-ebpf/src/event.rs b/crates/honk-ebpf/src/event.rs
+index f06c4b7..8fb946a 100644
+--- a/crates/honk-ebpf/src/event.rs
++++ b/crates/honk-ebpf/src/event.rs
+@@ -21,7 +21,7 @@ pub fn send_dae_event(
+         return -1;
+     };
+     let e: &mut DaeEvent = unsafe {
+-        reservation.as_mut_ptr().write_bytes(0, 1);
++        honk_ebpf_common::conn::zero_in_place_volatile(reservation.as_mut_ptr());
+         reservation.assume_init_mut()
+     };
+ 
+@@ -66,7 +66,7 @@ pub fn send_flow_expired(key: &honk_ebpf_common::redirect_need::TuplesKey, incar
+         return;
+     };
+     let event: &mut DaeEvent = unsafe {
+-        reservation.as_mut_ptr().write_bytes(0, 1);
++        honk_ebpf_common::conn::zero_in_place_volatile(reservation.as_mut_ptr());
+         reservation.assume_init_mut()
+     };
+     event.timestamp = now;
+diff --git a/crates/honk-ebpf/src/ingress.rs b/crates/honk-ebpf/src/ingress.rs
+index 5053942..8b11120 100644
+--- a/crates/honk-ebpf/src/ingress.rs
++++ b/crates/honk-ebpf/src/ingress.rs
+@@ -132,7 +132,7 @@ fn redirect_lan_packet_to_control_plane(
+         let scratch = UDP_DECISION_SCRATCH_MAP.get_ptr_mut(0).ok_or(TC_ACT_SHOT)?;
+         let scratch = unsafe { &mut *scratch };
+         let handoff = &mut scratch.handoff;
+-        unsafe { ptr::write_bytes(handoff, 0, 1) };
++        unsafe { honk_ebpf_common::conn::zero_in_place_volatile(handoff as *mut _) };
+         handoff.last_seen_ns = now;
+         handoff.routing_generation = if routing_generation != 0 {
+             routing_generation
+@@ -173,7 +173,7 @@ fn redirect_lan_packet_to_control_plane(
+         };
+         let scratch = unsafe { &mut *scratch };
+         scratch.redirect_key = redirect_tuple;
+-        unsafe { ptr::write_bytes(&mut scratch.redirect, 0, 1) };
++        unsafe { honk_ebpf_common::conn::zero_in_place_volatile(&mut scratch.redirect as *mut _) };
+         scratch.redirect.ifindex = unsafe { (*raw_skb(ctx)).ifindex };
+         scratch.redirect.smac.copy_from_slice(&pkt.ethh.src_addr);
+         scratch.redirect.dmac.copy_from_slice(&pkt.ethh.dst_addr);
+@@ -250,7 +250,7 @@ fn stage_udp_decision(
+         return Err(TC_ACT_SHOT);
+     };
+     unsafe {
+-        ptr::write_bytes(scratch_ptr, 0, 1);
++        honk_ebpf_common::conn::zero_in_place_volatile(scratch_ptr);
+     }
+     let scratch = unsafe { &mut *scratch_ptr };
+     let Some(decision_token) = crate::contrack::udp::allocate_udp_decision_token(&pkt.tuples.five)
+diff --git a/crates/honk-ebpf/src/maps.rs b/crates/honk-ebpf/src/maps.rs
+index 10be71e..724985a 100644
+--- a/crates/honk-ebpf/src/maps.rs
++++ b/crates/honk-ebpf/src/maps.rs
+@@ -275,5 +275,23 @@ pub static PARSE_CTX_MAP: PerCpuArray<ParseTransportCtx, 1> = PerCpuArray::new()
+ #[btf_map]
+ pub static UDP_DECISION_SCRATCH_MAP: PerCpuArray<UdpDecisionScratch, 1> = PerCpuArray::new();
+ 
++/// [honk-android] 与 `FlowMapValue<ConnState>` 同布局、但不含 `bpf_spin_lock`
++/// 类型（per-CPU array 不允许 spin_lock 字段）。这样 `CONN_STATE_MAP.insert`
++/// 可以直接拿 map 内存当 value，而不是在栈上造 80 字节的 `FlowMapValue`
++/// 临时量（6.6 verifier 下 WAN egress 调用链栈只差 32 字节就超 512）。
++#[repr(C)]
++#[derive(Clone, Copy)]
++pub struct ConnSnapshotSlot {
++    pub lock_val: u32,
++    pub padding: u32,
++    pub value: ConnState,
++}
++
++const _: () = assert!(
++    core::mem::size_of::<ConnSnapshotSlot>()
++        == core::mem::size_of::<honk_ebpf_common::conn::FlowMapValue<ConnState>>()
++);
++const _: () = assert!(core::mem::offset_of!(ConnSnapshotSlot, value) == 8);
++
+ #[btf_map]
+-pub static CONNTRACK_SNAPSHOT_MAP: PerCpuArray<ConnState, 1> = PerCpuArray::new();
++pub static CONNTRACK_SNAPSHOT_MAP: PerCpuArray<ConnSnapshotSlot, 1> = PerCpuArray::new();
+diff --git a/crates/honk-ebpf/src/receive_trace.rs b/crates/honk-ebpf/src/receive_trace.rs
+index bfac271..b2b5a7e 100644
+--- a/crates/honk-ebpf/src/receive_trace.rs
++++ b/crates/honk-ebpf/src/receive_trace.rs
+@@ -1,11 +1,11 @@
+ //! Candidate skb metadata becomes evidence only at successful outer recvmsg exit.
+ 
+ use aya_ebpf::{
+-    Global,
++    EbpfContext, Global,
+     helpers::{bpf_get_current_pid_tgid, bpf_probe_read_kernel},
+-    macros::{fentry, fexit, map},
++    macros::{fentry, fexit, kprobe, kretprobe, map},
+     maps::HashMap,
+-    programs::{FEntryContext, FExitContext},
++    programs::{FEntryContext, FExitContext, ProbeContext, RetProbeContext},
+ };
+ use honk_ebpf_common::receive_trace::{
+     RECEIVE_TRACE_BATCH_SIZE, RECEIVE_TRACE_SOCKETS, RECEIVE_TRACE_VALID, ReceiveTraceBatch,
+@@ -24,8 +24,18 @@ pub static RECEIVE_OWNER_TGID: Global<u32> = Global::new(0);
+ pub static RECEIVE_TRACE: HashMap<u64, ReceiveTraceBatch> =
+     HashMap::with_max_entries(RECEIVE_TRACE_SOCKETS, 0);
+ 
++/// Maps `pid_tgid` -> active `sock_cookie` during a `udp_recvmsg`/`udpv6_recvmsg`
++/// call when using the ARM64 kprobe/kretprobe fallback (where kretprobe lacks entry args).
++#[map]
++pub static RECEIVE_ACTIVE_TASK: HashMap<u64, u64> = HashMap::with_max_entries(1024, 0);
++
++#[repr(C)]
++struct Arm64PtRegs {
++    regs: [u64; 31],
++}
++
+ #[inline(always)]
+-fn state(sk: *const u8) -> Option<*mut ReceiveTraceBatch> {
++fn state_cookie(sk: *const u8) -> Option<(u64, *mut ReceiveTraceBatch)> {
+     // The hooks run for every UDP receive on the host.
+     if sk.is_null() || (bpf_get_current_pid_tgid() >> 32) as u32 != RECEIVE_OWNER_TGID.load() {
+         return None;
+@@ -38,14 +48,16 @@ fn state(sk: *const u8) -> Option<*mut ReceiveTraceBatch> {
+         return None;
+     }
+     let state = RECEIVE_TRACE.get_ptr_mut(&cookie)?;
+-    (unsafe { (*state).active } != 0).then_some(state)
++    (unsafe { (*state).active } != 0).then_some((cookie, state))
+ }
+ 
+ #[inline(always)]
+-fn enter(sk: *const u8, flags: i32) {
+-    let Some(ptr) = state(sk) else { return };
+-    let batch = unsafe { &mut *ptr };
+-    let owner = bpf_get_current_pid_tgid();
++fn state(sk: *const u8) -> Option<*mut ReceiveTraceBatch> {
++    state_cookie(sk).map(|(_, state)| state)
++}
++
++#[inline(always)]
++fn enter_batch(batch: &mut ReceiveTraceBatch, owner: u64, flags: i32) {
+     if batch.depth != 0 {
+         batch.lost = 1;
+         batch.depth = batch.depth.saturating_add(1);
+@@ -61,35 +73,70 @@ fn enter(sk: *const u8, flags: i32) {
+ }
+ 
+ #[inline(always)]
+-fn exit(sk: *const u8, result: Result<i32, i32>) {
++fn enter(sk: *const u8, flags: i32) {
+     let Some(ptr) = state(sk) else { return };
+-    let batch = unsafe { &mut *ptr };
+-    if batch.depth == 0 || batch.owner != bpf_get_current_pid_tgid() {
++    enter_batch(unsafe { &mut *ptr }, bpf_get_current_pid_tgid(), flags);
++}
++
++#[inline(always)]
++fn exit_batch(batch: &mut ReceiveTraceBatch, owner: u64, result: Result<i32, i32>) -> bool {
++    if batch.depth == 0 || batch.owner != owner {
+         batch.lost = 1;
+-        return;
++        return batch.depth == 0;
+     }
+     batch.depth -= 1;
+     if batch.depth != 0 {
+-        return;
++        return false;
+     }
+     let Ok(length) = result else {
+         batch.lost = 1;
+-        return;
++        return true;
+     };
+     if length < 0 {
+         batch.candidate.valid = 0;
+-        return;
++        return true;
+     }
+     let index = batch.count as usize;
+     if index >= RECEIVE_TRACE_BATCH_SIZE {
+         batch.lost = 1;
+-        return;
++        return true;
+     }
+     // Zero bytes is a successfully consumed datagram, not an empty batch.
+     batch.candidate.length = length as u32;
+     batch.packets[index] = batch.candidate;
+     batch.count += 1;
+     batch.candidate.valid = 0;
++    true
++}
++
++#[inline(always)]
++fn exit(sk: *const u8, result: Result<i32, i32>) {
++    let Some(ptr) = state(sk) else { return };
++    let _ = exit_batch(unsafe { &mut *ptr }, bpf_get_current_pid_tgid(), result);
++}
++
++#[inline(always)]
++fn record_candidate(batch: &mut ReceiveTraceBatch, owner: u64, skb: *const u8) {
++    if batch.depth != 1 || batch.owner != owner {
++        batch.lost = 1;
++        return;
++    }
++    // A checksum-discarded candidate is overwritten by the next helper return.
++    batch.candidate.valid = 0;
++    if skb.is_null() || skb as usize >= usize::MAX - 4095 {
++        return;
++    }
++    let priority = unsafe {
++        bpf_probe_read_kernel::<u32>(skb.add(RECEIVE_SKB_PRIORITY_OFFSET.load() as usize).cast())
++    };
++    let mark = unsafe {
++        bpf_probe_read_kernel::<u32>(skb.add(RECEIVE_SKB_MARK_OFFSET.load() as usize).cast())
++    };
++    if let (Ok(priority), Ok(mark)) = (priority, mark) {
++        batch.candidate.priority = priority;
++        batch.candidate.mark = mark;
++        batch.candidate.valid = RECEIVE_TRACE_VALID;
++    }
+ }
+ 
+ #[fentry]
+@@ -121,29 +168,91 @@ pub fn honk_udp_receive_candidate(ctx: FExitContext) -> u32 {
+     let Some(ptr) = state(ctx.arg(0)) else {
+         return 0;
+     };
+-    let batch = unsafe { &mut *ptr };
+-    if batch.depth != 1 || batch.owner != bpf_get_current_pid_tgid() {
+-        batch.lost = 1;
+-        return 0;
+-    }
+-    // A checksum-discarded candidate is overwritten by the next helper return.
+-    batch.candidate.valid = 0;
+     let Ok(skb) = ctx.ret::<*const u8>() else {
+         return 0;
+     };
+-    if skb.is_null() || skb as usize >= usize::MAX - 4095 {
++    record_candidate(unsafe { &mut *ptr }, bpf_get_current_pid_tgid(), skb);
++    0
++}
++
++#[inline(always)]
++fn enter_kprobe_arm64(ctx: &ProbeContext) {
++    let regs = ctx.as_ptr() as *const Arm64PtRegs;
++    let sk = unsafe { (*regs).regs[0] } as *const u8;
++    let flags = unsafe { (*regs).regs[3] } as i32;
++    let Some((cookie, ptr)) = state_cookie(sk) else {
++        return;
++    };
++    let owner = bpf_get_current_pid_tgid();
++    let _ = RECEIVE_ACTIVE_TASK.insert(&owner, &cookie, 0);
++    enter_batch(unsafe { &mut *ptr }, owner, flags);
++}
++
++#[inline(always)]
++fn exit_kretprobe_arm64(ctx: &RetProbeContext) {
++    let owner = bpf_get_current_pid_tgid();
++    if (owner >> 32) as u32 != RECEIVE_OWNER_TGID.load() {
++        return;
++    }
++    let Some(cookie) = (unsafe { RECEIVE_ACTIVE_TASK.get(&owner) }).copied() else {
++        return;
++    };
++    let Some(ptr) = RECEIVE_TRACE.get_ptr_mut(&cookie) else {
++        let _ = RECEIVE_ACTIVE_TASK.remove(&owner);
++        return;
++    };
++    if unsafe { (*ptr).active } == 0 {
++        let _ = RECEIVE_ACTIVE_TASK.remove(&owner);
++        return;
++    }
++    let regs = ctx.as_ptr() as *const Arm64PtRegs;
++    let ret_val = unsafe { (*regs).regs[0] } as i64 as i32;
++    if exit_batch(unsafe { &mut *ptr }, owner, Ok(ret_val)) {
++        let _ = RECEIVE_ACTIVE_TASK.remove(&owner);
++    }
++}
++
++#[kprobe]
++pub fn honk_udp_receive_enter_kp(ctx: ProbeContext) -> u32 {
++    enter_kprobe_arm64(&ctx);
++    0
++}
++
++#[kprobe]
++pub fn honk_udp6_receive_enter_kp(ctx: ProbeContext) -> u32 {
++    enter_kprobe_arm64(&ctx);
++    0
++}
++
++#[kretprobe]
++pub fn honk_udp_receive_exit_krp(ctx: RetProbeContext) -> u32 {
++    exit_kretprobe_arm64(&ctx);
++    0
++}
++
++#[kretprobe]
++pub fn honk_udp6_receive_exit_krp(ctx: RetProbeContext) -> u32 {
++    exit_kretprobe_arm64(&ctx);
++    0
++}
++
++#[kretprobe]
++pub fn honk_udp_receive_candidate_krp(ctx: RetProbeContext) -> u32 {
++    let owner = bpf_get_current_pid_tgid();
++    if (owner >> 32) as u32 != RECEIVE_OWNER_TGID.load() {
+         return 0;
+     }
+-    let priority = unsafe {
+-        bpf_probe_read_kernel::<u32>(skb.add(RECEIVE_SKB_PRIORITY_OFFSET.load() as usize).cast())
++    let Some(cookie) = (unsafe { RECEIVE_ACTIVE_TASK.get(&owner) }).copied() else {
++        return 0;
+     };
+-    let mark = unsafe {
+-        bpf_probe_read_kernel::<u32>(skb.add(RECEIVE_SKB_MARK_OFFSET.load() as usize).cast())
++    let Some(ptr) = RECEIVE_TRACE.get_ptr_mut(&cookie) else {
++        return 0;
+     };
+-    if let (Ok(priority), Ok(mark)) = (priority, mark) {
+-        batch.candidate.priority = priority;
+-        batch.candidate.mark = mark;
+-        batch.candidate.valid = RECEIVE_TRACE_VALID;
++    if unsafe { (*ptr).active } == 0 {
++        return 0;
+     }
++    let regs = ctx.as_ptr() as *const Arm64PtRegs;
++    let skb = unsafe { (*regs).regs[0] } as *const u8;
++    record_candidate(unsafe { &mut *ptr }, owner, skb);
+     0
+ }
+diff --git a/crates/honk-ebpf/src/route.rs b/crates/honk-ebpf/src/route.rs
+index 3a05487..2c1eab2 100644
+--- a/crates/honk-ebpf/src/route.rs
++++ b/crates/honk-ebpf/src/route.rs
+@@ -124,8 +124,9 @@ pub unsafe extern "C" fn honk_normalize_process_name(
+     if input.is_null() || output.is_null() {
+         return 0;
+     }
+-    unsafe { (*output).fill(0) };
+-    let mut state = Default::default();
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(output) };
++    let mut state = unsafe { core::mem::MaybeUninit::uninit().assume_init() };
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(&mut state as *mut _) };
+     for _ in 0..16 {
+         if unsafe { honk_normalize_process_step(&mut state, input, output) } != 0 {
+             break;
+@@ -160,7 +161,7 @@ fn evaluate_policy(
+         {
+             input.pname_len = unsafe { honk_normalize_process_name(pname, &mut input.pname) };
+         } else {
+-            input.pname = [0; ROUTING_PROCESS_MAX_LEN];
++            unsafe { honk_ebpf_common::conn::zero_in_place_volatile(&mut input.pname as *mut _) };
+             input.pname_len = 0;
+         }
+     }
+@@ -323,7 +324,7 @@ pub fn build_input(
+     ip_version: u8,
+     is_wan: bool,
+ ) {
+-    *input = RoutingInput::default();
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(input as *mut RoutingInput) };
+     input.src_ip = *tuples.five.src_ip.as_bytes();
+     input.dst_ip = *tuples.five.dst_ip.as_bytes();
+     input.src_port = tuples.five.src_port as u32;
+diff --git a/crates/honk-ebpf/src/transport.rs b/crates/honk-ebpf/src/transport.rs
+index f3f8510..ecb1991 100644
+--- a/crates/honk-ebpf/src/transport.rs
++++ b/crates/honk-ebpf/src/transport.rs
+@@ -270,6 +270,7 @@ impl ParseTransportExt for ParseTransportCtx {
+         let mut offset = 0u32;
+         let mut ret: c_long;
+ 
++        self.zero_in_place();
+         if link_h_len == ETH_HLEN {
+             ret = unsafe {
+                 bpf_skb_load_bytes(
+@@ -284,48 +285,9 @@ impl ParseTransportExt for ParseTransportCtx {
+             }
+             offset += mem::size_of::<EthHdr>() as u32;
+         } else {
+-            unsafe {
+-                ptr::write_bytes(
+-                    &mut self.ethh as *mut _ as *mut u8,
+-                    0,
+-                    mem::size_of::<EthHdr>(),
+-                )
+-            };
+             self.ethh.ether_type = ctx.skb.protocol() as u16;
+         }
+ 
+-        self.ihl = 0;
+-        self.l4proto = 0;
+-        self.listener_l4proto = 0;
+-        self.is_fragmented = 0;
+-        unsafe {
+-            ptr::write_bytes(
+-                &mut self.iph as *mut _ as *mut u8,
+-                0,
+-                mem::size_of::<Ipv4Hdr>(),
+-            );
+-            ptr::write_bytes(
+-                &mut self.ipv6h as *mut _ as *mut u8,
+-                0,
+-                mem::size_of::<Ipv6Hdr>(),
+-            );
+-            ptr::write_bytes(
+-                &mut self.icmp6h as *mut _ as *mut u8,
+-                0,
+-                mem::size_of::<Icmpv6Hdr>(),
+-            );
+-            ptr::write_bytes(
+-                &mut self.tcph as *mut _ as *mut u8,
+-                0,
+-                mem::size_of::<TcpHdr>(),
+-            );
+-            ptr::write_bytes(
+-                &mut self.udph as *mut _ as *mut u8,
+-                0,
+-                mem::size_of::<UdpHdr>(),
+-            );
+-        }
+-
+         if self.ethh.ether_type == ETH_P_IP.to_be() {
+             ret = unsafe {
+                 bpf_skb_load_bytes(
+@@ -526,13 +488,11 @@ impl ParseTransportExt for ParseTransportCtx {
+         let data_end = ctx.data_end() as *const u8;
+         let mut offset = 0u32;
+ 
+-        unsafe {
+-            ptr::write_bytes(
+-                self as *mut _ as *mut u8,
+-                0,
+-                mem::size_of::<ParseTransportCtx>(),
+-            );
+-        }
++        // [honk-android] 整体赋值取代 write_bytes(self, 0, size_of::<ParseTransportCtx>())。
++        // 后者被 LLVM 展开成逐字节 memset 循环，6.6 的 verifier 每次循环都派生
++        // 新状态（循环变量从 0 递增到 120，每次都不同），单这一个循环就吃掉
++        // 60 万+ 条指令预算。结构体赋值是常量偏移的 store 序列，无状态分裂。
++        self.zero_in_place();
+ 
+         if link_h_len == ETH_HLEN {
+             let eth_ptr = data as *const EthHdr;
+@@ -693,7 +653,7 @@ impl ParseTransportExt for ParseTransportCtx {
+ 
+     #[inline(always)]
+     fn fill_tuples(&self, tuples: &mut Tuples) {
+-        unsafe { ptr::write_bytes(tuples as *mut _ as *mut u8, 0, mem::size_of::<Tuples>()) };
++        unsafe { honk_ebpf_common::conn::zero_in_place_volatile(tuples as *mut Tuples) };
+         tuples.five.l4proto = self.l4proto;
+ 
+         if self.iph.version() == 4 {
+diff --git a/crates/honk-outbound/src/bootstrap.rs b/crates/honk-outbound/src/bootstrap.rs
+index bea4447..56d1653 100644
+--- a/crates/honk-outbound/src/bootstrap.rs
++++ b/crates/honk-outbound/src/bootstrap.rs
+@@ -20,7 +20,7 @@ use std::sync::{Arc, RwLock};
+ use std::time::Duration;
+ 
+ /// A direct DNS server used to resolve proxy-server hostnames.
+-#[derive(Debug, Clone, Copy)]
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub struct BootstrapResolver {
+     server: SocketAddr,
+     use_tcp: bool,
+@@ -43,6 +43,7 @@ impl BootstrapResolver {
+ }
+ 
+ static GLOBAL: RwLock<Option<BootstrapResolver>> = RwLock::new(None);
++static GLOBAL_FALLBACK: RwLock<Option<BootstrapResolver>> = RwLock::new(None);
+ 
+ /// Install (or clear) the process-wide bootstrap resolver. Called by
+ /// honk-core at startup and on config reload.
+@@ -50,6 +51,23 @@ pub fn set_global(resolver: Option<BootstrapResolver>) {
+     *GLOBAL.write().unwrap() = resolver;
+ }
+ 
++/// Install (or clear) the process-wide fallback bootstrap resolver used when
++/// the primary bootstrap resolver fails or times out (critical on platforms
++/// such as Android without `/etc/resolv.conf`).
++pub fn set_global_fallback(resolver: Option<BootstrapResolver>) {
++    *GLOBAL_FALLBACK
++        .write()
++        .unwrap_or_else(|poisoned| poisoned.into_inner()) = resolver;
++}
++
++/// Snapshot the process-wide fallback bootstrap resolver, if configured.
++pub fn global_fallback() -> Option<BootstrapResolver> {
++    match GLOBAL_FALLBACK.read() {
++        Ok(resolver) => *resolver,
++        Err(poisoned) => *poisoned.into_inner(),
++    }
++}
++
+ /// Snapshot the process-wide resolver for compatibility callers that do not
+ /// already own a configuration generation.
+ pub fn global() -> Option<BootstrapResolver> {
+@@ -158,6 +176,20 @@ where
+             Err(e) => tracing::debug!("bootstrap resolution of '{}' failed: {}", host, e),
+         }
+     }
++    if let Some(fallback) = global_fallback().filter(|fb| Some(*fb) != resolver) {
++        let result = {
++            let _guard = admit().await?;
++            fallback.query_with_deadline(host, deadline).await
++        };
++        match result {
++            Ok(ips) if !ips.is_empty() => return Ok(ips),
++            Ok(_) => tracing::debug!(
++                "fallback bootstrap resolver returned no records for '{}'",
++                host
++            ),
++            Err(e) => tracing::debug!("fallback bootstrap resolution of '{}' failed: {}", host, e),
++        }
++    }
+     if let Ok(contents) = tokio::fs::read_to_string("/etc/hosts").await {
+         let addrs = hosts_addresses(&contents, host);
+         if !addrs.is_empty() {
+@@ -314,6 +346,7 @@ impl BootstrapResolver {
+     }
+ 
+     async fn exchange_udp(&self, query: &[u8]) -> io::Result<Vec<u8>> {
++        const UDP_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+         let bind: SocketAddr = if self.server.is_ipv4() {
+             (Ipv4Addr::UNSPECIFIED, 0).into()
+         } else {
+@@ -323,11 +356,21 @@ impl BootstrapResolver {
+         socket.connect(self.server).await?;
+         socket.send(query).await?;
+         let mut buf = [0u8; 1500];
+-        // Stray and off-path spoofed datagrams are skipped; the caller's deadline bounds the wait.
++        let mut next_retry = tokio::time::Instant::now() + UDP_RETRY_INTERVAL;
++        // Stray and off-path spoofed datagrams are skipped; retransmits recover
++        // single dropped UDP packets within the caller's QUERY_TIMEOUT budget.
+         loop {
+-            let n = socket.recv(&mut buf).await?;
+-            if answers_query(query, &buf[..n]) {
+-                return Ok(buf[..n].to_vec());
++            match tokio::time::timeout_at(next_retry, socket.recv(&mut buf)).await {
++                Ok(res) => {
++                    let n = res?;
++                    if answers_query(query, &buf[..n]) {
++                        return Ok(buf[..n].to_vec());
++                    }
++                }
++                Err(_) => {
++                    socket.send(query).await?;
++                    next_retry = tokio::time::Instant::now() + UDP_RETRY_INTERVAL;
++                }
+             }
+         }
+     }
+diff --git a/crates/honk-outbound/src/bootstrap/tests.rs b/crates/honk-outbound/src/bootstrap/tests.rs
+index b66a232..cb57466 100644
+--- a/crates/honk-outbound/src/bootstrap/tests.rs
++++ b/crates/honk-outbound/src/bootstrap/tests.rs
+@@ -593,3 +593,45 @@ fn system_hosts_matches_aliases_and_address_families() {
+     assert!(hosts_addresses(hosts, "ignored").is_empty());
+     assert!(hosts_addresses(hosts, "hidden").is_empty());
+ }
++
++#[tokio::test]
++async fn udp_exchange_retransmits_after_dropped_packet() {
++    use std::sync::atomic::{AtomicUsize, Ordering};
++
++    let good = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42));
++    let seen = Arc::new(AtomicUsize::new(0));
++    let seen_clone = Arc::clone(&seen);
++    // Drop the very first A query datagram, answer the retransmit.
++    let server = spawn_udp_stub(move |query| {
++        if qtype(query) == 1 && seen_clone.fetch_add(1, Ordering::AcqRel) == 0 {
++            Vec::new()
++        } else {
++            vec![addr_response(query, &[good])]
++        }
++    })
++    .await;
++    let resolver = BootstrapResolver::parse(&format!("udp://{server}")).unwrap();
++    let ips = resolver.query_family("retransmit.invalid", 1).await.unwrap();
++    assert_eq!(ips, vec![good]);
++    assert!(seen.load(Ordering::Acquire) >= 2);
++}
++
++#[tokio::test]
++async fn fallback_bootstrap_resolver_recovers_when_primary_fails() {
++    if run_global_test_in_child(
++        "bootstrap::tests::fallback_bootstrap_resolver_recovers_when_primary_fails",
++    ) {
++        return;
++    }
++    let good = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 99));
++    // Primary answers empty (NXDOMAIN-like / no records) immediately; fallback answers A.
++    let primary = spawn_udp_stub(|query| vec![addr_response(query, &[])]).await;
++    let fallback = spawn_udp_stub(move |query| vec![addr_response(query, &[good])]).await;
++
++    set_global(BootstrapResolver::parse(&format!("udp://{primary}")));
++    set_global_fallback(BootstrapResolver::parse(&format!("udp://{fallback}")));
++    let ips = resolve("fallback.invalid").await.unwrap();
++    set_global(None);
++    set_global_fallback(None);
++    assert_eq!(ips, vec![good]);
++}
