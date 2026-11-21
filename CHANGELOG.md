@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.1 (2026-11-21)
+
+### 与官方原版 BoxProxy 共存升级 (`com.boxproxy.honk`)
+- **独立包名与应用标识**：将 APK 包名更改为 **`com.boxproxy.honk`**，桌面应用名称设为 **`BoxProxy Honk`**，通知栏快捷开关磁贴设为 **`Box Honk`**，支持与官方原版 `com.boxproxy.box` **免卸载直接并存安装**。
+- **全组件隔离**：同步隔离 `AndroidManifest.xml` 签名权限、`androidx-startup` Provider Authority、通知栏控制广播 Action/Extra、备份文件名前缀，以及开机自启脚本路径（`/data/adb/service.d/boxproxy-honk.sh`），彻底避免与原版配置、数据库或自启脚本产生冲突。
+- **工具链与配置同步**：更新 `boxctl` 默认目录探测、推荐配置模板 `config.example.dae`、一键部署脚本 `deploy_honk_android.sh`（默认指向 `com.boxproxy.honk`，支持 `--pkg` 参数自定义且在宿主机直接完成 SQLite `runtime_profile` 预配置）及全部文档。
+
 ## v1.0.0 (2026-11-20)
 
 ### Android 平台核心移植 (`honk-core` / `honk-ebpf`)

@@ -35,10 +35,26 @@ index a1be89c..bd0480b 100644
      }
  }
 diff --git a/boxctl/src/config.rs b/boxctl/src/config.rs
-index 6eb281a..041f575 100644
+index 6eb281a..9a49903 100644
 --- a/boxctl/src/config.rs
 +++ b/boxctl/src/config.rs
-@@ -269,7 +269,7 @@ impl Config {
+@@ -136,7 +136,14 @@ impl BoxPaths {
+                 })
+             })
+             .or_else(infer_home_from_current_exe)
+-            .unwrap_or_else(|| "/data/user/0/com.boxproxy.box/files/box".to_string());
++            .unwrap_or_else(|| {
++                let honk_home = "/data/user/0/com.boxproxy.honk/files/box";
++                if std::path::Path::new(honk_home).exists() {
++                    honk_home.to_string()
++                } else {
++                    "/data/user/0/com.boxproxy.box/files/box".to_string()
++                }
++            });
+         let home = PathBuf::from(home_str);
+         let db = db_arg.unwrap_or_else(|| home.join("box.db"));
+         Ok(Self {
+@@ -269,7 +276,7 @@ impl Config {
              box_log: paths.run.join("runs.log"),
              box_user_group: "root:net_admin".to_string(),
              bin_name: bin_name.clone(),
@@ -47,7 +63,7 @@ index 6eb281a..041f575 100644
                  .iter()
                  .map(|value| value.to_string())
                  .collect(),
-@@ -396,7 +396,7 @@ impl Config {
+@@ -396,7 +403,7 @@ impl Config {
          self.bin_name = normalize_choice(
              "core",
              &self.bin_name,
@@ -56,7 +72,7 @@ index 6eb281a..041f575 100644
          )?;
          self.dns_hijack_mode = normalize_choice(
              "DNS hijack mode",
-@@ -438,7 +438,7 @@ impl Config {
+@@ -438,7 +445,7 @@ impl Config {
  }
  
  fn runtime_config_file_path(paths: &BoxPaths) -> PathBuf {
@@ -65,7 +81,7 @@ index 6eb281a..041f575 100644
  }
  
  fn core_uses_runtime_config(bin_name: &str) -> bool {
-@@ -461,7 +461,7 @@ mod tests {
+@@ -461,7 +468,7 @@ mod tests {
  
          assert_eq!(
              runtime_config_file_path(&paths),

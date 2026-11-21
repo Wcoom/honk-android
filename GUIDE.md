@@ -30,7 +30,9 @@
 
 ## 三、分步安装教程
 
-### 第 1 步：安装适配版 BoxProxy APK
+### 第 1 步：安装共存版 BoxProxy Honk APK
+
+本包内的 APK 已采用独立包名 **`com.boxproxy.honk`**（桌面名称显示为 **`BoxProxy Honk`**，快捷开关磁贴为 **`Box Honk`**），**可与手机上原有的官方版 BoxProxy (`com.boxproxy.box`) 直接并存安装，无需卸载原版、互不干扰**。
 
 将手机连接电脑并执行：
 
@@ -38,12 +40,10 @@
 adb install apk/BoxProxy-honk-arm64.apk
 ```
 
-> **提示**：如果你手机上之前安装过官方原版 BoxProxy，由于签名不同直接覆盖安装会报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`。请先导出/备份你的旧配置，再卸载原版后安装本包内的 APK。
-
 安装完成后：
-1. 在手机上**打开一次 BoxProxy**；
-2. 弹出 Root 授权提示时点击**允许**；
-3. 等待应用初始化完成（此时会在 `/data/user/0/com.boxproxy.box/files/box/` 自动生成基础目录与数据库）。
+1. 在手机桌面上找到并**打开一次 `BoxProxy Honk`**；
+2. 在 KernelSU / Magisk / APatch 弹出 Root 授权提示时点击**允许**；
+3. 等待应用初始化完成（此时会在 `/data/user/0/com.boxproxy.honk/files/box/` 自动生成独立目录与数据库）。
 
 ---
 
@@ -102,9 +102,9 @@ adb push /路径/到你的/config.dae /data/local/tmp/config.dae
 adb push /路径/到你的/geoip.dat /data/local/tmp/geoip.dat
 adb push /路径/到你的/geosite.dat /data/local/tmp/geosite.dat
 
-# 2. 复制到 BoxProxy 目录并修正属主与权限
+# 2. 复制到 BoxProxy Honk 目录并修正属主与权限
 adb shell su <<'EOF'
-BOX=/data/user/0/com.boxproxy.box/files/box
+BOX=/data/user/0/com.boxproxy.honk/files/box
 OWNER=$(stat -c "%u:%g" "$BOX")
 mkdir -p "$BOX/bin" "$BOX/honk/data"
 cp /data/local/tmp/honk "$BOX/bin/honk"
@@ -121,9 +121,11 @@ EOF
 
 ---
 
-### 第 4 步：在 BoxProxy 中选择核心并启动
+### 第 4 步：在 BoxProxy Honk 中选择核心并启动
 
-1. 打开手机上的 **BoxProxy**。
+> **注意**：共存安装时请勿与原版 BoxProxy 同时开启代理服务（启动其中一个前先停止另一个）。
+
+1. 打开手机上的 **`BoxProxy Honk`**。
 2. 进入底部 **设置 → 基础代理配置**：
    - **代理核心**：选择 **`Honk`**
    - **代理模式**：选择 **`eBPF`**
@@ -155,8 +157,8 @@ EOF
 在电脑执行以下命令查看 `honk` 最近日志与配置检查结果：
 ```bash
 adb shell su <<'EOF'
-BOX=/data/user/0/com.boxproxy.box/files/box
-"$BOX/bin/honk" validate -c "$BOX/honk/config.dae"
+BOX=/data/user/0/com.boxproxy.honk/files/box
+"$BOX/bin/honk" -t -d "$BOX/honk/data" -c "$BOX/honk/config.dae"
 tail -n 40 "$BOX/run/honk.log"
 EOF
 ```

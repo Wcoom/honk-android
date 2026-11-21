@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# deploy_honk_android.sh - Idempotent deployment helper for honk-core + BoxProxy on Android (via ADB + su).
-# Operates strictly under /data/user/0/com.boxproxy.box/files/box; never touches system/boot partitions.
+# deploy_honk_android.sh - Idempotent deployment helper for honk-core + BoxProxy Honk on Android (via ADB + su).
+# Operates strictly under /data/user/0/<pkg>/files/box (default com.boxproxy.honk, coexisting with com.boxproxy.box); never touches system/boot partitions.
 set -euo pipefail
 
 HONK_BIN=""
@@ -11,6 +11,7 @@ GEOSITE_FILE=""
 CONFIGURE_DB=0
 START_SERVICE=0
 SERIAL=""
+PKG="com.boxproxy.honk"
 
 usage() {
   cat <<'EOF'
@@ -22,6 +23,7 @@ Options:
   --config <path>      Optional path to config.dae
   --geoip <path>       Optional path to geoip.dat
   --geosite <path>     Optional path to geosite.dat
+  --pkg <package>      Target BoxProxy package name (default: com.boxproxy.honk)
   --configure-db       Update BoxProxy box.db to core=honk, mode=ebpf, config=config.dae
   --start              Start/restart honk via boxctl after deployment and run health checks
   -s, --serial <id>    Target ADB device serial (when multiple devices are attached)
@@ -36,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --config) CONFIG_FILE="$2"; shift 2 ;;
     --geoip) GEOIP_FILE="$2"; shift 2 ;;
     --geosite) GEOSITE_FILE="$2"; shift 2 ;;
+    --pkg) PKG="$2"; shift 2 ;;
     --configure-db) CONFIGURE_DB=1; shift ;;
     --start) START_SERVICE=1; shift ;;
     -s|--serial) SERIAL="$2"; shift 2 ;;
@@ -44,35 +47,35 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+BOX="/data/user/0/$PKG/files/box"
 ADB=(adb)
 if [[ -n "$SERIAL" ]]; then
   ADB+=(-s "$SERIAL")
 fi
 
-echo "[1/5] Checking ADB connection and root environment..."
+echo "[1/5] Checking ADB connection and root environment (target package: $PKG)..."
 "${ADB[@]}" get-state >/dev/null
-"${ADB[@]}" shell su -c '
+"${ADB[@]}" shell su <<EOF
 set -e
-ARCH=$(uname -m)
-KVER=$(uname -r)
-echo "  Device arch=$ARCH kernel=$KVER uid=$(id -u)"
-if [ "$ARCH" != "aarch64" ]; then
-  echo "ERROR: Expected aarch64 device, got $ARCH" >&2
+ARCH=\$(uname -m)
+KVER=\$(uname -r)
+echo "  Device arch=\$ARCH kernel=\$KVER uid=\$(id -u)"
+if [ "\$ARCH" != "aarch64" ]; then
+  echo "ERROR: Expected aarch64 device, got \$ARCH" >&2
   exit 1
 fi
-if [ ! -d /data/user/0/com.boxproxy.box/files/box ]; then
-  echo "ERROR: /data/user/0/com.boxproxy.box/files/box not found. Install and open BoxProxy once first." >&2
+if [ ! -d "$BOX" ]; then
+  echo "ERROR: $BOX not found. Install BoxProxy-honk-arm64.apk ($PKG) and open it once first." >&2
   exit 1
 fi
-'
+EOF
 
 echo "[2/5] Stopping active core if running..."
-"${ADB[@]}" shell su -c '
-BOX=/data/user/0/com.boxproxy.box/files/box
+"${ADB[@]}" shell su <<EOF
 if [ -x "$BOX/bin/boxctl" ] && [ -f "$BOX/box.db" ]; then
   "$BOX/bin/boxctl" --db "$BOX/box.db" down || true
 fi
-'
+EOF
 
 echo "[3/5] Pushing selected artifacts to /data/local/tmp..."
 PUSH_HONK=0; PUSH_BOXCTL=0; PUSH_CONFIG=0; PUSH_GEOIP=0; PUSH_GEOSITE=0
@@ -105,7 +108,7 @@ fi
 echo "[4/5] Installing files, fixing ownership/permissions, and validating config..."
 "${ADB[@]}" shell su <<EOF
 set -e
-BOX=/data/user/0/com.boxproxy.box/files/box
+BOX="$BOX"
 OWNER=\$(stat -c "%u:%g" "\$BOX")
 mkdir -p "\$BOX/bin" "\$BOX/honk/data"
 
@@ -142,28 +145,56 @@ rm -f /data/local/tmp/honk_deploy_bin /data/local/tmp/boxctl_deploy_bin \
 
 if [ -x "\$BOX/bin/honk" ] && [ -f "\$BOX/honk/config.dae" ]; then
   echo "  Validating config.dae..."
-  "\$BOX/bin/honk" validate -c "\$BOX/honk/config.dae"
-fi
-
-if [ "$CONFIGURE_DB" = "1" ] && [ -f "\$BOX/box.db" ] && command -v sqlite3 >/dev/null 2>&1; then
-  echo "  Updating box.db -> core=honk, mode=ebpf, config=config.dae..."
-  sqlite3 "\$BOX/box.db" "
-    UPDATE settings SET value='honk' WHERE key IN ('core','proxy_core');
-    UPDATE settings SET value='ebpf' WHERE key IN ('mode','proxy_mode');
-    UPDATE settings SET value='config.dae' WHERE key IN ('config_file','honk_config_file');
-  " || true
-  chown "\$OWNER" "\$BOX/box.db"*
+  "\$BOX/bin/honk" -t -d "\$BOX/honk/data" -c "\$BOX/honk/config.dae"
 fi
 EOF
 
+if [[ "$CONFIGURE_DB" == "1" ]]; then
+  echo "  Updating box.db -> core=honk, mode=ebpf, config=config.dae..."
+  TMP_DB="\$(mktemp)"
+  "${ADB[@]}" shell su <<EOF
+if [ -f "$BOX/box.db" ]; then
+  cp "$BOX/box.db" /data/local/tmp/honk_deploy_box.db
+  chmod 644 /data/local/tmp/honk_deploy_box.db
+fi
+EOF
+  if "${ADB[@]}" pull /data/local/tmp/honk_deploy_box.db "\$TMP_DB" >/dev/null 2>&1; then
+    python3 - "\$TMP_DB" <<'PY'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+cur = conn.cursor()
+tables = {r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+if "runtime_profile" in tables:
+    cur.execute("UPDATE runtime_profile SET core_name='honk', mode='ebpf', config_name='config.dae' WHERE id=1")
+if "settings" in tables:
+    cur.execute("UPDATE settings SET value='honk' WHERE key IN ('core','proxy_core')")
+    cur.execute("UPDATE settings SET value='ebpf' WHERE key IN ('mode','proxy_mode')")
+    cur.execute("UPDATE settings SET value='config.dae' WHERE key IN ('config_file','honk_config_file')")
+conn.commit()
+conn.close()
+PY
+    "${ADB[@]}" push "\$TMP_DB" /data/local/tmp/honk_deploy_box.db >/dev/null
+    "${ADB[@]}" shell su <<EOF
+OWNER=\$(stat -c "%u:%g" "$BOX")
+am force-stop "$PKG" >/dev/null 2>&1 || true
+rm -f "$BOX/box.db-wal" "$BOX/box.db-shm" "$BOX/box.db-journal"
+cp /data/local/tmp/honk_deploy_box.db "$BOX/box.db"
+chown "\$OWNER" "$BOX/box.db"
+chmod 600 "$BOX/box.db"
+rm -f /data/local/tmp/honk_deploy_box.db
+EOF
+  fi
+  rm -f "\$TMP_DB"
+fi
+
 if [[ "$START_SERVICE" = "1" ]]; then
   echo "[5/5] Starting honk via boxctl and running quick health check..."
-  "${ADB[@]}" shell su <<'EOF'
+  "${ADB[@]}" shell su <<EOF
 set -e
-BOX=/data/user/0/com.boxproxy.box/files/box
-"$BOX/bin/boxctl" --db "$BOX/box.db" up
+BOX="$BOX"
+"\$BOX/bin/boxctl" --db "\$BOX/box.db" up
 sleep 3
-"$BOX/bin/boxctl" --db "$BOX/box.db" status
+"\$BOX/bin/boxctl" --db "\$BOX/box.db" status
 echo "--- Clash API (127.0.0.1:9090) ---"
 curl -sS --max-time 3 http://127.0.0.1:9090/version && echo "" || true
 echo "--- Native Doona WebUI (127.0.0.1:9527/ui/) ---"

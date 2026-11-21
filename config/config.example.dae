@@ -3,7 +3,7 @@
 # 使用方式：
 # 1. 在 node { ... } 中填入你的节点链接，或在 subscription { ... } 中填入订阅地址；
 # 2. 按需在 dns.upstream { ... } 中替换为你的 DoH / DoH3 / DoT 地址；
-# 3. 将本文件复制为 /data/user/0/com.boxproxy.box/files/box/honk/config.dae 并在 BoxProxy 中启用。
+# 3. 将本文件复制为 /data/user/0/com.boxproxy.honk/files/box/honk/config.dae 并在 BoxProxy Honk 中启用。
 
 global {
   tproxy_port: 12345
@@ -24,7 +24,7 @@ global {
   # Android 无 /etc/resolv.conf，强烈建议同时配置主/备直连 Bootstrap DNS
   bootstrap_resolver: '223.5.5.5:53'
   fallback_resolver: '119.29.29.29:53'
-  data_dir: '/data/user/0/com.boxproxy.box/files/box/honk/data'
+  data_dir: '/data/user/0/com.boxproxy.honk/files/box/honk/data'
   preconnect_node_count: 2
   udp_warm_node_count: 2
 }

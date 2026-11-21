@@ -136,7 +136,14 @@ impl BoxPaths {
                 })
             })
             .or_else(infer_home_from_current_exe)
-            .unwrap_or_else(|| "/data/user/0/com.boxproxy.box/files/box".to_string());
+            .unwrap_or_else(|| {
+                let honk_home = "/data/user/0/com.boxproxy.honk/files/box";
+                if std::path::Path::new(honk_home).exists() {
+                    honk_home.to_string()
+                } else {
+                    "/data/user/0/com.boxproxy.box/files/box".to_string()
+                }
+            });
         let home = PathBuf::from(home_str);
         let db = db_arg.unwrap_or_else(|| home.join("box.db"));
         Ok(Self {

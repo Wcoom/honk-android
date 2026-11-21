@@ -126,3 +126,7 @@ honk-android/
    - **开启完整 UDP / QUIC 转发与 QUIC 节点评分探测**：移除 `l4proto(udp) && dport(443) -> block`，启用 `preconnect_node_count: 2` / `udp_warm_node_count: 2`，首个 `tcp_check_url` 设为 `https://cp.cloudflare.com/generate_204`，消除 `quic_probe_disabled`。
    - **解锁 Doona 全部未开启功能**：新增 `NativeApiConfig::admin_authorized()` 支持环回免密管理授权（`config_write: true`），`boxctl` 启动参数升级为 `-d <dir>/data -c <file> --store db` 并注入 `HONK_RECORD_ALWAYS=1`，同时允许 `--store db` 与本机 `clash_api` 共存，完整开启配置读写、节点/规则/策略组/订阅管理、导入、修订历史、地理数据更新（`assets.geodata`）与常驻后台流程记录。
    - **完整 eBPF 数据路径内核钩子校验**：在 `src/crates/honk-core/src/ebpf/real/{bindings.rs,observation.rs}` 中使用 `BPF_PROG_QUERY` 校验 cgroup、`daens` `sk_lookup` 与 `dae0peer` TCX 钩子，使 `/api/v1/datapath` 状态完整变为 `state="active"`、`hooks="attached"`、`health="healthy"`。
+8. **共存版 `BoxProxy Honk` (`com.boxproxy.honk`) 适配与实机双开共存验证（2026-11-21）**：
+   - 将适配版 APK 包名改为独立包名 `com.boxproxy.honk`（应用名 `BoxProxy Honk`、磁贴 `Box Honk`），同步隔离签名权限、`androidx-startup` Authority、通知栏广播 Action/Extra、备份前缀与开机自启脚本（`/data/adb/service.d/boxproxy-honk.sh`）。
+   - 同步升级 `boxctl` 默认目录探测、`config.example.dae` 与一键部署脚本 `deploy_honk_android.sh`。
+   - 真机实测 `com.boxproxy.honk` 与原版 `com.boxproxy.box` 并存安装运行 0 冲突、0 崩溃，迁移后 `honk` 在 `/data/user/0/com.boxproxy.honk/files/box/` 下启动正常（`state="active"`, `hooks="attached"`, `health="healthy"`, `WARN=0`, `ERROR=0`）。
