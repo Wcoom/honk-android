@@ -479,7 +479,10 @@ unsafe fn read_name_byte(input: &[u8], offset: usize) -> u8 {
 #[inline(always)]
 unsafe fn write_name_byte(output: &mut [u8; ROUTING_PROCESS_MAX_LEN], offset: usize, byte: u8) {
     // Linux 6.12 does not bound BPF_MOD results; check before deriving the pointer.
-    let offset = unsafe { core::ptr::read_volatile(&offset) };
+    // Masking with 0x3f after volatile reload clears register `id` aliasing so the
+    // Linux 6.1 verifier does not propagate dead-branch bounds (`umin=48 > umax=45`)
+    // back onto `written` across consecutive UTF-8 replacement writes.
+    let offset = unsafe { core::ptr::read_volatile(&offset) } & 0x3f;
     if offset < ROUTING_PROCESS_MAX_LEN {
         unsafe { *output.as_mut_ptr().add(offset) = byte };
     }

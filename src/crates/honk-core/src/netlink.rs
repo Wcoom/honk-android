@@ -44,11 +44,13 @@ const AF_INET6: i32 = libc::AF_INET6;
 
 const NLM_F_REQUEST: u16 = 0x01;
 const NLM_F_ACK: u16 = 0x04;
+const NLM_F_ECHO: u16 = 0x08;
 const NLM_F_EXCL: u16 = 0x200;
 const NLM_F_CREATE: u16 = 0x400;
 const NLM_F_REPLACE: u16 = 0x100;
 const NLM_F_DUMP_INTR: u16 = 0x10;
 const NLM_F_DUMP: u16 = 0x300;
+const NLA_F_NESTED: u16 = 1 << 15;
 
 const NLMSG_ERROR: u16 = 2;
 const NLMSG_DONE: u16 = 3;
@@ -62,6 +64,23 @@ const RTM_NEWROUTE: u16 = 24;
 const RTM_DELRULE: u16 = 33;
 const RTM_NEWRULE: u16 = 32;
 const RTM_NEWNEIGH: u16 = 28;
+const RTM_NEWQDISC: u16 = 36;
+const RTM_NEWTFILTER: u16 = 44;
+const RTM_DELTFILTER: u16 = 45;
+const RTM_GETTFILTER: u16 = 46;
+
+const TC_H_CLSACT_HANDLE: u32 = 0xFFFF_0000;
+const TC_H_CLSACT_PARENT: u32 = 0xFFFF_FFF1;
+const TC_H_MIN_INGRESS: u32 = 0xFFFF_FFF2;
+const TC_H_MIN_EGRESS: u32 = 0xFFFF_FFF3;
+const ETH_P_ALL: u16 = 0x0003;
+const TCA_KIND: u16 = 1;
+const TCA_OPTIONS: u16 = 2;
+const TCA_BPF_FD: u16 = 6;
+const TCA_BPF_NAME: u16 = 7;
+const TCA_BPF_FLAGS: u16 = 8;
+const TCA_BPF_ID: u16 = 11;
+const TCA_BPF_FLAG_ACT_DIRECT: u32 = 1;
 
 const ARPHRD_ETHER: u16 = 1;
 const IFF_UP: u32 = 0x1;
@@ -147,6 +166,18 @@ struct NdMsg {
     ndm_state: u16,
     ndm_flags: u8,
     ndm_type: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TcMsg {
+    tcm_family: u8,
+    tcm_pad1: u8,
+    tcm_pad2: u16,
+    tcm_ifindex: i32,
+    tcm_handle: u32,
+    tcm_parent: u32,
+    tcm_info: u32,
 }
 
 const NLMSG_ALIGNTO: usize = 4;
@@ -835,6 +866,288 @@ impl NlSock {
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, format!("link '{name}' not found"))
             })
+    }
+
+    /// Ensure the `clsact` qdisc exists on `ifindex` (idempotent: `EEXIST` is OK).
+    pub(crate) fn tc_ensure_clsact(&mut self, ifindex: u32) -> io::Result<()> {
+        let header = TcMsg {
+            tcm_family: 0,
+            tcm_pad1: 0,
+            tcm_pad2: 0,
+            tcm_ifindex: ifindex as i32,
+            tcm_handle: TC_H_CLSACT_HANDLE,
+            tcm_parent: TC_H_CLSACT_PARENT,
+            tcm_info: 0,
+        };
+        let attrs = [(TCA_KIND, Attr::Str("clsact".to_owned()))];
+        match self.request(
+            RTM_NEWQDISC,
+            NLM_F_REQUEST | NLM_F_ACK | NLM_F_EXCL | NLM_F_CREATE,
+            pod_bytes(&header),
+            &attrs,
+        ) {
+            Ok(()) => Ok(()),
+            Err(err) if err.raw_os_error() == Some(libc::EEXIST) => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Attach (`create = true`) or atomically replace (`create = false`) a `cls_bpf`
+    /// direct-action filter on `ifindex` under `clsact` ingress/egress.
+    /// Returns the kernel-assigned `(priority, handle)`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn tc_attach_bpf(
+        &mut self,
+        ifindex: u32,
+        egress: bool,
+        prog_fd: std::os::fd::RawFd,
+        name: &str,
+        priority: u16,
+        handle: u32,
+        create: bool,
+    ) -> io::Result<(u16, u32)> {
+        if create {
+            self.tc_ensure_clsact(ifindex)?;
+        }
+        let parent = if egress {
+            TC_H_MIN_EGRESS
+        } else {
+            TC_H_MIN_INGRESS
+        };
+        let header = TcMsg {
+            tcm_family: 0,
+            tcm_pad1: 0,
+            tcm_pad2: 0,
+            tcm_ifindex: ifindex as i32,
+            tcm_handle: handle,
+            tcm_parent: parent,
+            tcm_info: (u32::from(priority) << 16) | u32::from(ETH_P_ALL.to_be()),
+        };
+        let options = vec![
+            (TCA_BPF_FD, Attr::U32(prog_fd as u32)),
+            (TCA_BPF_NAME, Attr::Str(name.to_owned())),
+            (TCA_BPF_FLAGS, Attr::U32(TCA_BPF_FLAG_ACT_DIRECT)),
+        ];
+        let attrs = [
+            (TCA_KIND, Attr::Str("bpf".to_owned())),
+            (TCA_OPTIONS | NLA_F_NESTED, Attr::Nested(options)),
+        ];
+        let mut flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_ECHO;
+        if create {
+            flags |= NLM_F_CREATE | NLM_F_EXCL;
+        }
+
+        self.seq += 1;
+        let seq = self.seq;
+        let mut buf = Vec::with_capacity(256);
+        buf.extend_from_slice(&[0u8; 4]);
+        buf.extend_from_slice(&RTM_NEWTFILTER.to_ne_bytes());
+        buf.extend_from_slice(&flags.to_ne_bytes());
+        buf.extend_from_slice(&seq.to_ne_bytes());
+        buf.extend_from_slice(&0u32.to_ne_bytes());
+        buf.extend_from_slice(pod_bytes(&header));
+        for (ty, attr) in &attrs {
+            put_attr(&mut buf, *ty, attr);
+        }
+        let len = buf.len() as u32;
+        buf[0..4].copy_from_slice(&len.to_ne_bytes());
+        self.send_datagram(&buf)?;
+
+        let mut resp = vec![0u8; 4096];
+        let mut assigned: Option<(u16, u32)> = None;
+        loop {
+            let n = self.recv_one(&mut resp)?;
+            let mut off = 0usize;
+            while off + 16 <= n {
+                let hlen = u32::from_ne_bytes(resp[off..off + 4].try_into().unwrap()) as usize;
+                let htype = u16::from_ne_bytes(resp[off + 4..off + 6].try_into().unwrap());
+                let hseq = u32::from_ne_bytes(resp[off + 8..off + 12].try_into().unwrap());
+                if hlen < 16 || off + hlen > n {
+                    return Err(invalid_data("malformed netlink message header"));
+                }
+                if hseq == seq {
+                    match htype {
+                        RTM_NEWTFILTER if hlen >= 16 + std::mem::size_of::<TcMsg>() => {
+                            let body = &resp[off + 16..off + hlen];
+                            let tcm_handle = u32::from_ne_bytes(body[8..12].try_into().unwrap());
+                            let tcm_info = u32::from_ne_bytes(body[16..20].try_into().unwrap());
+                            let prio = (tcm_info >> 16) as u16;
+                            assigned = Some((prio, tcm_handle));
+                        }
+                        NLMSG_ERROR => {
+                            if hlen < 20 {
+                                return Err(invalid_data("short NLMSG_ERROR"));
+                            }
+                            let err = i32::from_ne_bytes(
+                                resp[off + 16..off + 20].try_into().unwrap(),
+                            );
+                            if err != 0 {
+                                return Err(io::Error::from_raw_os_error(-err));
+                            }
+                            return assigned.ok_or_else(|| {
+                                io::Error::other("RTM_NEWTFILTER ACK without echo reply")
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                off += align(hlen);
+            }
+        }
+    }
+
+    /// Delete one `cls_bpf` filter previously installed via [`Self::tc_attach_bpf`].
+    pub(crate) fn tc_detach_bpf(
+        &mut self,
+        ifindex: u32,
+        egress: bool,
+        priority: u16,
+        handle: u32,
+    ) -> io::Result<()> {
+        let parent = if egress {
+            TC_H_MIN_EGRESS
+        } else {
+            TC_H_MIN_INGRESS
+        };
+        let header = TcMsg {
+            tcm_family: 0,
+            tcm_pad1: 0,
+            tcm_pad2: 0,
+            tcm_ifindex: ifindex as i32,
+            tcm_handle: handle,
+            tcm_parent: parent,
+            tcm_info: (u32::from(priority) << 16) | u32::from(ETH_P_ALL.to_be()),
+        };
+        match self.request(RTM_DELTFILTER, NLM_F_REQUEST | NLM_F_ACK, pod_bytes(&header), &[]) {
+            Ok(()) => Ok(()),
+            Err(err)
+                if matches!(
+                    err.raw_os_error(),
+                    Some(libc::ENOENT | libc::ENODEV | libc::EINVAL)
+                ) =>
+            {
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Dump `clsact` filters on `(ifindex, egress)` and return `(priority, handle, opt_bpf_prog_id)`.
+    fn tc_dump_bpf_filters(
+        &mut self,
+        ifindex: u32,
+        egress: bool,
+    ) -> io::Result<Vec<(u16, u32, Option<u32>)>> {
+        let parent = if egress {
+            TC_H_MIN_EGRESS
+        } else {
+            TC_H_MIN_INGRESS
+        };
+        let header = TcMsg {
+            tcm_family: 0,
+            tcm_pad1: 0,
+            tcm_pad2: 0,
+            tcm_ifindex: ifindex as i32,
+            tcm_handle: 0,
+            tcm_parent: parent,
+            tcm_info: 0,
+        };
+        self.seq += 1;
+        let seq = self.seq;
+        let mut buf = Vec::with_capacity(64);
+        buf.extend_from_slice(&[0u8; 4]);
+        buf.extend_from_slice(&RTM_GETTFILTER.to_ne_bytes());
+        buf.extend_from_slice(&(NLM_F_REQUEST | NLM_F_DUMP).to_ne_bytes());
+        buf.extend_from_slice(&seq.to_ne_bytes());
+        buf.extend_from_slice(&0u32.to_ne_bytes());
+        buf.extend_from_slice(pod_bytes(&header));
+        let len = buf.len() as u32;
+        buf[0..4].copy_from_slice(&len.to_ne_bytes());
+        self.send_datagram(&buf)?;
+
+        let mut resp = vec![0u8; 8192];
+        let mut filters = Vec::new();
+        loop {
+            let n = self.recv_one(&mut resp)?;
+            let mut off = 0usize;
+            while off + 16 <= n {
+                let hlen = u32::from_ne_bytes(resp[off..off + 4].try_into().unwrap()) as usize;
+                let htype = u16::from_ne_bytes(resp[off + 4..off + 6].try_into().unwrap());
+                let hseq = u32::from_ne_bytes(resp[off + 8..off + 12].try_into().unwrap());
+                if hlen < 16 || off + hlen > n {
+                    return Err(invalid_data("malformed netlink message header"));
+                }
+                if hseq != seq {
+                    off += align(hlen);
+                    continue;
+                }
+                match htype {
+                    NLMSG_DONE => return Ok(filters),
+                    NLMSG_ERROR => {
+                        if hlen < 20 {
+                            return Err(invalid_data("short NLMSG_ERROR"));
+                        }
+                        let err =
+                            i32::from_ne_bytes(resp[off + 16..off + 20].try_into().unwrap());
+                        if err == 0 {
+                            return Ok(filters);
+                        }
+                        if err == -libc::ENOENT || err == -libc::EINVAL {
+                            return Ok(filters);
+                        }
+                        return Err(io::Error::from_raw_os_error(-err));
+                    }
+                    RTM_NEWTFILTER if hlen >= 16 + std::mem::size_of::<TcMsg>() => {
+                        let body = &resp[off + 16..off + hlen];
+                        let tcm_handle = u32::from_ne_bytes(body[8..12].try_into().unwrap());
+                        let tcm_info = u32::from_ne_bytes(body[16..20].try_into().unwrap());
+                        let prio = (tcm_info >> 16) as u16;
+                        let mut prog_id = None;
+                        let attrs_bytes = &body[std::mem::size_of::<TcMsg>()..];
+                        let _ = for_each_attr(attrs_bytes, |rta_type, payload| {
+                            if rta_type == TCA_OPTIONS {
+                                let _ = for_each_attr(payload, |opt_ty, opt_val| {
+                                    if opt_ty == TCA_BPF_ID && opt_val.len() == 4 {
+                                        prog_id =
+                                            Some(u32::from_ne_bytes(opt_val.try_into().unwrap()));
+                                    }
+                                    Ok(())
+                                });
+                            }
+                            Ok(())
+                        });
+                        filters.push((prio, tcm_handle, prog_id));
+                    }
+                    _ => {}
+                }
+                off += align(hlen);
+            }
+        }
+    }
+
+    pub(crate) fn tc_has_bpf_filter(
+        &mut self,
+        ifindex: u32,
+        egress: bool,
+        priority: u16,
+        handle: u32,
+    ) -> io::Result<bool> {
+        Ok(self
+            .tc_dump_bpf_filters(ifindex, egress)?
+            .into_iter()
+            .any(|(p, h, _)| p == priority && h == handle))
+    }
+
+    pub(crate) fn tc_has_bpf_prog_id(
+        &mut self,
+        ifindex: u32,
+        egress: bool,
+        expected_prog_id: u32,
+    ) -> io::Result<bool> {
+        Ok(self
+            .tc_dump_bpf_filters(ifindex, egress)?
+            .into_iter()
+            .any(|(_, _, id)| id == Some(expected_prog_id)))
     }
 }
 

@@ -20,14 +20,14 @@ use anyhow::Context as _;
 use aya::Ebpf;
 use aya::programs::{ProgramError, SchedClassifier};
 use aya_obj::generated::{
-    BPF_F_AFTER, BPF_F_REPLACE, bpf_attach_type, bpf_attr, bpf_cmd, bpf_link_info,
+    BPF_F_AFTER, BPF_F_REPLACE, bpf_attach_type, bpf_attr, bpf_cmd, bpf_link_info, bpf_prog_info,
 };
 
 use super::routing::Target;
 use super::syscall::bpf_syscall;
 use crate::ebpf::interface::{
-    ApplyReport, Binding, BindingCommit, BindingSnapshot, Direction, InterfacePlan, TcProgram,
-    Topology,
+    ApplyReport, Binding, BindingCommit, BindingHandle, BindingSnapshot, Direction, InterfacePlan,
+    NetlinkTcGuard, TcProgram, Topology,
 };
 use crate::netlink::LinkSnapshot;
 
@@ -69,7 +69,7 @@ impl PreparedTcProgram {
 #[derive(Default)]
 pub(crate) struct InterfaceBindings {
     programs: Vec<PreparedTcProgram>,
-    owned: Vec<(Binding, u32, OwnedFd)>,
+    owned: Vec<(Binding, u32, BindingHandle)>,
 }
 
 impl InterfaceBindings {
@@ -97,7 +97,7 @@ impl InterfaceBindings {
             .filter_map(move |program| program.routing.as_ref().map(|targets| &targets[slot]))
     }
 
-    pub(super) fn owned(&self) -> &[(Binding, u32, OwnedFd)] {
+    pub(super) fn owned(&self) -> &[(Binding, u32, BindingHandle)] {
         &self.owned
     }
 
@@ -115,22 +115,23 @@ impl InterfaceBindings {
     }
 
     pub(super) fn snapshot(&self) -> anyhow::Result<BindingSnapshot> {
-        let dup = |fd: &OwnedFd| fd.try_clone().context("duplicate TCX fd");
+        let dup_fd = |fd: &OwnedFd| fd.try_clone().context("duplicate TC program fd");
+        let dup_handle = |h: &BindingHandle| h.try_clone().context("duplicate TC link handle");
         Ok(BindingSnapshot {
             programs: self
                 .programs
                 .iter()
-                .map(|prepared| Ok((prepared.program, dup(&prepared.fd)?)))
+                .map(|prepared| Ok((prepared.program, dup_fd(&prepared.fd)?)))
                 .collect::<anyhow::Result<_>>()?,
             owned: self
                 .owned
                 .iter()
-                .map(|(binding, id, fd)| Ok((binding.clone(), *id, dup(fd)?)))
+                .map(|(binding, id, handle)| Ok((binding.clone(), *id, dup_handle(handle)?)))
                 .collect::<anyhow::Result<_>>()?,
         })
     }
 
-    pub(super) fn commit(&mut self, commit: BindingCommit) -> Vec<OwnedFd> {
+    pub(super) fn commit(&mut self, commit: BindingCommit) -> Vec<BindingHandle> {
         commit.apply_to(&mut self.owned)
     }
 
@@ -224,14 +225,14 @@ pub(crate) fn apply(
             interface: binding.interface.clone(),
         })
         .collect();
-    let links: HashMap<Key, OwnedFd> = owned
+    let links: HashMap<Key, BindingHandle> = owned
         .into_iter()
-        .map(|(binding, _, fd)| (binding.key(), fd))
+        .map(|(binding, _, handle)| (binding.key(), handle))
         .collect();
 
     let mut report = ApplyReport::default();
     // Created or updated this round; confirmed against a fresh dump below.
-    let mut created: Vec<(Binding, u32, OwnedFd)> = Vec::new();
+    let mut created: Vec<(Binding, u32, BindingHandle)> = Vec::new();
     let mut updated: Vec<(&Binding, u32, TcProgram)> = Vec::new();
 
     for step in diff(&held, &plan.bindings, verify) {
@@ -246,7 +247,11 @@ pub(crate) fn apply(
                 create_into(&programs, binding, &mut created, &mut report);
             }
             Step::Check { binding, link_id } => {
-                match chain_has(binding, link_id) {
+                let handle = links.get(&binding.key());
+                match handle
+                    .map(|h| chain_has(binding, link_id, h))
+                    .unwrap_or(Ok(false))
+                {
                     Ok(true) => {}
                     // The device went away or moved: the old link is dead.
                     Ok(false) => replace_dead(&programs, binding, &mut created, &mut report),
@@ -254,25 +259,31 @@ pub(crate) fn apply(
                     Err(error) => report.failed.push((binding.clone(), error)),
                 }
             }
-            Step::Reprogram { to, from, link_id } => match chain_has(to, link_id) {
-                Ok(true) => match update(&programs, &links, to, from) {
-                    Ok(()) => updated.push((to, link_id, from)),
-                    // The old owner and program stay as they were.
+            Step::Reprogram { to, from, link_id } => {
+                let handle = links.get(&to.key());
+                match handle
+                    .map(|h| chain_has(to, link_id, h))
+                    .unwrap_or(Ok(false))
+                {
+                    Ok(true) => match update(&programs, &links, to, from) {
+                        Ok(()) => updated.push((to, link_id, from)),
+                        // The old owner and program stay as they were.
+                        Err(error) => report.failed.push((to.clone(), error)),
+                    },
+                    Ok(false) => replace_dead(&programs, to, &mut created, &mut report),
                     Err(error) => report.failed.push((to.clone(), error)),
-                },
-                Ok(false) => replace_dead(&programs, to, &mut created, &mut report),
-                Err(error) => report.failed.push((to.clone(), error)),
-            },
+                }
+            }
         }
     }
 
     if !created.is_empty() || !updated.is_empty() {
         let fresh = crate::ebpf::interface::dump_links();
-        for (binding, link_id, fd) in created {
-            match confirm(&binding, link_id, &fresh, topology) {
-                Ok(true) => report.commit.add.push((binding, link_id, fd)),
+        for (binding, link_id, handle) in created {
+            match confirm(&binding, link_id, &handle, &fresh, topology) {
+                Ok(true) => report.commit.add.push((binding, link_id, handle)),
                 confirmation => {
-                    // Drop the new FD and forget any dead owner it would have
+                    // Drop the new handle and forget any dead owner it would have
                     // replaced. Other healthy keys are untouched.
                     if links.contains_key(&binding.key()) {
                         report.commit.remove.push(binding.key());
@@ -286,7 +297,11 @@ pub(crate) fn apply(
             }
         }
         for (binding, link_id, from) in updated {
-            match confirm(binding, link_id, &fresh, topology) {
+            let confirmation = links
+                .get(&binding.key())
+                .map(|h| confirm(binding, link_id, h, &fresh, topology))
+                .unwrap_or(Ok(false));
+            match confirmation {
                 Ok(true) => report.commit.reprogram.push((
                     binding.ifindex,
                     binding.direction,
@@ -349,12 +364,12 @@ fn program_fd(programs: &[(TcProgram, OwnedFd)], program: TcProgram) -> anyhow::
 fn create_into(
     programs: &[(TcProgram, OwnedFd)],
     binding: &Binding,
-    created: &mut Vec<(Binding, u32, OwnedFd)>,
+    created: &mut Vec<(Binding, u32, BindingHandle)>,
     report: &mut ApplyReport,
 ) -> bool {
     match create(programs, binding) {
-        Ok((link_id, fd)) => {
-            created.push((binding.clone(), link_id, fd));
+        Ok((link_id, handle)) => {
+            created.push((binding.clone(), link_id, handle));
             true
         }
         // The device vanished between the dump and the attach: not a failure
@@ -383,7 +398,7 @@ fn device_gone(error: &anyhow::Error) -> bool {
 fn replace_dead(
     programs: &[(TcProgram, OwnedFd)],
     binding: &Binding,
-    created: &mut Vec<(Binding, u32, OwnedFd)>,
+    created: &mut Vec<(Binding, u32, BindingHandle)>,
     report: &mut ApplyReport,
 ) {
     if !create_into(programs, binding, created, report) {
@@ -391,24 +406,91 @@ fn replace_dead(
     }
 }
 
-fn create(programs: &[(TcProgram, OwnedFd)], binding: &Binding) -> anyhow::Result<(u32, OwnedFd)> {
+fn tcx_unsupported(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(libc::EINVAL | libc::EOPNOTSUPP | libc::ENOSYS)
+    )
+}
+
+fn prog_id_from_fd(prog_fd: RawFd) -> io::Result<u32> {
+    let mut info: bpf_prog_info = unsafe { core::mem::zeroed() };
+    let mut attr: bpf_attr = unsafe { core::mem::zeroed() };
+    attr.info.bpf_fd = prog_fd as u32;
+    attr.info.info_len = size_of::<bpf_prog_info>() as u32;
+    attr.info.info = (&mut info as *mut bpf_prog_info) as u64;
+    unsafe { bpf_syscall(bpf_cmd::BPF_OBJ_GET_INFO_BY_FD as c_long, &mut attr) }.map_err(errno)?;
+    Ok(info.id)
+}
+
+fn netlink_link_id(priority: u16, handle: u32) -> u32 {
+    let id = (u32::from(priority) << 16) | (handle & 0xffff);
+    if id == 0 { 1 } else { id }
+}
+
+fn create(
+    programs: &[(TcProgram, OwnedFd)],
+    binding: &Binding,
+) -> anyhow::Result<(u32, BindingHandle)> {
     let program = program_fd(programs, binding.program)?;
-    let fd = link_create(program, binding.ifindex.get(), binding.direction).with_context(|| {
-        format!(
+    match link_create(program, binding.ifindex.get(), binding.direction) {
+        Ok(fd) => {
+            let info = link_info(fd.as_raw_fd()).context("read the new TCX link")?;
+            Ok((info.id, BindingHandle::Tcx(fd)))
+        }
+        Err(err) if tcx_unsupported(&err) => {
+            tracing::debug!(
+                prog = binding.program.name(),
+                iface = binding.interface,
+                ifindex = binding.ifindex.get(),
+                direction = ?binding.direction,
+                error = %err,
+                "TCX unsupported; falling back to Netlink clsact BPF filter"
+            );
+            let prog_id = prog_id_from_fd(program.as_raw_fd()).unwrap_or(0);
+            let mut nl = crate::netlink::NlSock::new().context("open netlink for clsact attach")?;
+            let (priority, handle) = nl
+                .tc_attach_bpf(
+                    binding.ifindex.get(),
+                    binding.direction == Direction::Egress,
+                    program.as_raw_fd(),
+                    binding.program.name(),
+                    0,
+                    0,
+                    true,
+                )
+                .with_context(|| {
+                    format!(
+                        "netlink clsact attach {} to {} (ifindex {}, {:?})",
+                        binding.program.name(),
+                        binding.interface,
+                        binding.ifindex,
+                        binding.direction
+                    )
+                })?;
+            let link_id = netlink_link_id(priority, handle);
+            let guard = std::sync::Arc::new(NetlinkTcGuard {
+                ifindex: binding.ifindex.get(),
+                direction: binding.direction,
+                priority,
+                handle,
+                program_id: std::sync::atomic::AtomicU32::new(prog_id),
+            });
+            Ok((link_id, BindingHandle::Netlink(guard)))
+        }
+        Err(err) => Err(anyhow::Error::new(err).context(format!(
             "attach {} to {} (ifindex {}, {:?})",
             binding.program.name(),
             binding.interface,
             binding.ifindex,
             binding.direction
-        )
-    })?;
-    let info = link_info(fd.as_raw_fd()).context("read the new TCX link")?;
-    Ok((info.id, fd))
+        ))),
+    }
 }
 
 fn update(
     programs: &[(TcProgram, OwnedFd)],
-    links: &HashMap<Key, OwnedFd>,
+    links: &HashMap<Key, BindingHandle>,
     to: &Binding,
     from: TcProgram,
 ) -> anyhow::Result<()> {
@@ -417,27 +499,77 @@ fn update(
     let link = links
         .get(&to.key())
         .ok_or_else(|| anyhow::anyhow!("owned link is missing from the snapshot"))?;
-    link_update(link.as_raw_fd(), new.as_raw_fd(), old.as_raw_fd()).with_context(|| {
-        format!(
-            "replace {} with {} on {} (ifindex {}, {:?})",
-            from.name(),
-            to.program.name(),
-            to.interface,
-            to.ifindex,
-            to.direction
-        )
-    })
+    match link {
+        BindingHandle::Tcx(fd) => {
+            link_update(fd.as_raw_fd(), new.as_raw_fd(), old.as_raw_fd()).with_context(|| {
+                format!(
+                    "replace {} with {} on {} (ifindex {}, {:?})",
+                    from.name(),
+                    to.program.name(),
+                    to.interface,
+                    to.ifindex,
+                    to.direction
+                )
+            })
+        }
+        BindingHandle::Netlink(guard) => {
+            let new_prog_id = prog_id_from_fd(new.as_raw_fd()).unwrap_or(0);
+            let mut nl = crate::netlink::NlSock::new().context("open netlink for clsact replace")?;
+            nl.tc_attach_bpf(
+                guard.ifindex,
+                guard.direction == Direction::Egress,
+                new.as_raw_fd(),
+                to.program.name(),
+                guard.priority,
+                guard.handle,
+                false,
+            )
+            .with_context(|| {
+                format!(
+                    "netlink clsact replace {} with {} on {} (ifindex {}, {:?})",
+                    from.name(),
+                    to.program.name(),
+                    to.interface,
+                    to.ifindex,
+                    to.direction
+                )
+            })?;
+            guard
+                .program_id
+                .store(new_prog_id, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
 }
 
 /// Is `link_id` on the chain of the calling thread's network namespace?
-fn chain_has(binding: &Binding, link_id: u32) -> anyhow::Result<bool> {
-    let chain = query_chain(binding.ifindex.get(), binding.direction).with_context(|| {
-        format!(
-            "verify {} (ifindex {}, {:?}): query TCX chain",
-            binding.interface, binding.ifindex, binding.direction
-        )
-    })?;
-    Ok(chain.contains_link(link_id))
+fn chain_has(binding: &Binding, link_id: u32, handle: &BindingHandle) -> anyhow::Result<bool> {
+    match handle {
+        BindingHandle::Tcx(_) => {
+            let chain = query_chain(binding.ifindex.get(), binding.direction).with_context(|| {
+                format!(
+                    "verify {} (ifindex {}, {:?}): query TCX chain",
+                    binding.interface, binding.ifindex, binding.direction
+                )
+            })?;
+            Ok(chain.contains_link(link_id))
+        }
+        BindingHandle::Netlink(guard) => {
+            let mut nl = crate::netlink::NlSock::new().context("open netlink for clsact verify")?;
+            nl.tc_has_bpf_filter(
+                guard.ifindex,
+                guard.direction == Direction::Egress,
+                guard.priority,
+                guard.handle,
+            )
+            .with_context(|| {
+                format!(
+                    "verify {} (ifindex {}, {:?}): query Netlink clsact filter",
+                    binding.interface, binding.ifindex, binding.direction
+                )
+            })
+        }
+    }
 }
 
 /// After a create or update: the device must still be the planned one and the
@@ -445,6 +577,7 @@ fn chain_has(binding: &Binding, link_id: u32) -> anyhow::Result<bool> {
 fn confirm(
     binding: &Binding,
     link_id: u32,
+    handle: &BindingHandle,
     fresh: &io::Result<Vec<LinkSnapshot>>,
     planned: &Topology,
 ) -> anyhow::Result<bool> {
@@ -460,7 +593,7 @@ fn confirm(
         (Some(before), Some(after)) if same_device(before, after) => {}
         _ => return Ok(false),
     }
-    chain_has(binding, link_id)
+    chain_has(binding, link_id, handle)
 }
 
 /// Link IDs on one chain, in order; 0 marks a legacy (non-link) attachment.

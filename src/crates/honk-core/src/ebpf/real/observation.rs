@@ -1,5 +1,5 @@
 use super::*;
-use crate::ebpf::interface::{Binding, Direction};
+use crate::ebpf::interface::{Binding, BindingHandle, Direction};
 use crate::ebpf::{
     DatapathAttachment, DatapathCheck, DatapathKind, DatapathObservation, DatapathObservationError,
     DatapathProgram, MAX_DATAPATH_ATTACHMENTS, MAX_DATAPATH_PROGRAMS,
@@ -91,8 +91,8 @@ impl RealEbpfBackend {
         let bound = owned
             .iter()
             .take(MAX_DATAPATH_ATTACHMENTS)
-            .map(|(binding, link_id, fd)| {
-                observe_binding(binding, *link_id, fd.as_raw_fd(), &result.loaded_programs)
+            .map(|(binding, link_id, handle)| {
+                observe_binding(binding, *link_id, handle, &result.loaded_programs)
             })
             .chain(dae0)
             .collect::<Vec<_>>();
@@ -230,33 +230,65 @@ fn verify_target_prog(
 fn observe_binding(
     binding: &Binding,
     link_id: u32,
-    link: RawFd,
+    handle: &BindingHandle,
     programs: &[DatapathProgram],
 ) -> anyhow::Result<DatapathAttachment> {
-    let info = bindings::link_info(link)?;
-    anyhow::ensure!(
-        info.id == link_id
-            && info.ifindex == binding.ifindex.get()
-            && info.attach_type == bindings::tcx_attach_type(binding.direction),
-        "interface identity changed during observation"
-    );
-    let program = programs
-        .iter()
-        .find(|program| program.id == info.program_id)
-        .ok_or_else(|| anyhow::anyhow!("hook program is not owned"))?;
-    let verified = bindings::query_chain(binding.ifindex.get(), binding.direction)
-        .map_err(|error| anyhow::anyhow!("query TCX chain: {error}"))?
-        .contains_link(link_id);
-    Ok(DatapathAttachment {
-        program: program.name.clone(),
-        interface: binding.interface.clone(),
-        egress: binding.direction == Direction::Egress,
-        state: if verified {
-            DatapathCheck::Verified
-        } else {
-            DatapathCheck::Absent
-        },
-    })
+    match handle {
+        BindingHandle::Tcx(link) => {
+            let info = bindings::link_info(link.as_raw_fd())?;
+            anyhow::ensure!(
+                info.id == link_id
+                    && info.ifindex == binding.ifindex.get()
+                    && info.attach_type == bindings::tcx_attach_type(binding.direction),
+                "interface identity changed during observation"
+            );
+            let program = programs
+                .iter()
+                .find(|program| program.id == info.program_id)
+                .ok_or_else(|| anyhow::anyhow!("hook program is not owned"))?;
+            let verified = bindings::query_chain(binding.ifindex.get(), binding.direction)
+                .map_err(|error| anyhow::anyhow!("query TCX chain: {error}"))?
+                .contains_link(link_id);
+            Ok(DatapathAttachment {
+                program: program.name.clone(),
+                interface: binding.interface.clone(),
+                egress: binding.direction == Direction::Egress,
+                state: if verified {
+                    DatapathCheck::Verified
+                } else {
+                    DatapathCheck::Absent
+                },
+            })
+        }
+        BindingHandle::Netlink(guard) => {
+            anyhow::ensure!(
+                guard.ifindex == binding.ifindex.get() && guard.direction == binding.direction,
+                "interface identity changed during observation"
+            );
+            let prog_id = guard.program_id.load(std::sync::atomic::Ordering::Relaxed);
+            let program = programs
+                .iter()
+                .find(|program| program.id == prog_id)
+                .ok_or_else(|| anyhow::anyhow!("hook program is not owned"))?;
+            let mut nl = crate::netlink::NlSock::new()?;
+            let verified = nl.tc_has_bpf_filter(
+                guard.ifindex,
+                guard.direction == Direction::Egress,
+                guard.priority,
+                guard.handle,
+            )?;
+            Ok(DatapathAttachment {
+                program: program.name.clone(),
+                interface: binding.interface.clone(),
+                egress: binding.direction == Direction::Egress,
+                state: if verified {
+                    DatapathCheck::Verified
+                } else {
+                    DatapathCheck::Absent
+                },
+            })
+        }
+    }
 }
 
 /// The dae0 ingress link is an Aya link: its IDs come from Aya, the chain from
@@ -274,15 +306,38 @@ fn observe_named_tc(
     programs: &[DatapathProgram],
 ) -> anyhow::Result<DatapathAttachment> {
     let ifindex = nix::net::if_::if_nametoindex(ifname)?;
-    let fd: &FdLink = link.try_into()?;
-    let info = fd.info()?;
+    if let Ok(fd) = <&FdLink>::try_from(link) {
+        let info = fd.info()?;
+        let program = programs
+            .iter()
+            .find(|program| program.id == info.program_id())
+            .ok_or_else(|| anyhow::anyhow!("hook program is not owned"))?;
+        let verified = bindings::query_chain(ifindex, Direction::Ingress)
+            .map_err(|error| anyhow::anyhow!("query TCX chain: {error}"))?
+            .contains_link(info.id());
+        return Ok(DatapathAttachment {
+            program: program.name.clone(),
+            interface: ifname.to_owned(),
+            egress: false,
+            state: if verified {
+                DatapathCheck::Verified
+            } else {
+                DatapathCheck::Absent
+            },
+        });
+    }
+    // Fallback for Netlink clsact attachments (Linux < 6.6 where aya yields NlLink).
+    let expected_name = if ifname == "dae0peer" {
+        "dae0peer_ingress"
+    } else {
+        "dae0_ingress"
+    };
     let program = programs
         .iter()
-        .find(|program| program.id == info.program_id())
-        .ok_or_else(|| anyhow::anyhow!("hook program is not owned"))?;
-    let verified = bindings::query_chain(ifindex, Direction::Ingress)
-        .map_err(|error| anyhow::anyhow!("query TCX chain: {error}"))?
-        .contains_link(info.id());
+        .find(|program| program.name == expected_name)
+        .ok_or_else(|| anyhow::anyhow!("hook program {expected_name} is not owned"))?;
+    let mut nl = crate::netlink::NlSock::new()?;
+    let verified = nl.tc_has_bpf_prog_id(ifindex, false, program.id)?;
     Ok(DatapathAttachment {
         program: program.name.clone(),
         interface: ifname.to_owned(),

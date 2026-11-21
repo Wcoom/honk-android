@@ -33,7 +33,10 @@ fn kernel_version() -> Option<(u32, u32, u32)> {
         let minor = parts[1].parse::<u32>().ok()?;
         let patch = parts
             .get(2)
-            .and_then(|s| s.parse::<u32>().ok())
+            .and_then(|s| {
+                let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+                digits.parse::<u32>().ok()
+            })
             .unwrap_or(0);
         Some((major, minor, patch))
     } else {
@@ -551,7 +554,7 @@ impl EbpfBackend for RealEbpfBackend {
     fn commit_interface_bindings(
         &mut self,
         commit: super::interface::BindingCommit,
-    ) -> Vec<std::os::fd::OwnedFd> {
+    ) -> Vec<super::interface::BindingHandle> {
         self.bindings.commit(commit)
     }
 

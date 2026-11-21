@@ -36,16 +36,15 @@ impl RealEbpfBackend {
             kernel_version().ok_or_else(|| anyhow::anyhow!("cannot determine kernel version"))?;
         // [honk-android] Upstream hard-rejects kernels older than 6.12 because
         // the synchronous map-in-map publication it relies on was only audited
-        // there. Android GKI 6.6 kernels are NOT upstream 6.6: the vendor tree
-        // carries map-in-map (maybe_wait_bpf_programs -> synchronize_rcu_expedited,
-        // backported before 6.6.0), BPF_MAP_FREEZE and BPF_LINK_CREATE for
-        // BPF_PROG_TYPE_EXT. The floor is therefore relaxed here and the real
-        // capability checks below (BTF, freplace, TCX, cgroup attach) decide.
-        // Override with HONK_MIN_KERNEL=1 to restore the upstream gate.
+        // there. Android GKI 6.1+ kernels carry map-in-map RCU grace periods,
+        // BPF_LINK_CREATE for BPF_PROG_TYPE_EXT (freplace), cgroup BPF, and
+        // clsact/cls_bpf (TCX on 6.6+, automatic Netlink clsact fallback on 6.1+).
+        // The floor is therefore relaxed to 6.1 here and the real capability
+        // checks below decide. Override with HONK_MIN_KERNEL=1 to restore 6.12+.
         let min_version = if std::env::var_os("HONK_MIN_KERNEL").is_some() {
             (6, 12, 0)
         } else {
-            (6, 6, 0)
+            (6, 1, 0)
         };
         anyhow::ensure!(
             version >= min_version,
@@ -428,6 +427,16 @@ impl RealEbpfBackend {
         }
         let name = std::ffi::CString::new(iface)
             .map_err(|e| anyhow::anyhow!("interface name '{}': {}", iface, e))?;
+        // [honk-android] On kernels older than Linux 6.6 (e.g. Android GKI 6.1),
+        // TCX is unavailable and aya's SchedClassifier::attach automatically falls
+        // back to Netlink cls_bpf, which requires a `clsact` qdisc on the device.
+        if kernel_version().is_none_or(|v| v < (6, 6, 0))
+            && let Ok(ifindex) = nix::net::if_::if_nametoindex(iface)
+            && let Err(err) =
+                crate::netlink::NlSock::new().and_then(|mut nl| nl.tc_ensure_clsact(ifindex))
+        {
+            warn!("tc_ensure_clsact('{}', ifindex={}) failed: {}", iface, ifindex, err);
+        }
         let id = p
             .attach(name.as_c_str(), dir)
             .map_err(|e| anyhow::anyhow!("attach '{}': {} (raw={:?})", prog, e, e))?;

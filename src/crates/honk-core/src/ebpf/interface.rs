@@ -217,17 +217,68 @@ pub(crate) struct InterfacePlan {
     pub bound: Vec<(String, Vec<NonZeroU32>)>,
 }
 
+/// Refcounted guard for a legacy Netlink `clsact` `cls_bpf` filter attachment
+/// (used on kernels without Linux 6.6+ TCX, such as Android GKI 6.1).
+/// Dropping the last clone removes the exact filter via `RTM_DELTFILTER`.
+#[derive(Debug)]
+pub struct NetlinkTcGuard {
+    pub(crate) ifindex: u32,
+    pub(crate) direction: Direction,
+    pub(crate) priority: u16,
+    pub(crate) handle: u32,
+    pub(crate) program_id: std::sync::atomic::AtomicU32,
+}
+
+impl Drop for NetlinkTcGuard {
+    fn drop(&mut self) {
+        if let Ok(mut nl) = crate::netlink::NlSock::new() {
+            let _ = nl.tc_detach_bpf(
+                self.ifindex,
+                self.direction == Direction::Egress,
+                self.priority,
+                self.handle,
+            );
+        }
+    }
+}
+
+/// Owned TC attachment handle: native TCX link FD on Linux 6.6+, or
+/// refcounted Netlink `clsact` BPF filter guard on Linux < 6.6.
+#[derive(Debug)]
+pub enum BindingHandle {
+    Tcx(OwnedFd),
+    Netlink(std::sync::Arc<NetlinkTcGuard>),
+}
+
+impl BindingHandle {
+    pub(crate) fn try_clone(&self) -> io::Result<Self> {
+        match self {
+            Self::Tcx(fd) => fd.try_clone().map(Self::Tcx),
+            Self::Netlink(guard) => Ok(Self::Netlink(std::sync::Arc::clone(guard))),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn as_tcx_raw_fd(&self) -> std::os::fd::RawFd {
+        use std::os::fd::AsRawFd as _;
+        match self {
+            Self::Tcx(fd) => fd.as_raw_fd(),
+            Self::Netlink(_) => panic!("expected TCX BindingHandle in test"),
+        }
+    }
+}
+
 /// What the owner holds; moved into the apply step.
 #[derive(Debug, Default)]
 pub struct BindingSnapshot {
     pub(crate) programs: Vec<(TcProgram, OwnedFd)>,
-    /// `(binding, link id, dup of the link fd)`.
-    pub(crate) owned: Vec<(Binding, u32, OwnedFd)>,
+    /// `(binding, link id, cloned link handle)`.
+    pub(crate) owned: Vec<(Binding, u32, BindingHandle)>,
 }
 
 #[derive(Debug, Default)]
 pub struct BindingCommit {
-    pub(crate) add: Vec<(Binding, u32, OwnedFd)>,
+    pub(crate) add: Vec<(Binding, u32, BindingHandle)>,
     pub(crate) remove: Vec<(NonZeroU32, Direction)>,
     pub(crate) reprogram: Vec<(NonZeroU32, Direction, TcProgram)>,
     /// Retained keys whose link now has another name (same ifindex).
@@ -264,7 +315,10 @@ impl BindingCommit {
     /// reprograms and renames, then adds. An add for an existing
     /// `(ifindex, direction)` replaces it; a removal, reprogram or rename of a
     /// missing key is ignored. Returns the replaced or removed FDs.
-    pub(crate) fn apply_to(self, owned: &mut Vec<(Binding, u32, OwnedFd)>) -> Vec<OwnedFd> {
+    pub(crate) fn apply_to(
+        self,
+        owned: &mut Vec<(Binding, u32, BindingHandle)>,
+    ) -> Vec<BindingHandle> {
         let mut closed = Vec::new();
         for gone in self.remove {
             if let Some(at) = owned.iter().position(|(b, ..)| b.key() == gone) {

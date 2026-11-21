@@ -1,6 +1,6 @@
 use super::*;
 use crate::degradations::{Component, Degradations};
-use crate::ebpf::interface::{Binding, Direction, TcProgram};
+use crate::ebpf::interface::{Binding, BindingHandle, Direction, TcProgram};
 use crate::ebpf::real::interface_state::SysctlKey;
 use crate::ebpf::test_support::link;
 use crate::netlink::LinkSnapshot;
@@ -49,8 +49,8 @@ fn topology() -> Topology {
     }
 }
 
-fn fake_fd() -> OwnedFd {
-    std::fs::File::open("/dev/null").unwrap().into()
+fn fake_fd() -> BindingHandle {
+    BindingHandle::Tcx(std::fs::File::open("/dev/null").unwrap().into())
 }
 
 /// A kernel-free `apply` with the same contract: diff by `(ifindex,

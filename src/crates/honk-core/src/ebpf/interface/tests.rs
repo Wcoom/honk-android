@@ -729,8 +729,6 @@ fn local_ip_interface_never_names_a_refused_root() {
 
 #[test]
 fn commit_replaces_existing_add_and_ignores_missing_removals() {
-    use std::os::fd::AsRawFd;
-
     use Direction::{Egress, Ingress};
     use TcProgram::{LanEgressL2, LanIngressL2, WanEgressL2, WanIngressL3};
 
@@ -740,12 +738,14 @@ fn commit_replaces_existing_add_and_ignores_missing_removals() {
         program,
         interface: format!("v{index}"),
     };
-    let fd = || -> OwnedFd { std::fs::File::open("/dev/null").unwrap().into() };
+    let fd = || -> BindingHandle {
+        BindingHandle::Tcx(std::fs::File::open("/dev/null").unwrap().into())
+    };
 
     let old = binding(2, Ingress, LanIngressL2);
     let other = binding(3, Egress, LanEgressL2);
     let mut owned = vec![(old.clone(), 10, fd()), (other.clone(), 11, fd())];
-    let first_fd = owned[0].2.as_raw_fd();
+    let first_fd = owned[0].2.as_tcx_raw_fd();
     let updated = binding(2, Ingress, WanIngressL3);
     let commit = BindingCommit {
         add: vec![(updated.clone(), 12, fd())],
@@ -762,7 +762,7 @@ fn commit_replaces_existing_add_and_ignores_missing_removals() {
     );
     let closed = commit.apply_to(&mut owned);
     assert_eq!(closed.len(), 1);
-    assert_eq!(closed[0].as_raw_fd(), first_fd);
+    assert_eq!(closed[0].as_tcx_raw_fd(), first_fd);
     assert_eq!(owned.len(), 2);
     assert_eq!(owned[0].0, updated);
     assert_eq!(owned[0].1, 12);

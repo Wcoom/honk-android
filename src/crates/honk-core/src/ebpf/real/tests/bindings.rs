@@ -11,7 +11,7 @@ use super::super::bindings as owner;
 use super::*;
 use crate::ebpf::EbpfBackend;
 use crate::ebpf::interface::{
-    Binding, BindingSnapshot, Direction, InterfacePlan, TcProgram, Topology,
+    Binding, BindingHandle, BindingSnapshot, Direction, InterfacePlan, TcProgram, Topology,
     plan as plan_interfaces, read_topology,
 };
 use crate::netlink::NlSock;
@@ -119,7 +119,7 @@ impl Round {
 struct Held {
     binding: Binding,
     id: u32,
-    link: OwnedFd,
+    link: BindingHandle,
 }
 
 struct Lab {
@@ -265,7 +265,7 @@ fn assert_truthful(held: &[Held], programs: &BTreeMap<TcProgram, u32>) {
             program,
             ref interface,
         } = held.binding;
-        let info = owner::link_info(held.link.as_raw_fd()).unwrap();
+        let info = owner::link_info(held.link.as_tcx_raw_fd()).unwrap();
         let what = format!("{interface} ({ifindex}, {direction:?})");
         assert_eq!(info.id, held.id, "{what}: link id");
         assert_eq!(info.ifindex, ifindex.get(), "{what}: link ifindex");
@@ -572,7 +572,7 @@ fn moved_device_recreated_with_same_name_and_index_is_rebound() {
         // The held link FD still claims this ifindex; only the namespace-local
         // chain tells the two devices apart.
         for held in lab.held() {
-            let info = owner::link_info(held.link.as_raw_fd()).unwrap();
+            let info = owner::link_info(held.link.as_tcx_raw_fd()).unwrap();
             assert_eq!(info.ifindex, ifindex, "link info is ambiguous by design");
         }
         assert!(chain(ifindex, Direction::Ingress).is_empty());

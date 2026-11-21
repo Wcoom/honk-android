@@ -435,6 +435,97 @@ fn lpm_fd(map: &RoutingLpm) -> RawFd {
     map.map().fd().as_fd().as_raw_fd()
 }
 
+/// Build a minimal valid BTF blob describing `(u32, RoutingPolicyDescriptor)`
+/// so that `BPF_MAP_CREATE` runs `map_check_btf()` on the inner descriptor array.
+///
+/// On Linux 6.1 (before `btf_record_equal` unified `timer_off` / `spin_lock_off` /
+/// `kptr_off_tab` in Linux 6.2+), `ROUTING_POLICY_ROOT`'s BTF inner map template
+/// has `timer_off = -ENOENT` (struct with 0 timers), whereas a BTF-less standalone
+/// `Array::create(1, 0)` keeps `timer_off = -EINVAL`. `bpf_map_meta_equal()` compares
+/// `meta0->timer_off == meta1->timer_off` directly and rejects the update with `EINVAL`.
+/// Attaching matching struct BTF makes `timer_off == -ENOENT` on Linux 6.1 and stays
+/// fully compatible with Linux 6.2+/6.6+.
+fn routing_descriptor_btf_bytes() -> Vec<u8> {
+    let mut strings = vec![0u8];
+    let mut add_str = |s: &str| -> u32 {
+        let off = strings.len() as u32;
+        strings.extend_from_slice(s.as_bytes());
+        strings.push(0);
+        off
+    };
+
+    let mut types = Vec::<u32>::new();
+    // Type ID 1: INT u32 (key type; satisfies array_map_check_btf)
+    let u32_name = add_str("u32");
+    types.extend_from_slice(&[u32_name, 1 << 24, 4, 32]);
+    // Type ID 2: INT u64
+    let u64_name = add_str("u64");
+    types.extend_from_slice(&[u64_name, 1 << 24, 8, 64]);
+    // Type ID 3: STRUCT RoutingPolicyDescriptor (size 24, 5 fields)
+    let struct_name = add_str("RoutingPolicyDescriptor");
+    let members: [(&str, u32, usize); 5] = [
+        ("slot", 1, offset_of!(RoutingPolicyDescriptor, slot)),
+        ("features", 1, offset_of!(RoutingPolicyDescriptor, features)),
+        (
+            "generation",
+            2,
+            offset_of!(RoutingPolicyDescriptor, generation),
+        ),
+        (
+            "domain_map_id",
+            1,
+            offset_of!(RoutingPolicyDescriptor, domain_map_id),
+        ),
+        (
+            "trace_policy",
+            1,
+            offset_of!(RoutingPolicyDescriptor, trace_policy),
+        ),
+    ];
+    types.extend_from_slice(&[
+        struct_name,
+        (4 << 24) | members.len() as u32,
+        size_of::<RoutingPolicyDescriptor>() as u32,
+    ]);
+    for (name, type_id, byte_offset) in members {
+        types.extend_from_slice(&[add_str(name), type_id, (byte_offset as u32) * 8]);
+    }
+
+    let type_len = (types.len() * 4) as u32;
+    let str_len = strings.len() as u32;
+    let mut out = Vec::with_capacity(btf::BTF_HEADER_LEN + type_len as usize + str_len as usize);
+    out.extend_from_slice(&[0x9f, 0xeb, 1, 0]);
+    for word in [btf::BTF_HEADER_LEN as u32, 0, type_len, type_len, str_len] {
+        out.extend_from_slice(&word.to_le_bytes());
+    }
+    for word in types {
+        out.extend_from_slice(&word.to_le_bytes());
+    }
+    out.extend_from_slice(&strings);
+    out
+}
+
+fn create_routing_descriptor_with_btf() -> anyhow::Result<RoutingDescriptor> {
+    let btf_fd = load_btf(&routing_descriptor_btf_bytes())
+        .map_err(|e| anyhow::anyhow!("load RoutingPolicyDescriptor BTF: {e:#}"))?;
+    let mut attr: bpf_attr = unsafe { core::mem::zeroed() };
+    attr.__bindgen_anon_1.map_type = aya_obj::generated::bpf_map_type::BPF_MAP_TYPE_ARRAY as u32;
+    attr.__bindgen_anon_1.key_size = size_of::<u32>() as u32;
+    attr.__bindgen_anon_1.value_size = size_of::<RoutingPolicyDescriptor>() as u32;
+    attr.__bindgen_anon_1.max_entries = 1;
+    attr.__bindgen_anon_1.map_flags = 0;
+    attr.__bindgen_anon_1.btf_fd = btf_fd.as_raw_fd() as u32;
+    attr.__bindgen_anon_1.btf_key_type_id = 1;
+    attr.__bindgen_anon_1.btf_value_type_id = 3;
+    attr.__bindgen_anon_1.map_name = b"routing_desc\0\0\0\0".map(|b| b as libc::c_char);
+    let fd = bpf_fd(bpf_cmd::BPF_MAP_CREATE, &mut attr)
+        .map_err(|e| anyhow::anyhow!("BPF_MAP_CREATE(routing_desc with BTF): {e}"))?;
+    drop(btf_fd);
+    let map_data = AyaMapData::from_fd(fd)?;
+    let map = aya::maps::Map::from_map_data(map_data)?;
+    Ok(RoutingDescriptor::try_from(map)?)
+}
+
 pub(super) fn open_routing_generation_sequence(
     pin: &Path,
 ) -> anyhow::Result<AyaArray<AyaMapData, u64>> {
@@ -504,15 +595,38 @@ impl RealEbpfBackend {
         &mut self,
         value: RoutingPolicyDescriptor,
     ) -> anyhow::Result<RoutingDescriptor> {
-        let mut descriptor = RoutingDescriptor::create(1, 0)?;
+        let (mut descriptor, used_btf) = match create_routing_descriptor_with_btf() {
+            Ok(descriptor) => (descriptor, true),
+            Err(err) => {
+                tracing::debug!(
+                    error = %format_args!("{err:#}"),
+                    "BTF-typed routing descriptor creation failed; falling back to untyped array"
+                );
+                (RoutingDescriptor::create(1, 0)?, false)
+            }
+        };
         descriptor.set(0, &value, 0)?;
         let root = self
             .maps_mut()?
             .get_mut(ROUTING_POLICY_ROOT_NAME)
             .ok_or_else(|| anyhow::anyhow!("map '{ROUTING_POLICY_ROOT_NAME}' not found"))?;
         let mut root = AyaArrayOfMaps::<_, RoutingDescriptor>::try_from(root)?;
-        root.set(0, &descriptor, 0)?;
-        Ok(descriptor)
+        match root.set(0, &descriptor, 0) {
+            Ok(()) => Ok(descriptor),
+            Err(first_err) if used_btf => {
+                tracing::debug!(
+                    error = %format_args!("{first_err:#}"),
+                    "BTF-typed routing descriptor publication failed; retrying with untyped array"
+                );
+                let mut fallback = RoutingDescriptor::create(1, 0)?;
+                fallback.set(0, &value, 0)?;
+                root.set(0, &fallback, 0).map_err(|fallback_err| {
+                    anyhow::anyhow!("{first_err}; untyped fallback: {fallback_err}")
+                })?;
+                Ok(fallback)
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub(super) fn fence_routing_generation(&mut self) -> anyhow::Result<()> {
@@ -776,3 +890,50 @@ impl RealEbpfBackend {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[test]
+fn routing_descriptor_btf_is_valid() {
+    let bytes = routing_descriptor_btf_bytes();
+    let parsed_aya = Btf::parse(&bytes, Default::default()).expect("aya Btf::parse must accept");
+    assert_eq!(
+        parsed_aya
+            .id_by_type_name_kind("u32", BtfKind::Int)
+            .expect("u32 int type"),
+        1
+    );
+    assert_eq!(
+        parsed_aya
+            .id_by_type_name_kind("RoutingPolicyDescriptor", BtfKind::Struct)
+            .expect("RoutingPolicyDescriptor struct type"),
+        3
+    );
+    let parsed = btf::Btf::parse(&bytes).expect("internal Btf::parse must accept");
+    let record = parsed
+        .find_type(4, "RoutingPolicyDescriptor")
+        .expect("RoutingPolicyDescriptor struct");
+    assert_eq!(
+        parsed.u32_at(record + 8),
+        Some(size_of::<RoutingPolicyDescriptor>() as u32)
+    );
+    assert_eq!(
+        parsed.sized_member_offset("RoutingPolicyDescriptor", "slot", 4),
+        Some(offset_of!(RoutingPolicyDescriptor, slot) as u32)
+    );
+    assert_eq!(
+        parsed.sized_member_offset("RoutingPolicyDescriptor", "features", 4),
+        Some(offset_of!(RoutingPolicyDescriptor, features) as u32)
+    );
+    assert_eq!(
+        parsed.sized_member_offset("RoutingPolicyDescriptor", "generation", 8),
+        Some(offset_of!(RoutingPolicyDescriptor, generation) as u32)
+    );
+    assert_eq!(
+        parsed.sized_member_offset("RoutingPolicyDescriptor", "domain_map_id", 4),
+        Some(offset_of!(RoutingPolicyDescriptor, domain_map_id) as u32)
+    );
+    assert_eq!(
+        parsed.sized_member_offset("RoutingPolicyDescriptor", "trace_policy", 4),
+        Some(offset_of!(RoutingPolicyDescriptor, trace_policy) as u32)
+    );
+}

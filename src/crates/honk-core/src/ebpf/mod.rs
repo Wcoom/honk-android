@@ -592,7 +592,7 @@ pub trait EbpfBackend: Send + Sync {
     fn commit_interface_bindings(
         &mut self,
         commit: interface::BindingCommit,
-    ) -> Vec<std::os::fd::OwnedFd>;
+    ) -> Vec<interface::BindingHandle>;
 
     /// Atomically publish a complete compiled routing plan into an inactive slot.
     /// Implementations stage every generation-owned fact map and program before
