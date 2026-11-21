@@ -12,7 +12,7 @@ fn kernel_program(lab: &Lab, ifindex: u32, direction: Direction) -> u32 {
         .iter()
         .find(|h| (h.binding.ifindex.get(), h.binding.direction) == (ifindex, direction))
         .expect("owned binding");
-    owner::link_info(held.link.as_raw_fd()).unwrap().program_id
+    owner::link_info(held.link.as_tcx_raw_fd()).unwrap().program_id
 }
 
 #[test]

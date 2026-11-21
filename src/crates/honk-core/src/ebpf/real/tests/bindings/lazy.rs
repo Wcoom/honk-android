@@ -84,6 +84,7 @@ fn start_with_read(
             &names(wan),
             &degradations,
             read_topology,
+            false,
         ))
         .expect("a configured interface never fails startup");
     let mut config = honk_config::Config::default();

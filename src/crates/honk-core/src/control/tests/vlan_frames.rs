@@ -438,6 +438,7 @@ async fn with_datapath(scenario: Scenario, dae0: &daens::Dae0Setup) -> anyhow::R
         &config.global.wan_interface,
         &degradations,
         crate::ebpf::interface::read_topology,
+        false,
     )
     .await?;
     ensure!(

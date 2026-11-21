@@ -9,7 +9,7 @@
 满足以下 3 个条件即可使用：
 
 1. **架构**：ARM64（绝大多数近几年的安卓手机均为 `aarch64`）。
-2. **内核版本**：Android GKI **Linux 6.6 及以上**（可在手机终端或电脑执行 `adb shell uname -r` 查看，例如 `6.6.x-android15-...`）。
+2. **内核版本**：Android GKI **Linux 6.1 及以上**（可在手机终端或电脑执行 `adb shell uname -r` 查看，例如 `6.1.x-android14-...` / `6.6.x-android15-...`）。
 3. **Root 权限**：已安装 KernelSU / Magisk / APatch，且可正常授予 Root 权限。
 
 > 电脑端仅需安装 `adb` 并打开手机「开发者选项 → USB 调试」即可。
@@ -165,7 +165,7 @@ EOF
 常见原因：
 - `geoip.dat` 或 `geosite.dat` 缺失或路径不对（须位于 `$BOX/honk/data/`）。
 - `config.dae` 语法错误（注意：`group { ... }` 中的**策略组名不要加单引号**，如 `Proxy { ... }` 而非 `'Proxy' { ... }`，否则 `routing` 会报 `routing target is not a declared group or builtin`；`node { ... }` 中含空格或特殊字符的节点名才加单引号）。
-- 手机内核低于 Linux 6.6 或未开启 eBPF。
+- 手机内核低于 Linux 6.1 或未开启 eBPF。
 
 ### 2. 在 Doona 面板里修改了节点或规则后，为什么直接改 `config.dae` 没变化？
 启用全功能模式后，`honk` 默认使用 SQLite 配置库（`$BOX/honk/data/honk.db`）以支持在线编辑与修订历史回滚。首次启动时会自动导入 `config.dae`；之后既可直接在 Doona 面板中可视化编辑或点击「导入」重新导入配置文件，也可在停止服务后删除 `honk.db` 让下次启动重新从 `config.dae` 导入。

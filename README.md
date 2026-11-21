@@ -1,6 +1,6 @@
 # Honk for Android (`honk-android`)
 
-将基于 Linux eBPF 的新一代透明代理核心 **[daeuniverse/honk](https://github.com/daeuniverse/honk)** 完整移植至 **Android ARM64（GKI Linux 6.6+）** 平台，并深度集成 **[boxproxy/boxproxy](https://github.com/boxproxy/boxproxy)** 客户端与内嵌 **[Zakkaus/doona](https://github.com/Zakkaus/doona)** 原生面板。
+将基于 Linux eBPF 的新一代透明代理核心 **[daeuniverse/honk](https://github.com/daeuniverse/honk)** 完整移植至 **Android ARM64（GKI Linux 6.1+ / 6.6+）** 平台，并深度集成 **[boxproxy/boxproxy](https://github.com/boxproxy/boxproxy)** 客户端与内嵌 **[Zakkaus/doona](https://github.com/Zakkaus/doona)** 原生面板。
 
 > **免刷机、零环境变量、单二进制开箱即用**：全程仅在 `/data` 用户空间与内核 eBPF 子系统运行，无需刷写任何系统/boot 分区镜像。
 
@@ -10,10 +10,10 @@
 
 | 模块 | 状态与说明 |
 | --- | --- |
-| **Android GKI 6.6 eBPF 数据面** | 全部 8 个 L2/L3 TC 分类器 + 6 个根 cgroup 程序 + `daens` `sk_lookup` + `freplace` 路由扩展通过 GKI 6.6 Verifier（详见 [`ANDROID-DATAPATH.md`](./ANDROID-DATAPATH.md)） |
+| **Android GKI 6.1+ / 6.6+ eBPF 数据面** | 全部 8 个 L2/L3 TC 分类器 + 6 个根 cgroup 程序 + `daens` `sk_lookup` + `freplace` 路由扩展通过 GKI 6.1+ / 6.6+ Verifier；6.6+ 保持原生 TCX，6.1–6.5 自动回退 Netlink `clsact`/`cls_bpf` 并支持 BTF map-in-map 路由描述符（详见 [`ANDROID-DATAPATH.md`](./ANDROID-DATAPATH.md)） |
 | **Android 网络栈自适配** | 启动时自动将根 cgroup legacy BPF 钩子无损升级为 `BPF_F_ALLOW_MULTI`；`DAE_BYPASS_MARK=0x10000000` 避开 Android `netd` 策略路由冲突；`wan_interface: auto` 解析 `/proc/net/fib_trie` 动态跟踪 5G 蜂窝 / Wi-Fi 切换 |
-| **完整 UDP / QUIC 透明代理 & 内核追踪** | 支持完整 UDP / HTTP3 (QUIC) 透明转发、节点评分 QUIC 探测，并新增 ARM64 `kprobe`/`kretprobe` 内核 UDP 接收跟踪回退（解决 GKI 6.6 `fentry` `ENOTSUPP` 问题） |
-| **数据路径实时健康校验** | 通过 `BPF_PROG_QUERY` 实时核查 cgroup、`daens` `sk_lookup` 与 `dae0peer` TCX 链，Doona 面板数据路径完整显示 **`活动 / 已附加 / 健康`** |
+| **完整 UDP / QUIC 透明代理 & 内核追踪** | 支持完整 UDP / HTTP3 (QUIC) 透明转发、节点评分 QUIC 探测，并新增 ARM64 `kprobe`/`kretprobe` 内核 UDP 接收跟踪回退（解决 GKI 6.1+ / 6.6+ `fentry` `ENOTSUPP` 问题） |
+| **数据路径实时健康校验** | 通过 `BPF_PROG_QUERY` 与 Netlink `cls_bpf` 实时核查 cgroup、`daens` `sk_lookup` 与 TC 链，Doona 面板数据路径完整显示 **`活动 / 已附加 / 健康`** |
 | **与官方原版 BoxProxy 完美共存** | 独立包名 **`com.boxproxy.honk`**（桌面名称 **`BoxProxy Honk`**，快捷磁贴 **`Box Honk`**，独立自启脚本 `/data/adb/service.d/boxproxy-honk.sh` 与独立沙盒目录 `/data/user/0/com.boxproxy.honk/files/box`），**无需卸载官方原版 `com.boxproxy.box`** |
 | **双面板无缝协同** | 同时启用本机 `Clash API`（`127.0.0.1:9090`，驱动 BoxProxy 原生「面板」页）与内嵌 **Doona 原生面板**（`http://127.0.0.1:9527/ui/`，BoxProxy 首页点击「WebUI」免密直连，支持配置读写、`--store db` 修订历史、导入、地理数据更新与后台常驻流程记录） |
 | **DNS 双栈容错与规范兼容** | 修复 DNS 响应 QNAME 大小写敏感校验缺陷（RFC 1035/4343）；新增 Bootstrap UDP 1s 自动重传与 `fallback_resolver` 兜底，消除 Android 无 `/etc/resolv.conf` 切网失联 |
@@ -32,8 +32,8 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `honk-android-release-v1.0.2-arm64.tar.gz` | 完整正式版一体包（含二进制、共存版 APK、配置模板、指南、AI Skill、补丁与校验和） |
-| `honk-android-arm64` | 静态链接 `aarch64-unknown-linux-musl` 的 `honk-core`（合并上游 `8919784a`，内置 eBPF 对象与 Doona 原生前端） |
+| `honk-android-release-v1.0.3-arm64.tar.gz` | 完整正式版一体包（含二进制、共存版 APK、配置模板、指南、AI Skill、补丁与校验和） |
+| `honk-android-arm64` | 静态链接 `aarch64-unknown-linux-musl` 的 `honk-core`（支持 GKI 6.1+ / 6.6+，合并上游 `8919784a`，内置 eBPF 对象与 Doona 原生前端） |
 | `boxctl-android-arm64` | 适配 `honk` 核心、`ebpf` 模式与 `com.boxproxy.honk` 共存目录的静态 `boxctl` |
 | `BoxProxy-honk-arm64.apk` | 基于官方新版 BoxProxy (`26.11.20.7fc0984` / `v199`) 适配，独立包名 **`com.boxproxy.honk`**（`BoxProxy Honk`），可与官方原版 BoxProxy 直接共存安装 |
 | `config.example.dae` | 脱敏后的 Android 推荐配置模板 |

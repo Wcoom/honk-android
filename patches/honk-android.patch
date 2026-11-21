@@ -226,6 +226,30 @@ index 801a316..17c304c 100644
          self.alive_set.set_direct_check_addr(direct_target);
          // No new generation-owned work may start on the old snapshot. Its
          // DNS runtime still owns it until old leases and transports retire;
+diff --git a/crates/honk-core/src/control/tests/bond_binding.rs b/crates/honk-core/src/control/tests/bond_binding.rs
+index 3ccea79..08ebba4 100644
+--- a/crates/honk-core/src/control/tests/bond_binding.rs
++++ b/crates/honk-core/src/control/tests/bond_binding.rs
+@@ -372,6 +372,7 @@ fn run_child(case: &str) -> anyhow::Result<()> {
+                 &scenario.wan,
+                 &degradations,
+                 crate::ebpf::interface::read_topology,
++                false,
+             )
+             .await?;
+             backend.attach_dae0_programs()?;
+diff --git a/crates/honk-core/src/control/tests/vlan_frames.rs b/crates/honk-core/src/control/tests/vlan_frames.rs
+index cb49e3a..cc098b8 100644
+--- a/crates/honk-core/src/control/tests/vlan_frames.rs
++++ b/crates/honk-core/src/control/tests/vlan_frames.rs
+@@ -438,6 +438,7 @@ async fn with_datapath(scenario: Scenario, dae0: &daens::Dae0Setup) -> anyhow::R
+         &config.global.wan_interface,
+         &degradations,
+         crate::ebpf::interface::read_topology,
++        false,
+     )
+     .await?;
+     ensure!(
 diff --git a/crates/honk-core/src/daens.rs b/crates/honk-core/src/daens.rs
 index dee58e5..7e3ab64 100644
 --- a/crates/honk-core/src/daens.rs
@@ -321,10 +345,94 @@ index e5321d9..dac7b50 100644
 +    assert_eq!(u16::from_be_bytes([rendered[6], rendered[7]]), 1);
 +}
 diff --git a/crates/honk-core/src/ebpf/interface.rs b/crates/honk-core/src/ebpf/interface.rs
-index 4901b24..2aafe98 100644
+index 4901b24..53a0de4 100644
 --- a/crates/honk-core/src/ebpf/interface.rs
 +++ b/crates/honk-core/src/ebpf/interface.rs
-@@ -319,6 +319,17 @@ pub(crate) fn read_topology(need_default_route: bool) -> anyhow::Result<Topology
+@@ -217,17 +217,68 @@ pub(crate) struct InterfacePlan {
+     pub bound: Vec<(String, Vec<NonZeroU32>)>,
+ }
+ 
++/// Refcounted guard for a legacy Netlink `clsact` `cls_bpf` filter attachment
++/// (used on kernels without Linux 6.6+ TCX, such as Android GKI 6.1).
++/// Dropping the last clone removes the exact filter via `RTM_DELTFILTER`.
++#[derive(Debug)]
++pub struct NetlinkTcGuard {
++    pub(crate) ifindex: u32,
++    pub(crate) direction: Direction,
++    pub(crate) priority: u16,
++    pub(crate) handle: u32,
++    pub(crate) program_id: std::sync::atomic::AtomicU32,
++}
++
++impl Drop for NetlinkTcGuard {
++    fn drop(&mut self) {
++        if let Ok(mut nl) = crate::netlink::NlSock::new() {
++            let _ = nl.tc_detach_bpf(
++                self.ifindex,
++                self.direction == Direction::Egress,
++                self.priority,
++                self.handle,
++            );
++        }
++    }
++}
++
++/// Owned TC attachment handle: native TCX link FD on Linux 6.6+, or
++/// refcounted Netlink `clsact` BPF filter guard on Linux < 6.6.
++#[derive(Debug)]
++pub enum BindingHandle {
++    Tcx(OwnedFd),
++    Netlink(std::sync::Arc<NetlinkTcGuard>),
++}
++
++impl BindingHandle {
++    pub(crate) fn try_clone(&self) -> io::Result<Self> {
++        match self {
++            Self::Tcx(fd) => fd.try_clone().map(Self::Tcx),
++            Self::Netlink(guard) => Ok(Self::Netlink(std::sync::Arc::clone(guard))),
++        }
++    }
++
++    #[cfg(test)]
++    pub(crate) fn as_tcx_raw_fd(&self) -> std::os::fd::RawFd {
++        use std::os::fd::AsRawFd as _;
++        match self {
++            Self::Tcx(fd) => fd.as_raw_fd(),
++            Self::Netlink(_) => panic!("expected TCX BindingHandle in test"),
++        }
++    }
++}
++
+ /// What the owner holds; moved into the apply step.
+ #[derive(Debug, Default)]
+ pub struct BindingSnapshot {
+     pub(crate) programs: Vec<(TcProgram, OwnedFd)>,
+-    /// `(binding, link id, dup of the link fd)`.
+-    pub(crate) owned: Vec<(Binding, u32, OwnedFd)>,
++    /// `(binding, link id, cloned link handle)`.
++    pub(crate) owned: Vec<(Binding, u32, BindingHandle)>,
+ }
+ 
+ #[derive(Debug, Default)]
+ pub struct BindingCommit {
+-    pub(crate) add: Vec<(Binding, u32, OwnedFd)>,
++    pub(crate) add: Vec<(Binding, u32, BindingHandle)>,
+     pub(crate) remove: Vec<(NonZeroU32, Direction)>,
+     pub(crate) reprogram: Vec<(NonZeroU32, Direction, TcProgram)>,
+     /// Retained keys whose link now has another name (same ifindex).
+@@ -264,7 +315,10 @@ impl BindingCommit {
+     /// reprograms and renames, then adds. An add for an existing
+     /// `(ifindex, direction)` replaces it; a removal, reprogram or rename of a
+     /// missing key is ignored. Returns the replaced or removed FDs.
+-    pub(crate) fn apply_to(self, owned: &mut Vec<(Binding, u32, OwnedFd)>) -> Vec<OwnedFd> {
++    pub(crate) fn apply_to(
++        self,
++        owned: &mut Vec<(Binding, u32, BindingHandle)>,
++    ) -> Vec<BindingHandle> {
+         let mut closed = Vec::new();
+         for gone in self.remove {
+             if let Some(at) = owned.iter().position(|(b, ..)| b.key() == gone) {
+@@ -319,6 +373,17 @@ pub(crate) fn read_topology(need_default_route: bool) -> anyhow::Result<Topology
      let links = dump_links().context("dump links")?;
      let default_route = if need_default_route {
          default_route(std::fs::read_to_string("/proc/thread-self/net/route"))?
@@ -342,26 +450,107 @@ index 4901b24..2aafe98 100644
      } else {
          None
      };
+diff --git a/crates/honk-core/src/ebpf/interface/tests.rs b/crates/honk-core/src/ebpf/interface/tests.rs
+index c74a3f0..84fe059 100644
+--- a/crates/honk-core/src/ebpf/interface/tests.rs
++++ b/crates/honk-core/src/ebpf/interface/tests.rs
+@@ -729,8 +729,6 @@ fn local_ip_interface_never_names_a_refused_root() {
+ 
+ #[test]
+ fn commit_replaces_existing_add_and_ignores_missing_removals() {
+-    use std::os::fd::AsRawFd;
+-
+     use Direction::{Egress, Ingress};
+     use TcProgram::{LanEgressL2, LanIngressL2, WanEgressL2, WanIngressL3};
+ 
+@@ -740,12 +738,14 @@ fn commit_replaces_existing_add_and_ignores_missing_removals() {
+         program,
+         interface: format!("v{index}"),
+     };
+-    let fd = || -> OwnedFd { std::fs::File::open("/dev/null").unwrap().into() };
++    let fd = || -> BindingHandle {
++        BindingHandle::Tcx(std::fs::File::open("/dev/null").unwrap().into())
++    };
+ 
+     let old = binding(2, Ingress, LanIngressL2);
+     let other = binding(3, Egress, LanEgressL2);
+     let mut owned = vec![(old.clone(), 10, fd()), (other.clone(), 11, fd())];
+-    let first_fd = owned[0].2.as_raw_fd();
++    let first_fd = owned[0].2.as_tcx_raw_fd();
+     let updated = binding(2, Ingress, WanIngressL3);
+     let commit = BindingCommit {
+         add: vec![(updated.clone(), 12, fd())],
+@@ -762,7 +762,7 @@ fn commit_replaces_existing_add_and_ignores_missing_removals() {
+     );
+     let closed = commit.apply_to(&mut owned);
+     assert_eq!(closed.len(), 1);
+-    assert_eq!(closed[0].as_raw_fd(), first_fd);
++    assert_eq!(closed[0].as_tcx_raw_fd(), first_fd);
+     assert_eq!(owned.len(), 2);
+     assert_eq!(owned[0].0, updated);
+     assert_eq!(owned[0].1, 12);
+diff --git a/crates/honk-core/src/ebpf/mock.rs b/crates/honk-core/src/ebpf/mock.rs
+index 0da73f0..2fb9124 100644
+--- a/crates/honk-core/src/ebpf/mock.rs
++++ b/crates/honk-core/src/ebpf/mock.rs
+@@ -161,7 +161,11 @@ pub struct MockEbpfBackend {
+     pub binding_commits: std::sync::Arc<std::sync::atomic::AtomicU64>,
+     /// Bindings recorded by commits (no real links: `/dev/null` stand-in fds).
+     #[cfg(feature = "ebpf")]
+-    pub(crate) bound_interfaces: Vec<(crate::ebpf::interface::Binding, u32, std::os::fd::OwnedFd)>,
++    pub(crate) bound_interfaces: Vec<(
++        crate::ebpf::interface::Binding,
++        u32,
++        crate::ebpf::interface::BindingHandle,
++    )>,
+     pub routing_publication_order: Vec<MockRoutingPublicationWrite>,
+     #[cfg(feature = "reload-bench-counters")]
+     routing_map_writes: std::sync::Arc<std::sync::atomic::AtomicU64>,
+diff --git a/crates/honk-core/src/ebpf/mock/backend.rs b/crates/honk-core/src/ebpf/mock/backend.rs
+index 8b75537..0784a5e 100644
+--- a/crates/honk-core/src/ebpf/mock/backend.rs
++++ b/crates/honk-core/src/ebpf/mock/backend.rs
+@@ -855,7 +855,7 @@ impl EbpfBackend for MockEbpfBackend {
+     fn commit_interface_bindings(
+         &mut self,
+         commit: ebpf::interface::BindingCommit,
+-    ) -> Vec<std::os::fd::OwnedFd> {
++    ) -> Vec<ebpf::interface::BindingHandle> {
+         self.binding_commits
+             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+         commit.apply_to(&mut self.bound_interfaces)
+diff --git a/crates/honk-core/src/ebpf/mod.rs b/crates/honk-core/src/ebpf/mod.rs
+index 5281031..df58606 100644
+--- a/crates/honk-core/src/ebpf/mod.rs
++++ b/crates/honk-core/src/ebpf/mod.rs
+@@ -592,7 +592,7 @@ pub trait EbpfBackend: Send + Sync {
+     fn commit_interface_bindings(
+         &mut self,
+         commit: interface::BindingCommit,
+-    ) -> Vec<std::os::fd::OwnedFd>;
++    ) -> Vec<interface::BindingHandle>;
+ 
+     /// Atomically publish a complete compiled routing plan into an inactive slot.
+     /// Implementations stage every generation-owned fact map and program before
 diff --git a/crates/honk-core/src/ebpf/real/attach.rs b/crates/honk-core/src/ebpf/real/attach.rs
-index a3038f8..1e58abc 100644
+index a3038f8..8fb1d2b 100644
 --- a/crates/honk-core/src/ebpf/real/attach.rs
 +++ b/crates/honk-core/src/ebpf/real/attach.rs
-@@ -34,9 +34,25 @@ impl RealEbpfBackend {
+@@ -34,9 +34,24 @@ impl RealEbpfBackend {
      ) -> anyhow::Result<Self> {
          let version =
              kernel_version().ok_or_else(|| anyhow::anyhow!("cannot determine kernel version"))?;
 +        // [honk-android] Upstream hard-rejects kernels older than 6.12 because
 +        // the synchronous map-in-map publication it relies on was only audited
-+        // there. Android GKI 6.6 kernels are NOT upstream 6.6: the vendor tree
-+        // carries map-in-map (maybe_wait_bpf_programs -> synchronize_rcu_expedited,
-+        // backported before 6.6.0), BPF_MAP_FREEZE and BPF_LINK_CREATE for
-+        // BPF_PROG_TYPE_EXT. The floor is therefore relaxed here and the real
-+        // capability checks below (BTF, freplace, TCX, cgroup attach) decide.
-+        // Override with HONK_MIN_KERNEL=1 to restore the upstream gate.
++        // there. Android GKI 6.1+ kernels carry map-in-map RCU grace periods,
++        // BPF_LINK_CREATE for BPF_PROG_TYPE_EXT (freplace), cgroup BPF, and
++        // clsact/cls_bpf (TCX on 6.6+, automatic Netlink clsact fallback on 6.1+).
++        // The floor is therefore relaxed to 6.1 here and the real capability
++        // checks below decide. Override with HONK_MIN_KERNEL=1 to restore 6.12+.
 +        let min_version = if std::env::var_os("HONK_MIN_KERNEL").is_some() {
 +            (6, 12, 0)
 +        } else {
-+            (6, 6, 0)
++            (6, 1, 0)
 +        };
          anyhow::ensure!(
 -            version >= (6, 12, 0),
@@ -374,7 +563,7 @@ index a3038f8..1e58abc 100644
              version.0,
              version.1,
              version.2
-@@ -220,6 +236,7 @@ impl RealEbpfBackend {
+@@ -220,6 +235,7 @@ impl RealEbpfBackend {
              .map_err(|error| anyhow::anyhow!("required socket identity capture: {error}"))?;
          let cgroup_file = std::fs::File::open(&cgroup_path)
              .map_err(|e| anyhow::anyhow!("open cgroup {}: {}", cgroup_path, e))?;
@@ -382,7 +571,7 @@ index a3038f8..1e58abc 100644
          let (create_name, cg_addr_names) = match pname_mode {
              process_name::PnameCaptureMode::Argv0 => (
                  "tproxy_wan_cg_sock_create",
-@@ -252,7 +269,7 @@ impl RealEbpfBackend {
+@@ -252,7 +268,7 @@ impl RealEbpfBackend {
          let link_id = p
              .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
              .map_err(|error| {
@@ -391,7 +580,7 @@ index a3038f8..1e58abc 100644
              })?;
          cgroup_sock_links.push(p.take_link(link_id)?);
          for name in &cg_addr_names {
-@@ -268,7 +285,7 @@ impl RealEbpfBackend {
+@@ -268,7 +284,7 @@ impl RealEbpfBackend {
              let link_id = p
                  .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
                  .map_err(|error| {
@@ -400,7 +589,24 @@ index a3038f8..1e58abc 100644
                  })?;
              cgroup_sock_addr_links.push(p.take_link(link_id)?);
          }
-@@ -429,3 +446,75 @@ impl RealEbpfBackend {
+@@ -411,6 +427,16 @@ impl RealEbpfBackend {
+         }
+         let name = std::ffi::CString::new(iface)
+             .map_err(|e| anyhow::anyhow!("interface name '{}': {}", iface, e))?;
++        // [honk-android] On kernels older than Linux 6.6 (e.g. Android GKI 6.1),
++        // TCX is unavailable and aya's SchedClassifier::attach automatically falls
++        // back to Netlink cls_bpf, which requires a `clsact` qdisc on the device.
++        if kernel_version().is_none_or(|v| v < (6, 6, 0))
++            && let Ok(ifindex) = nix::net::if_::if_nametoindex(iface)
++            && let Err(err) =
++                crate::netlink::NlSock::new().and_then(|mut nl| nl.tc_ensure_clsact(ifindex))
++        {
++            warn!("tc_ensure_clsact('{}', ifindex={}) failed: {}", iface, ifindex, err);
++        }
+         let id = p
+             .attach(name.as_c_str(), dir)
+             .map_err(|e| anyhow::anyhow!("attach '{}': {} (raw={:?})", prog, e, e))?;
+@@ -429,3 +455,75 @@ impl RealEbpfBackend {
          Self::attach_tc_at(bpf, prog, iface, aya::programs::TcAttachType::Ingress)
      }
  }
@@ -477,10 +683,400 @@ index a3038f8..1e58abc 100644
 +    }
 +}
 diff --git a/crates/honk-core/src/ebpf/real/bindings.rs b/crates/honk-core/src/ebpf/real/bindings.rs
-index dd3fbca..b739bf8 100644
+index dd3fbca..ad0f00e 100644
 --- a/crates/honk-core/src/ebpf/real/bindings.rs
 +++ b/crates/honk-core/src/ebpf/real/bindings.rs
-@@ -565,6 +565,33 @@ pub(super) fn query_chain(ifindex: u32, direction: Direction) -> io::Result<Chai
+@@ -20,14 +20,14 @@ use anyhow::Context as _;
+ use aya::Ebpf;
+ use aya::programs::{ProgramError, SchedClassifier};
+ use aya_obj::generated::{
+-    BPF_F_AFTER, BPF_F_REPLACE, bpf_attach_type, bpf_attr, bpf_cmd, bpf_link_info,
++    BPF_F_AFTER, BPF_F_REPLACE, bpf_attach_type, bpf_attr, bpf_cmd, bpf_link_info, bpf_prog_info,
+ };
+ 
+ use super::routing::Target;
+ use super::syscall::bpf_syscall;
+ use crate::ebpf::interface::{
+-    ApplyReport, Binding, BindingCommit, BindingSnapshot, Direction, InterfacePlan, TcProgram,
+-    Topology,
++    ApplyReport, Binding, BindingCommit, BindingHandle, BindingSnapshot, Direction, InterfacePlan,
++    NetlinkTcGuard, TcProgram, Topology,
+ };
+ use crate::netlink::LinkSnapshot;
+ 
+@@ -69,7 +69,7 @@ impl PreparedTcProgram {
+ #[derive(Default)]
+ pub(crate) struct InterfaceBindings {
+     programs: Vec<PreparedTcProgram>,
+-    owned: Vec<(Binding, u32, OwnedFd)>,
++    owned: Vec<(Binding, u32, BindingHandle)>,
+ }
+ 
+ impl InterfaceBindings {
+@@ -97,7 +97,7 @@ impl InterfaceBindings {
+             .filter_map(move |program| program.routing.as_ref().map(|targets| &targets[slot]))
+     }
+ 
+-    pub(super) fn owned(&self) -> &[(Binding, u32, OwnedFd)] {
++    pub(super) fn owned(&self) -> &[(Binding, u32, BindingHandle)] {
+         &self.owned
+     }
+ 
+@@ -115,22 +115,23 @@ impl InterfaceBindings {
+     }
+ 
+     pub(super) fn snapshot(&self) -> anyhow::Result<BindingSnapshot> {
+-        let dup = |fd: &OwnedFd| fd.try_clone().context("duplicate TCX fd");
++        let dup_fd = |fd: &OwnedFd| fd.try_clone().context("duplicate TC program fd");
++        let dup_handle = |h: &BindingHandle| h.try_clone().context("duplicate TC link handle");
+         Ok(BindingSnapshot {
+             programs: self
+                 .programs
+                 .iter()
+-                .map(|prepared| Ok((prepared.program, dup(&prepared.fd)?)))
++                .map(|prepared| Ok((prepared.program, dup_fd(&prepared.fd)?)))
+                 .collect::<anyhow::Result<_>>()?,
+             owned: self
+                 .owned
+                 .iter()
+-                .map(|(binding, id, fd)| Ok((binding.clone(), *id, dup(fd)?)))
++                .map(|(binding, id, handle)| Ok((binding.clone(), *id, dup_handle(handle)?)))
+                 .collect::<anyhow::Result<_>>()?,
+         })
+     }
+ 
+-    pub(super) fn commit(&mut self, commit: BindingCommit) -> Vec<OwnedFd> {
++    pub(super) fn commit(&mut self, commit: BindingCommit) -> Vec<BindingHandle> {
+         commit.apply_to(&mut self.owned)
+     }
+ 
+@@ -224,14 +225,14 @@ pub(crate) fn apply(
+             interface: binding.interface.clone(),
+         })
+         .collect();
+-    let links: HashMap<Key, OwnedFd> = owned
++    let links: HashMap<Key, BindingHandle> = owned
+         .into_iter()
+-        .map(|(binding, _, fd)| (binding.key(), fd))
++        .map(|(binding, _, handle)| (binding.key(), handle))
+         .collect();
+ 
+     let mut report = ApplyReport::default();
+     // Created or updated this round; confirmed against a fresh dump below.
+-    let mut created: Vec<(Binding, u32, OwnedFd)> = Vec::new();
++    let mut created: Vec<(Binding, u32, BindingHandle)> = Vec::new();
+     let mut updated: Vec<(&Binding, u32, TcProgram)> = Vec::new();
+ 
+     for step in diff(&held, &plan.bindings, verify) {
+@@ -246,7 +247,11 @@ pub(crate) fn apply(
+                 create_into(&programs, binding, &mut created, &mut report);
+             }
+             Step::Check { binding, link_id } => {
+-                match chain_has(binding, link_id) {
++                let handle = links.get(&binding.key());
++                match handle
++                    .map(|h| chain_has(binding, link_id, h))
++                    .unwrap_or(Ok(false))
++                {
+                     Ok(true) => {}
+                     // The device went away or moved: the old link is dead.
+                     Ok(false) => replace_dead(&programs, binding, &mut created, &mut report),
+@@ -254,25 +259,31 @@ pub(crate) fn apply(
+                     Err(error) => report.failed.push((binding.clone(), error)),
+                 }
+             }
+-            Step::Reprogram { to, from, link_id } => match chain_has(to, link_id) {
+-                Ok(true) => match update(&programs, &links, to, from) {
+-                    Ok(()) => updated.push((to, link_id, from)),
+-                    // The old owner and program stay as they were.
++            Step::Reprogram { to, from, link_id } => {
++                let handle = links.get(&to.key());
++                match handle
++                    .map(|h| chain_has(to, link_id, h))
++                    .unwrap_or(Ok(false))
++                {
++                    Ok(true) => match update(&programs, &links, to, from) {
++                        Ok(()) => updated.push((to, link_id, from)),
++                        // The old owner and program stay as they were.
++                        Err(error) => report.failed.push((to.clone(), error)),
++                    },
++                    Ok(false) => replace_dead(&programs, to, &mut created, &mut report),
+                     Err(error) => report.failed.push((to.clone(), error)),
+-                },
+-                Ok(false) => replace_dead(&programs, to, &mut created, &mut report),
+-                Err(error) => report.failed.push((to.clone(), error)),
+-            },
++                }
++            }
+         }
+     }
+ 
+     if !created.is_empty() || !updated.is_empty() {
+         let fresh = crate::ebpf::interface::dump_links();
+-        for (binding, link_id, fd) in created {
+-            match confirm(&binding, link_id, &fresh, topology) {
+-                Ok(true) => report.commit.add.push((binding, link_id, fd)),
++        for (binding, link_id, handle) in created {
++            match confirm(&binding, link_id, &handle, &fresh, topology) {
++                Ok(true) => report.commit.add.push((binding, link_id, handle)),
+                 confirmation => {
+-                    // Drop the new FD and forget any dead owner it would have
++                    // Drop the new handle and forget any dead owner it would have
+                     // replaced. Other healthy keys are untouched.
+                     if links.contains_key(&binding.key()) {
+                         report.commit.remove.push(binding.key());
+@@ -286,7 +297,11 @@ pub(crate) fn apply(
+             }
+         }
+         for (binding, link_id, from) in updated {
+-            match confirm(binding, link_id, &fresh, topology) {
++            let confirmation = links
++                .get(&binding.key())
++                .map(|h| confirm(binding, link_id, h, &fresh, topology))
++                .unwrap_or(Ok(false));
++            match confirmation {
+                 Ok(true) => report.commit.reprogram.push((
+                     binding.ifindex,
+                     binding.direction,
+@@ -349,12 +364,12 @@ fn program_fd(programs: &[(TcProgram, OwnedFd)], program: TcProgram) -> anyhow::
+ fn create_into(
+     programs: &[(TcProgram, OwnedFd)],
+     binding: &Binding,
+-    created: &mut Vec<(Binding, u32, OwnedFd)>,
++    created: &mut Vec<(Binding, u32, BindingHandle)>,
+     report: &mut ApplyReport,
+ ) -> bool {
+     match create(programs, binding) {
+-        Ok((link_id, fd)) => {
+-            created.push((binding.clone(), link_id, fd));
++        Ok((link_id, handle)) => {
++            created.push((binding.clone(), link_id, handle));
+             true
+         }
+         // The device vanished between the dump and the attach: not a failure
+@@ -383,7 +398,7 @@ fn device_gone(error: &anyhow::Error) -> bool {
+ fn replace_dead(
+     programs: &[(TcProgram, OwnedFd)],
+     binding: &Binding,
+-    created: &mut Vec<(Binding, u32, OwnedFd)>,
++    created: &mut Vec<(Binding, u32, BindingHandle)>,
+     report: &mut ApplyReport,
+ ) {
+     if !create_into(programs, binding, created, report) {
+@@ -391,24 +406,91 @@ fn replace_dead(
+     }
+ }
+ 
+-fn create(programs: &[(TcProgram, OwnedFd)], binding: &Binding) -> anyhow::Result<(u32, OwnedFd)> {
++fn tcx_unsupported(err: &io::Error) -> bool {
++    matches!(
++        err.raw_os_error(),
++        Some(libc::EINVAL | libc::EOPNOTSUPP | libc::ENOSYS)
++    )
++}
++
++fn prog_id_from_fd(prog_fd: RawFd) -> io::Result<u32> {
++    let mut info: bpf_prog_info = unsafe { core::mem::zeroed() };
++    let mut attr: bpf_attr = unsafe { core::mem::zeroed() };
++    attr.info.bpf_fd = prog_fd as u32;
++    attr.info.info_len = size_of::<bpf_prog_info>() as u32;
++    attr.info.info = (&mut info as *mut bpf_prog_info) as u64;
++    unsafe { bpf_syscall(bpf_cmd::BPF_OBJ_GET_INFO_BY_FD as c_long, &mut attr) }.map_err(errno)?;
++    Ok(info.id)
++}
++
++fn netlink_link_id(priority: u16, handle: u32) -> u32 {
++    let id = (u32::from(priority) << 16) | (handle & 0xffff);
++    if id == 0 { 1 } else { id }
++}
++
++fn create(
++    programs: &[(TcProgram, OwnedFd)],
++    binding: &Binding,
++) -> anyhow::Result<(u32, BindingHandle)> {
+     let program = program_fd(programs, binding.program)?;
+-    let fd = link_create(program, binding.ifindex.get(), binding.direction).with_context(|| {
+-        format!(
++    match link_create(program, binding.ifindex.get(), binding.direction) {
++        Ok(fd) => {
++            let info = link_info(fd.as_raw_fd()).context("read the new TCX link")?;
++            Ok((info.id, BindingHandle::Tcx(fd)))
++        }
++        Err(err) if tcx_unsupported(&err) => {
++            tracing::debug!(
++                prog = binding.program.name(),
++                iface = binding.interface,
++                ifindex = binding.ifindex.get(),
++                direction = ?binding.direction,
++                error = %err,
++                "TCX unsupported; falling back to Netlink clsact BPF filter"
++            );
++            let prog_id = prog_id_from_fd(program.as_raw_fd()).unwrap_or(0);
++            let mut nl = crate::netlink::NlSock::new().context("open netlink for clsact attach")?;
++            let (priority, handle) = nl
++                .tc_attach_bpf(
++                    binding.ifindex.get(),
++                    binding.direction == Direction::Egress,
++                    program.as_raw_fd(),
++                    binding.program.name(),
++                    0,
++                    0,
++                    true,
++                )
++                .with_context(|| {
++                    format!(
++                        "netlink clsact attach {} to {} (ifindex {}, {:?})",
++                        binding.program.name(),
++                        binding.interface,
++                        binding.ifindex,
++                        binding.direction
++                    )
++                })?;
++            let link_id = netlink_link_id(priority, handle);
++            let guard = std::sync::Arc::new(NetlinkTcGuard {
++                ifindex: binding.ifindex.get(),
++                direction: binding.direction,
++                priority,
++                handle,
++                program_id: std::sync::atomic::AtomicU32::new(prog_id),
++            });
++            Ok((link_id, BindingHandle::Netlink(guard)))
++        }
++        Err(err) => Err(anyhow::Error::new(err).context(format!(
+             "attach {} to {} (ifindex {}, {:?})",
+             binding.program.name(),
+             binding.interface,
+             binding.ifindex,
+             binding.direction
+-        )
+-    })?;
+-    let info = link_info(fd.as_raw_fd()).context("read the new TCX link")?;
+-    Ok((info.id, fd))
++        ))),
++    }
+ }
+ 
+ fn update(
+     programs: &[(TcProgram, OwnedFd)],
+-    links: &HashMap<Key, OwnedFd>,
++    links: &HashMap<Key, BindingHandle>,
+     to: &Binding,
+     from: TcProgram,
+ ) -> anyhow::Result<()> {
+@@ -417,27 +499,77 @@ fn update(
+     let link = links
+         .get(&to.key())
+         .ok_or_else(|| anyhow::anyhow!("owned link is missing from the snapshot"))?;
+-    link_update(link.as_raw_fd(), new.as_raw_fd(), old.as_raw_fd()).with_context(|| {
+-        format!(
+-            "replace {} with {} on {} (ifindex {}, {:?})",
+-            from.name(),
+-            to.program.name(),
+-            to.interface,
+-            to.ifindex,
+-            to.direction
+-        )
+-    })
++    match link {
++        BindingHandle::Tcx(fd) => {
++            link_update(fd.as_raw_fd(), new.as_raw_fd(), old.as_raw_fd()).with_context(|| {
++                format!(
++                    "replace {} with {} on {} (ifindex {}, {:?})",
++                    from.name(),
++                    to.program.name(),
++                    to.interface,
++                    to.ifindex,
++                    to.direction
++                )
++            })
++        }
++        BindingHandle::Netlink(guard) => {
++            let new_prog_id = prog_id_from_fd(new.as_raw_fd()).unwrap_or(0);
++            let mut nl = crate::netlink::NlSock::new().context("open netlink for clsact replace")?;
++            nl.tc_attach_bpf(
++                guard.ifindex,
++                guard.direction == Direction::Egress,
++                new.as_raw_fd(),
++                to.program.name(),
++                guard.priority,
++                guard.handle,
++                false,
++            )
++            .with_context(|| {
++                format!(
++                    "netlink clsact replace {} with {} on {} (ifindex {}, {:?})",
++                    from.name(),
++                    to.program.name(),
++                    to.interface,
++                    to.ifindex,
++                    to.direction
++                )
++            })?;
++            guard
++                .program_id
++                .store(new_prog_id, std::sync::atomic::Ordering::Relaxed);
++            Ok(())
++        }
++    }
+ }
+ 
+ /// Is `link_id` on the chain of the calling thread's network namespace?
+-fn chain_has(binding: &Binding, link_id: u32) -> anyhow::Result<bool> {
+-    let chain = query_chain(binding.ifindex.get(), binding.direction).with_context(|| {
+-        format!(
+-            "verify {} (ifindex {}, {:?}): query TCX chain",
+-            binding.interface, binding.ifindex, binding.direction
+-        )
+-    })?;
+-    Ok(chain.contains_link(link_id))
++fn chain_has(binding: &Binding, link_id: u32, handle: &BindingHandle) -> anyhow::Result<bool> {
++    match handle {
++        BindingHandle::Tcx(_) => {
++            let chain = query_chain(binding.ifindex.get(), binding.direction).with_context(|| {
++                format!(
++                    "verify {} (ifindex {}, {:?}): query TCX chain",
++                    binding.interface, binding.ifindex, binding.direction
++                )
++            })?;
++            Ok(chain.contains_link(link_id))
++        }
++        BindingHandle::Netlink(guard) => {
++            let mut nl = crate::netlink::NlSock::new().context("open netlink for clsact verify")?;
++            nl.tc_has_bpf_filter(
++                guard.ifindex,
++                guard.direction == Direction::Egress,
++                guard.priority,
++                guard.handle,
++            )
++            .with_context(|| {
++                format!(
++                    "verify {} (ifindex {}, {:?}): query Netlink clsact filter",
++                    binding.interface, binding.ifindex, binding.direction
++                )
++            })
++        }
++    }
+ }
+ 
+ /// After a create or update: the device must still be the planned one and the
+@@ -445,6 +577,7 @@ fn chain_has(binding: &Binding, link_id: u32) -> anyhow::Result<bool> {
+ fn confirm(
+     binding: &Binding,
+     link_id: u32,
++    handle: &BindingHandle,
+     fresh: &io::Result<Vec<LinkSnapshot>>,
+     planned: &Topology,
+ ) -> anyhow::Result<bool> {
+@@ -460,7 +593,7 @@ fn confirm(
+         (Some(before), Some(after)) if same_device(before, after) => {}
+         _ => return Ok(false),
+     }
+-    chain_has(binding, link_id)
++    chain_has(binding, link_id, handle)
+ }
+ 
+ /// Link IDs on one chain, in order; 0 marks a legacy (non-link) attachment.
+@@ -565,6 +698,33 @@ pub(super) fn query_chain(ifindex: u32, direction: Direction) -> io::Result<Chai
      unreachable!("the second attempt returns")
  }
  
@@ -514,6 +1110,29 @@ index dd3fbca..b739bf8 100644
  pub(super) fn commit_program_batch(
      batch: super::programs::TcProgramBatch,
      mut publish: impl FnMut(PreparedTcProgram) -> anyhow::Result<()>,
+diff --git a/crates/honk-core/src/ebpf/real/iface_watch/tests.rs b/crates/honk-core/src/ebpf/real/iface_watch/tests.rs
+index 9965f81..1b13733 100644
+--- a/crates/honk-core/src/ebpf/real/iface_watch/tests.rs
++++ b/crates/honk-core/src/ebpf/real/iface_watch/tests.rs
+@@ -1,6 +1,6 @@
+ use super::*;
+ use crate::degradations::{Component, Degradations};
+-use crate::ebpf::interface::{Binding, Direction, TcProgram};
++use crate::ebpf::interface::{Binding, BindingHandle, Direction, TcProgram};
+ use crate::ebpf::real::interface_state::SysctlKey;
+ use crate::ebpf::test_support::link;
+ use crate::netlink::LinkSnapshot;
+@@ -49,8 +49,8 @@ fn topology() -> Topology {
+     }
+ }
+ 
+-fn fake_fd() -> OwnedFd {
+-    std::fs::File::open("/dev/null").unwrap().into()
++fn fake_fd() -> BindingHandle {
++    BindingHandle::Tcx(std::fs::File::open("/dev/null").unwrap().into())
+ }
+ 
+ /// A kernel-free `apply` with the same contract: diff by `(ifindex,
 diff --git a/crates/honk-core/src/ebpf/real/interface_startup.rs b/crates/honk-core/src/ebpf/real/interface_startup.rs
 index 23519d5..b46b948 100644
 --- a/crates/honk-core/src/ebpf/real/interface_startup.rs
@@ -553,10 +1172,53 @@ index 23519d5..b46b948 100644
      )
      .await?;
  
+diff --git a/crates/honk-core/src/ebpf/real/mod.rs b/crates/honk-core/src/ebpf/real/mod.rs
+index 564fc64..c086939 100644
+--- a/crates/honk-core/src/ebpf/real/mod.rs
++++ b/crates/honk-core/src/ebpf/real/mod.rs
+@@ -33,7 +33,10 @@ fn kernel_version() -> Option<(u32, u32, u32)> {
+         let minor = parts[1].parse::<u32>().ok()?;
+         let patch = parts
+             .get(2)
+-            .and_then(|s| s.parse::<u32>().ok())
++            .and_then(|s| {
++                let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
++                digits.parse::<u32>().ok()
++            })
+             .unwrap_or(0);
+         Some((major, minor, patch))
+     } else {
+@@ -551,7 +554,7 @@ impl EbpfBackend for RealEbpfBackend {
+     fn commit_interface_bindings(
+         &mut self,
+         commit: super::interface::BindingCommit,
+-    ) -> Vec<std::os::fd::OwnedFd> {
++    ) -> Vec<super::interface::BindingHandle> {
+         self.bindings.commit(commit)
+     }
+ 
 diff --git a/crates/honk-core/src/ebpf/real/observation.rs b/crates/honk-core/src/ebpf/real/observation.rs
-index 0b7d482..54479a5 100644
+index 0b7d482..fcc1791 100644
 --- a/crates/honk-core/src/ebpf/real/observation.rs
 +++ b/crates/honk-core/src/ebpf/real/observation.rs
+@@ -1,5 +1,5 @@
+ use super::*;
+-use crate::ebpf::interface::{Binding, Direction};
++use crate::ebpf::interface::{Binding, BindingHandle, Direction};
+ use crate::ebpf::{
+     DatapathAttachment, DatapathCheck, DatapathKind, DatapathObservation, DatapathObservationError,
+     DatapathProgram, MAX_DATAPATH_ATTACHMENTS, MAX_DATAPATH_PROGRAMS,
+@@ -91,8 +91,8 @@ impl RealEbpfBackend {
+         let bound = owned
+             .iter()
+             .take(MAX_DATAPATH_ATTACHMENTS)
+-            .map(|(binding, link_id, fd)| {
+-                observe_binding(binding, *link_id, fd.as_raw_fd(), &result.loaded_programs)
++            .map(|(binding, link_id, handle)| {
++                observe_binding(binding, *link_id, handle, &result.loaded_programs)
+             })
+             .chain(dae0)
+             .collect::<Vec<_>>();
 @@ -113,12 +113,116 @@ impl RealEbpfBackend {
          // Every hook the real datapath owns is required: the configured TCX
          // hooks, the cgroup hooks when cgroup v2 is present, and dae0_ingress,
@@ -675,11 +1337,104 @@ index 0b7d482..54479a5 100644
  }
  
  /// An owned interface binding: the held link must be the one the owner
-@@ -161,7 +265,15 @@ fn observe_dae0(
+@@ -126,33 +230,65 @@ impl RealEbpfBackend {
+ fn observe_binding(
+     binding: &Binding,
+     link_id: u32,
+-    link: RawFd,
++    handle: &BindingHandle,
+     programs: &[DatapathProgram],
+ ) -> anyhow::Result<DatapathAttachment> {
+-    let info = bindings::link_info(link)?;
+-    anyhow::ensure!(
+-        info.id == link_id
+-            && info.ifindex == binding.ifindex.get()
+-            && info.attach_type == bindings::tcx_attach_type(binding.direction),
+-        "interface identity changed during observation"
+-    );
+-    let program = programs
+-        .iter()
+-        .find(|program| program.id == info.program_id)
+-        .ok_or_else(|| anyhow::anyhow!("hook program is not owned"))?;
+-    let verified = bindings::query_chain(binding.ifindex.get(), binding.direction)
+-        .map_err(|error| anyhow::anyhow!("query TCX chain: {error}"))?
+-        .contains_link(link_id);
+-    Ok(DatapathAttachment {
+-        program: program.name.clone(),
+-        interface: binding.interface.clone(),
+-        egress: binding.direction == Direction::Egress,
+-        state: if verified {
+-            DatapathCheck::Verified
+-        } else {
+-            DatapathCheck::Absent
+-        },
+-    })
++    match handle {
++        BindingHandle::Tcx(link) => {
++            let info = bindings::link_info(link.as_raw_fd())?;
++            anyhow::ensure!(
++                info.id == link_id
++                    && info.ifindex == binding.ifindex.get()
++                    && info.attach_type == bindings::tcx_attach_type(binding.direction),
++                "interface identity changed during observation"
++            );
++            let program = programs
++                .iter()
++                .find(|program| program.id == info.program_id)
++                .ok_or_else(|| anyhow::anyhow!("hook program is not owned"))?;
++            let verified = bindings::query_chain(binding.ifindex.get(), binding.direction)
++                .map_err(|error| anyhow::anyhow!("query TCX chain: {error}"))?
++                .contains_link(link_id);
++            Ok(DatapathAttachment {
++                program: program.name.clone(),
++                interface: binding.interface.clone(),
++                egress: binding.direction == Direction::Egress,
++                state: if verified {
++                    DatapathCheck::Verified
++                } else {
++                    DatapathCheck::Absent
++                },
++            })
++        }
++        BindingHandle::Netlink(guard) => {
++            anyhow::ensure!(
++                guard.ifindex == binding.ifindex.get() && guard.direction == binding.direction,
++                "interface identity changed during observation"
++            );
++            let prog_id = guard.program_id.load(std::sync::atomic::Ordering::Relaxed);
++            let program = programs
++                .iter()
++                .find(|program| program.id == prog_id)
++                .ok_or_else(|| anyhow::anyhow!("hook program is not owned"))?;
++            let mut nl = crate::netlink::NlSock::new()?;
++            let verified = nl.tc_has_bpf_filter(
++                guard.ifindex,
++                guard.direction == Direction::Egress,
++                guard.priority,
++                guard.handle,
++            )?;
++            Ok(DatapathAttachment {
++                program: program.name.clone(),
++                interface: binding.interface.clone(),
++                egress: binding.direction == Direction::Egress,
++                state: if verified {
++                    DatapathCheck::Verified
++                } else {
++                    DatapathCheck::Absent
++                },
++            })
++        }
++    }
+ }
+ 
+ /// The dae0 ingress link is an Aya link: its IDs come from Aya, the chain from
+@@ -161,19 +297,50 @@ fn observe_dae0(
      link: &aya::programs::tc::SchedClassifierLink,
      programs: &[DatapathProgram],
  ) -> anyhow::Result<DatapathAttachment> {
 -    let ifindex = nix::net::if_::if_nametoindex("dae0")?;
+-    let fd: &FdLink = link.try_into()?;
+-    let info = fd.info()?;
 +    observe_named_tc(link, "dae0", programs)
 +}
 +
@@ -689,11 +1444,43 @@ index 0b7d482..54479a5 100644
 +    programs: &[DatapathProgram],
 +) -> anyhow::Result<DatapathAttachment> {
 +    let ifindex = nix::net::if_::if_nametoindex(ifname)?;
-     let fd: &FdLink = link.try_into()?;
-     let info = fd.info()?;
++    if let Ok(fd) = <&FdLink>::try_from(link) {
++        let info = fd.info()?;
++        let program = programs
++            .iter()
++            .find(|program| program.id == info.program_id())
++            .ok_or_else(|| anyhow::anyhow!("hook program is not owned"))?;
++        let verified = bindings::query_chain(ifindex, Direction::Ingress)
++            .map_err(|error| anyhow::anyhow!("query TCX chain: {error}"))?
++            .contains_link(info.id());
++        return Ok(DatapathAttachment {
++            program: program.name.clone(),
++            interface: ifname.to_owned(),
++            egress: false,
++            state: if verified {
++                DatapathCheck::Verified
++            } else {
++                DatapathCheck::Absent
++            },
++        });
++    }
++    // Fallback for Netlink clsact attachments (Linux < 6.6 where aya yields NlLink).
++    let expected_name = if ifname == "dae0peer" {
++        "dae0peer_ingress"
++    } else {
++        "dae0_ingress"
++    };
      let program = programs
-@@ -173,7 +285,7 @@ fn observe_dae0(
-         .contains_link(info.id());
+         .iter()
+-        .find(|program| program.id == info.program_id())
+-        .ok_or_else(|| anyhow::anyhow!("hook program is not owned"))?;
+-    let verified = bindings::query_chain(ifindex, Direction::Ingress)
+-        .map_err(|error| anyhow::anyhow!("query TCX chain: {error}"))?
+-        .contains_link(info.id());
++        .find(|program| program.name == expected_name)
++        .ok_or_else(|| anyhow::anyhow!("hook program {expected_name} is not owned"))?;
++    let mut nl = crate::netlink::NlSock::new()?;
++    let verified = nl.tc_has_bpf_prog_id(ifindex, false, program.id)?;
      Ok(DatapathAttachment {
          program: program.name.clone(),
 -        interface: "dae0".to_owned(),
@@ -862,10 +1649,150 @@ index dbf2d94..e184302 100644
              anyhow::bail!("UDP receive hooks unavailable: IPv4: {ipv4:#}; IPv6: {ipv6:#}");
          }
 diff --git a/crates/honk-core/src/ebpf/real/routing.rs b/crates/honk-core/src/ebpf/real/routing.rs
-index 500ad14..a11b349 100644
+index 500ad14..caa9f9a 100644
 --- a/crates/honk-core/src/ebpf/real/routing.rs
 +++ b/crates/honk-core/src/ebpf/real/routing.rs
-@@ -575,6 +575,12 @@ impl RealEbpfBackend {
+@@ -435,6 +435,97 @@ fn lpm_fd(map: &RoutingLpm) -> RawFd {
+     map.map().fd().as_fd().as_raw_fd()
+ }
+ 
++/// Build a minimal valid BTF blob describing `(u32, RoutingPolicyDescriptor)`
++/// so that `BPF_MAP_CREATE` runs `map_check_btf()` on the inner descriptor array.
++///
++/// On Linux 6.1 (before `btf_record_equal` unified `timer_off` / `spin_lock_off` /
++/// `kptr_off_tab` in Linux 6.2+), `ROUTING_POLICY_ROOT`'s BTF inner map template
++/// has `timer_off = -ENOENT` (struct with 0 timers), whereas a BTF-less standalone
++/// `Array::create(1, 0)` keeps `timer_off = -EINVAL`. `bpf_map_meta_equal()` compares
++/// `meta0->timer_off == meta1->timer_off` directly and rejects the update with `EINVAL`.
++/// Attaching matching struct BTF makes `timer_off == -ENOENT` on Linux 6.1 and stays
++/// fully compatible with Linux 6.2+/6.6+.
++fn routing_descriptor_btf_bytes() -> Vec<u8> {
++    let mut strings = vec![0u8];
++    let mut add_str = |s: &str| -> u32 {
++        let off = strings.len() as u32;
++        strings.extend_from_slice(s.as_bytes());
++        strings.push(0);
++        off
++    };
++
++    let mut types = Vec::<u32>::new();
++    // Type ID 1: INT u32 (key type; satisfies array_map_check_btf)
++    let u32_name = add_str("u32");
++    types.extend_from_slice(&[u32_name, 1 << 24, 4, 32]);
++    // Type ID 2: INT u64
++    let u64_name = add_str("u64");
++    types.extend_from_slice(&[u64_name, 1 << 24, 8, 64]);
++    // Type ID 3: STRUCT RoutingPolicyDescriptor (size 24, 5 fields)
++    let struct_name = add_str("RoutingPolicyDescriptor");
++    let members: [(&str, u32, usize); 5] = [
++        ("slot", 1, offset_of!(RoutingPolicyDescriptor, slot)),
++        ("features", 1, offset_of!(RoutingPolicyDescriptor, features)),
++        (
++            "generation",
++            2,
++            offset_of!(RoutingPolicyDescriptor, generation),
++        ),
++        (
++            "domain_map_id",
++            1,
++            offset_of!(RoutingPolicyDescriptor, domain_map_id),
++        ),
++        (
++            "trace_policy",
++            1,
++            offset_of!(RoutingPolicyDescriptor, trace_policy),
++        ),
++    ];
++    types.extend_from_slice(&[
++        struct_name,
++        (4 << 24) | members.len() as u32,
++        size_of::<RoutingPolicyDescriptor>() as u32,
++    ]);
++    for (name, type_id, byte_offset) in members {
++        types.extend_from_slice(&[add_str(name), type_id, (byte_offset as u32) * 8]);
++    }
++
++    let type_len = (types.len() * 4) as u32;
++    let str_len = strings.len() as u32;
++    let mut out = Vec::with_capacity(btf::BTF_HEADER_LEN + type_len as usize + str_len as usize);
++    out.extend_from_slice(&[0x9f, 0xeb, 1, 0]);
++    for word in [btf::BTF_HEADER_LEN as u32, 0, type_len, type_len, str_len] {
++        out.extend_from_slice(&word.to_le_bytes());
++    }
++    for word in types {
++        out.extend_from_slice(&word.to_le_bytes());
++    }
++    out.extend_from_slice(&strings);
++    out
++}
++
++fn create_routing_descriptor_with_btf() -> anyhow::Result<RoutingDescriptor> {
++    let btf_fd = load_btf(&routing_descriptor_btf_bytes())
++        .map_err(|e| anyhow::anyhow!("load RoutingPolicyDescriptor BTF: {e:#}"))?;
++    let mut attr: bpf_attr = unsafe { core::mem::zeroed() };
++    attr.__bindgen_anon_1.map_type = aya_obj::generated::bpf_map_type::BPF_MAP_TYPE_ARRAY as u32;
++    attr.__bindgen_anon_1.key_size = size_of::<u32>() as u32;
++    attr.__bindgen_anon_1.value_size = size_of::<RoutingPolicyDescriptor>() as u32;
++    attr.__bindgen_anon_1.max_entries = 1;
++    attr.__bindgen_anon_1.map_flags = 0;
++    attr.__bindgen_anon_1.btf_fd = btf_fd.as_raw_fd() as u32;
++    attr.__bindgen_anon_1.btf_key_type_id = 1;
++    attr.__bindgen_anon_1.btf_value_type_id = 3;
++    attr.__bindgen_anon_1.map_name = b"routing_desc\0\0\0\0".map(|b| b as libc::c_char);
++    let fd = bpf_fd(bpf_cmd::BPF_MAP_CREATE, &mut attr)
++        .map_err(|e| anyhow::anyhow!("BPF_MAP_CREATE(routing_desc with BTF): {e}"))?;
++    drop(btf_fd);
++    let map_data = AyaMapData::from_fd(fd)?;
++    let map = aya::maps::Map::from_map_data(map_data)?;
++    Ok(RoutingDescriptor::try_from(map)?)
++}
++
+ pub(super) fn open_routing_generation_sequence(
+     pin: &Path,
+ ) -> anyhow::Result<AyaArray<AyaMapData, u64>> {
+@@ -504,15 +595,38 @@ impl RealEbpfBackend {
+         &mut self,
+         value: RoutingPolicyDescriptor,
+     ) -> anyhow::Result<RoutingDescriptor> {
+-        let mut descriptor = RoutingDescriptor::create(1, 0)?;
++        let (mut descriptor, used_btf) = match create_routing_descriptor_with_btf() {
++            Ok(descriptor) => (descriptor, true),
++            Err(err) => {
++                tracing::debug!(
++                    error = %format_args!("{err:#}"),
++                    "BTF-typed routing descriptor creation failed; falling back to untyped array"
++                );
++                (RoutingDescriptor::create(1, 0)?, false)
++            }
++        };
+         descriptor.set(0, &value, 0)?;
+         let root = self
+             .maps_mut()?
+             .get_mut(ROUTING_POLICY_ROOT_NAME)
+             .ok_or_else(|| anyhow::anyhow!("map '{ROUTING_POLICY_ROOT_NAME}' not found"))?;
+         let mut root = AyaArrayOfMaps::<_, RoutingDescriptor>::try_from(root)?;
+-        root.set(0, &descriptor, 0)?;
+-        Ok(descriptor)
++        match root.set(0, &descriptor, 0) {
++            Ok(()) => Ok(descriptor),
++            Err(first_err) if used_btf => {
++                tracing::debug!(
++                    error = %format_args!("{first_err:#}"),
++                    "BTF-typed routing descriptor publication failed; retrying with untyped array"
++                );
++                let mut fallback = RoutingDescriptor::create(1, 0)?;
++                fallback.set(0, &value, 0)?;
++                root.set(0, &fallback, 0).map_err(|fallback_err| {
++                    anyhow::anyhow!("{first_err}; untyped fallback: {fallback_err}")
++                })?;
++                Ok(fallback)
++            }
++            Err(err) => Err(err.into()),
++        }
+     }
+ 
+     pub(super) fn fence_routing_generation(&mut self) -> anyhow::Result<()> {
+@@ -575,6 +689,12 @@ impl RealEbpfBackend {
          let slot = active ^ 1;
          let slot_name = ROUTING_SLOT_NAMES[slot as usize];
          let targets = self.routing_targets(slot as usize)?;
@@ -878,6 +1805,57 @@ index 500ad14..a11b349 100644
          let maps = create_maps(&plan.facts, learned_domains)?;
          let bytecode =
              crate::control::routing_matcher::codegen::emit_routing_program(plan, maps.fds())?;
+@@ -770,3 +890,50 @@ impl RealEbpfBackend {
+ 
+ #[cfg(test)]
+ mod tests;
++
++#[cfg(test)]
++#[test]
++fn routing_descriptor_btf_is_valid() {
++    let bytes = routing_descriptor_btf_bytes();
++    let parsed_aya = Btf::parse(&bytes, Default::default()).expect("aya Btf::parse must accept");
++    assert_eq!(
++        parsed_aya
++            .id_by_type_name_kind("u32", BtfKind::Int)
++            .expect("u32 int type"),
++        1
++    );
++    assert_eq!(
++        parsed_aya
++            .id_by_type_name_kind("RoutingPolicyDescriptor", BtfKind::Struct)
++            .expect("RoutingPolicyDescriptor struct type"),
++        3
++    );
++    let parsed = btf::Btf::parse(&bytes).expect("internal Btf::parse must accept");
++    let record = parsed
++        .find_type(4, "RoutingPolicyDescriptor")
++        .expect("RoutingPolicyDescriptor struct");
++    assert_eq!(
++        parsed.u32_at(record + 8),
++        Some(size_of::<RoutingPolicyDescriptor>() as u32)
++    );
++    assert_eq!(
++        parsed.sized_member_offset("RoutingPolicyDescriptor", "slot", 4),
++        Some(offset_of!(RoutingPolicyDescriptor, slot) as u32)
++    );
++    assert_eq!(
++        parsed.sized_member_offset("RoutingPolicyDescriptor", "features", 4),
++        Some(offset_of!(RoutingPolicyDescriptor, features) as u32)
++    );
++    assert_eq!(
++        parsed.sized_member_offset("RoutingPolicyDescriptor", "generation", 8),
++        Some(offset_of!(RoutingPolicyDescriptor, generation) as u32)
++    );
++    assert_eq!(
++        parsed.sized_member_offset("RoutingPolicyDescriptor", "domain_map_id", 4),
++        Some(offset_of!(RoutingPolicyDescriptor, domain_map_id) as u32)
++    );
++    assert_eq!(
++        parsed.sized_member_offset("RoutingPolicyDescriptor", "trace_policy", 4),
++        Some(offset_of!(RoutingPolicyDescriptor, trace_policy) as u32)
++    );
++}
 diff --git a/crates/honk-core/src/ebpf/real/tcp_binding.rs b/crates/honk-core/src/ebpf/real/tcp_binding.rs
 index 07dd68c..926d447 100644
 --- a/crates/honk-core/src/ebpf/real/tcp_binding.rs
@@ -896,6 +1874,71 @@ index 07dd68c..926d447 100644
      Ok(program.take_link(link)?)
  }
  
+diff --git a/crates/honk-core/src/ebpf/real/tests/bindings.rs b/crates/honk-core/src/ebpf/real/tests/bindings.rs
+index a52b718..eeffcfb 100644
+--- a/crates/honk-core/src/ebpf/real/tests/bindings.rs
++++ b/crates/honk-core/src/ebpf/real/tests/bindings.rs
+@@ -11,7 +11,7 @@ use super::super::bindings as owner;
+ use super::*;
+ use crate::ebpf::EbpfBackend;
+ use crate::ebpf::interface::{
+-    Binding, BindingSnapshot, Direction, InterfacePlan, TcProgram, Topology,
++    Binding, BindingHandle, BindingSnapshot, Direction, InterfacePlan, TcProgram, Topology,
+     plan as plan_interfaces, read_topology,
+ };
+ use crate::netlink::NlSock;
+@@ -119,7 +119,7 @@ impl Round {
+ struct Held {
+     binding: Binding,
+     id: u32,
+-    link: OwnedFd,
++    link: BindingHandle,
+ }
+ 
+ struct Lab {
+@@ -265,7 +265,7 @@ fn assert_truthful(held: &[Held], programs: &BTreeMap<TcProgram, u32>) {
+             program,
+             ref interface,
+         } = held.binding;
+-        let info = owner::link_info(held.link.as_raw_fd()).unwrap();
++        let info = owner::link_info(held.link.as_tcx_raw_fd()).unwrap();
+         let what = format!("{interface} ({ifindex}, {direction:?})");
+         assert_eq!(info.id, held.id, "{what}: link id");
+         assert_eq!(info.ifindex, ifindex.get(), "{what}: link ifindex");
+@@ -572,7 +572,7 @@ fn moved_device_recreated_with_same_name_and_index_is_rebound() {
+         // The held link FD still claims this ifindex; only the namespace-local
+         // chain tells the two devices apart.
+         for held in lab.held() {
+-            let info = owner::link_info(held.link.as_raw_fd()).unwrap();
++            let info = owner::link_info(held.link.as_tcx_raw_fd()).unwrap();
+             assert_eq!(info.ifindex, ifindex, "link info is ambiguous by design");
+         }
+         assert!(chain(ifindex, Direction::Ingress).is_empty());
+diff --git a/crates/honk-core/src/ebpf/real/tests/bindings/failure.rs b/crates/honk-core/src/ebpf/real/tests/bindings/failure.rs
+index 4b353a4..84c63d4 100644
+--- a/crates/honk-core/src/ebpf/real/tests/bindings/failure.rs
++++ b/crates/honk-core/src/ebpf/real/tests/bindings/failure.rs
+@@ -12,7 +12,7 @@ fn kernel_program(lab: &Lab, ifindex: u32, direction: Direction) -> u32 {
+         .iter()
+         .find(|h| (h.binding.ifindex.get(), h.binding.direction) == (ifindex, direction))
+         .expect("owned binding");
+-    owner::link_info(held.link.as_raw_fd()).unwrap().program_id
++    owner::link_info(held.link.as_tcx_raw_fd()).unwrap().program_id
+ }
+ 
+ #[test]
+diff --git a/crates/honk-core/src/ebpf/real/tests/bindings/lazy.rs b/crates/honk-core/src/ebpf/real/tests/bindings/lazy.rs
+index adad0a8..c940b20 100644
+--- a/crates/honk-core/src/ebpf/real/tests/bindings/lazy.rs
++++ b/crates/honk-core/src/ebpf/real/tests/bindings/lazy.rs
+@@ -84,6 +84,7 @@ fn start_with_read(
+             &names(wan),
+             &degradations,
+             read_topology,
++            false,
+         ))
+         .expect("a configured interface never fails startup");
+     let mut config = honk_config::Config::default();
 diff --git a/crates/honk-core/src/lib.rs b/crates/honk-core/src/lib.rs
 index 146372c..ce07996 100644
 --- a/crates/honk-core/src/lib.rs
@@ -1225,6 +2268,356 @@ index 7ee2138..f42e986 100644
  fn store_error(error: StoreError) -> anyhow::Error {
      anyhow!("configuration db: {error}")
  }
+diff --git a/crates/honk-core/src/netlink.rs b/crates/honk-core/src/netlink.rs
+index cae0955..b36a979 100644
+--- a/crates/honk-core/src/netlink.rs
++++ b/crates/honk-core/src/netlink.rs
+@@ -44,11 +44,13 @@ const AF_INET6: i32 = libc::AF_INET6;
+ 
+ const NLM_F_REQUEST: u16 = 0x01;
+ const NLM_F_ACK: u16 = 0x04;
++const NLM_F_ECHO: u16 = 0x08;
+ const NLM_F_EXCL: u16 = 0x200;
+ const NLM_F_CREATE: u16 = 0x400;
+ const NLM_F_REPLACE: u16 = 0x100;
+ const NLM_F_DUMP_INTR: u16 = 0x10;
+ const NLM_F_DUMP: u16 = 0x300;
++const NLA_F_NESTED: u16 = 1 << 15;
+ 
+ const NLMSG_ERROR: u16 = 2;
+ const NLMSG_DONE: u16 = 3;
+@@ -62,6 +64,23 @@ const RTM_NEWROUTE: u16 = 24;
+ const RTM_DELRULE: u16 = 33;
+ const RTM_NEWRULE: u16 = 32;
+ const RTM_NEWNEIGH: u16 = 28;
++const RTM_NEWQDISC: u16 = 36;
++const RTM_NEWTFILTER: u16 = 44;
++const RTM_DELTFILTER: u16 = 45;
++const RTM_GETTFILTER: u16 = 46;
++
++const TC_H_CLSACT_HANDLE: u32 = 0xFFFF_0000;
++const TC_H_CLSACT_PARENT: u32 = 0xFFFF_FFF1;
++const TC_H_MIN_INGRESS: u32 = 0xFFFF_FFF2;
++const TC_H_MIN_EGRESS: u32 = 0xFFFF_FFF3;
++const ETH_P_ALL: u16 = 0x0003;
++const TCA_KIND: u16 = 1;
++const TCA_OPTIONS: u16 = 2;
++const TCA_BPF_FD: u16 = 6;
++const TCA_BPF_NAME: u16 = 7;
++const TCA_BPF_FLAGS: u16 = 8;
++const TCA_BPF_ID: u16 = 11;
++const TCA_BPF_FLAG_ACT_DIRECT: u32 = 1;
+ 
+ const ARPHRD_ETHER: u16 = 1;
+ const IFF_UP: u32 = 0x1;
+@@ -149,6 +168,18 @@ struct NdMsg {
+     ndm_type: u8,
+ }
+ 
++#[repr(C)]
++#[derive(Clone, Copy)]
++struct TcMsg {
++    tcm_family: u8,
++    tcm_pad1: u8,
++    tcm_pad2: u16,
++    tcm_ifindex: i32,
++    tcm_handle: u32,
++    tcm_parent: u32,
++    tcm_info: u32,
++}
++
+ const NLMSG_ALIGNTO: usize = 4;
+ 
+ fn align(len: usize) -> usize {
+@@ -836,6 +867,288 @@ impl NlSock {
+                 io::Error::new(io::ErrorKind::NotFound, format!("link '{name}' not found"))
+             })
+     }
++
++    /// Ensure the `clsact` qdisc exists on `ifindex` (idempotent: `EEXIST` is OK).
++    pub(crate) fn tc_ensure_clsact(&mut self, ifindex: u32) -> io::Result<()> {
++        let header = TcMsg {
++            tcm_family: 0,
++            tcm_pad1: 0,
++            tcm_pad2: 0,
++            tcm_ifindex: ifindex as i32,
++            tcm_handle: TC_H_CLSACT_HANDLE,
++            tcm_parent: TC_H_CLSACT_PARENT,
++            tcm_info: 0,
++        };
++        let attrs = [(TCA_KIND, Attr::Str("clsact".to_owned()))];
++        match self.request(
++            RTM_NEWQDISC,
++            NLM_F_REQUEST | NLM_F_ACK | NLM_F_EXCL | NLM_F_CREATE,
++            pod_bytes(&header),
++            &attrs,
++        ) {
++            Ok(()) => Ok(()),
++            Err(err) if err.raw_os_error() == Some(libc::EEXIST) => Ok(()),
++            Err(err) => Err(err),
++        }
++    }
++
++    /// Attach (`create = true`) or atomically replace (`create = false`) a `cls_bpf`
++    /// direct-action filter on `ifindex` under `clsact` ingress/egress.
++    /// Returns the kernel-assigned `(priority, handle)`.
++    #[allow(clippy::too_many_arguments)]
++    pub(crate) fn tc_attach_bpf(
++        &mut self,
++        ifindex: u32,
++        egress: bool,
++        prog_fd: std::os::fd::RawFd,
++        name: &str,
++        priority: u16,
++        handle: u32,
++        create: bool,
++    ) -> io::Result<(u16, u32)> {
++        if create {
++            self.tc_ensure_clsact(ifindex)?;
++        }
++        let parent = if egress {
++            TC_H_MIN_EGRESS
++        } else {
++            TC_H_MIN_INGRESS
++        };
++        let header = TcMsg {
++            tcm_family: 0,
++            tcm_pad1: 0,
++            tcm_pad2: 0,
++            tcm_ifindex: ifindex as i32,
++            tcm_handle: handle,
++            tcm_parent: parent,
++            tcm_info: (u32::from(priority) << 16) | u32::from(ETH_P_ALL.to_be()),
++        };
++        let options = vec![
++            (TCA_BPF_FD, Attr::U32(prog_fd as u32)),
++            (TCA_BPF_NAME, Attr::Str(name.to_owned())),
++            (TCA_BPF_FLAGS, Attr::U32(TCA_BPF_FLAG_ACT_DIRECT)),
++        ];
++        let attrs = [
++            (TCA_KIND, Attr::Str("bpf".to_owned())),
++            (TCA_OPTIONS | NLA_F_NESTED, Attr::Nested(options)),
++        ];
++        let mut flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_ECHO;
++        if create {
++            flags |= NLM_F_CREATE | NLM_F_EXCL;
++        }
++
++        self.seq += 1;
++        let seq = self.seq;
++        let mut buf = Vec::with_capacity(256);
++        buf.extend_from_slice(&[0u8; 4]);
++        buf.extend_from_slice(&RTM_NEWTFILTER.to_ne_bytes());
++        buf.extend_from_slice(&flags.to_ne_bytes());
++        buf.extend_from_slice(&seq.to_ne_bytes());
++        buf.extend_from_slice(&0u32.to_ne_bytes());
++        buf.extend_from_slice(pod_bytes(&header));
++        for (ty, attr) in &attrs {
++            put_attr(&mut buf, *ty, attr);
++        }
++        let len = buf.len() as u32;
++        buf[0..4].copy_from_slice(&len.to_ne_bytes());
++        self.send_datagram(&buf)?;
++
++        let mut resp = vec![0u8; 4096];
++        let mut assigned: Option<(u16, u32)> = None;
++        loop {
++            let n = self.recv_one(&mut resp)?;
++            let mut off = 0usize;
++            while off + 16 <= n {
++                let hlen = u32::from_ne_bytes(resp[off..off + 4].try_into().unwrap()) as usize;
++                let htype = u16::from_ne_bytes(resp[off + 4..off + 6].try_into().unwrap());
++                let hseq = u32::from_ne_bytes(resp[off + 8..off + 12].try_into().unwrap());
++                if hlen < 16 || off + hlen > n {
++                    return Err(invalid_data("malformed netlink message header"));
++                }
++                if hseq == seq {
++                    match htype {
++                        RTM_NEWTFILTER if hlen >= 16 + std::mem::size_of::<TcMsg>() => {
++                            let body = &resp[off + 16..off + hlen];
++                            let tcm_handle = u32::from_ne_bytes(body[8..12].try_into().unwrap());
++                            let tcm_info = u32::from_ne_bytes(body[16..20].try_into().unwrap());
++                            let prio = (tcm_info >> 16) as u16;
++                            assigned = Some((prio, tcm_handle));
++                        }
++                        NLMSG_ERROR => {
++                            if hlen < 20 {
++                                return Err(invalid_data("short NLMSG_ERROR"));
++                            }
++                            let err = i32::from_ne_bytes(
++                                resp[off + 16..off + 20].try_into().unwrap(),
++                            );
++                            if err != 0 {
++                                return Err(io::Error::from_raw_os_error(-err));
++                            }
++                            return assigned.ok_or_else(|| {
++                                io::Error::other("RTM_NEWTFILTER ACK without echo reply")
++                            });
++                        }
++                        _ => {}
++                    }
++                }
++                off += align(hlen);
++            }
++        }
++    }
++
++    /// Delete one `cls_bpf` filter previously installed via [`Self::tc_attach_bpf`].
++    pub(crate) fn tc_detach_bpf(
++        &mut self,
++        ifindex: u32,
++        egress: bool,
++        priority: u16,
++        handle: u32,
++    ) -> io::Result<()> {
++        let parent = if egress {
++            TC_H_MIN_EGRESS
++        } else {
++            TC_H_MIN_INGRESS
++        };
++        let header = TcMsg {
++            tcm_family: 0,
++            tcm_pad1: 0,
++            tcm_pad2: 0,
++            tcm_ifindex: ifindex as i32,
++            tcm_handle: handle,
++            tcm_parent: parent,
++            tcm_info: (u32::from(priority) << 16) | u32::from(ETH_P_ALL.to_be()),
++        };
++        match self.request(RTM_DELTFILTER, NLM_F_REQUEST | NLM_F_ACK, pod_bytes(&header), &[]) {
++            Ok(()) => Ok(()),
++            Err(err)
++                if matches!(
++                    err.raw_os_error(),
++                    Some(libc::ENOENT | libc::ENODEV | libc::EINVAL)
++                ) =>
++            {
++                Ok(())
++            }
++            Err(err) => Err(err),
++        }
++    }
++
++    /// Dump `clsact` filters on `(ifindex, egress)` and return `(priority, handle, opt_bpf_prog_id)`.
++    fn tc_dump_bpf_filters(
++        &mut self,
++        ifindex: u32,
++        egress: bool,
++    ) -> io::Result<Vec<(u16, u32, Option<u32>)>> {
++        let parent = if egress {
++            TC_H_MIN_EGRESS
++        } else {
++            TC_H_MIN_INGRESS
++        };
++        let header = TcMsg {
++            tcm_family: 0,
++            tcm_pad1: 0,
++            tcm_pad2: 0,
++            tcm_ifindex: ifindex as i32,
++            tcm_handle: 0,
++            tcm_parent: parent,
++            tcm_info: 0,
++        };
++        self.seq += 1;
++        let seq = self.seq;
++        let mut buf = Vec::with_capacity(64);
++        buf.extend_from_slice(&[0u8; 4]);
++        buf.extend_from_slice(&RTM_GETTFILTER.to_ne_bytes());
++        buf.extend_from_slice(&(NLM_F_REQUEST | NLM_F_DUMP).to_ne_bytes());
++        buf.extend_from_slice(&seq.to_ne_bytes());
++        buf.extend_from_slice(&0u32.to_ne_bytes());
++        buf.extend_from_slice(pod_bytes(&header));
++        let len = buf.len() as u32;
++        buf[0..4].copy_from_slice(&len.to_ne_bytes());
++        self.send_datagram(&buf)?;
++
++        let mut resp = vec![0u8; 8192];
++        let mut filters = Vec::new();
++        loop {
++            let n = self.recv_one(&mut resp)?;
++            let mut off = 0usize;
++            while off + 16 <= n {
++                let hlen = u32::from_ne_bytes(resp[off..off + 4].try_into().unwrap()) as usize;
++                let htype = u16::from_ne_bytes(resp[off + 4..off + 6].try_into().unwrap());
++                let hseq = u32::from_ne_bytes(resp[off + 8..off + 12].try_into().unwrap());
++                if hlen < 16 || off + hlen > n {
++                    return Err(invalid_data("malformed netlink message header"));
++                }
++                if hseq != seq {
++                    off += align(hlen);
++                    continue;
++                }
++                match htype {
++                    NLMSG_DONE => return Ok(filters),
++                    NLMSG_ERROR => {
++                        if hlen < 20 {
++                            return Err(invalid_data("short NLMSG_ERROR"));
++                        }
++                        let err =
++                            i32::from_ne_bytes(resp[off + 16..off + 20].try_into().unwrap());
++                        if err == 0 {
++                            return Ok(filters);
++                        }
++                        if err == -libc::ENOENT || err == -libc::EINVAL {
++                            return Ok(filters);
++                        }
++                        return Err(io::Error::from_raw_os_error(-err));
++                    }
++                    RTM_NEWTFILTER if hlen >= 16 + std::mem::size_of::<TcMsg>() => {
++                        let body = &resp[off + 16..off + hlen];
++                        let tcm_handle = u32::from_ne_bytes(body[8..12].try_into().unwrap());
++                        let tcm_info = u32::from_ne_bytes(body[16..20].try_into().unwrap());
++                        let prio = (tcm_info >> 16) as u16;
++                        let mut prog_id = None;
++                        let attrs_bytes = &body[std::mem::size_of::<TcMsg>()..];
++                        let _ = for_each_attr(attrs_bytes, |rta_type, payload| {
++                            if rta_type == TCA_OPTIONS {
++                                let _ = for_each_attr(payload, |opt_ty, opt_val| {
++                                    if opt_ty == TCA_BPF_ID && opt_val.len() == 4 {
++                                        prog_id =
++                                            Some(u32::from_ne_bytes(opt_val.try_into().unwrap()));
++                                    }
++                                    Ok(())
++                                });
++                            }
++                            Ok(())
++                        });
++                        filters.push((prio, tcm_handle, prog_id));
++                    }
++                    _ => {}
++                }
++                off += align(hlen);
++            }
++        }
++    }
++
++    pub(crate) fn tc_has_bpf_filter(
++        &mut self,
++        ifindex: u32,
++        egress: bool,
++        priority: u16,
++        handle: u32,
++    ) -> io::Result<bool> {
++        Ok(self
++            .tc_dump_bpf_filters(ifindex, egress)?
++            .into_iter()
++            .any(|(p, h, _)| p == priority && h == handle))
++    }
++
++    pub(crate) fn tc_has_bpf_prog_id(
++        &mut self,
++        ifindex: u32,
++        egress: bool,
++        expected_prog_id: u32,
++    ) -> io::Result<bool> {
++        Ok(self
++            .tc_dump_bpf_filters(ifindex, egress)?
++            .into_iter()
++            .any(|(_, _, id)| id == Some(expected_prog_id)))
++    }
+ }
+ 
+ #[cfg(test)]
 diff --git a/crates/honk-ebpf-common/src/conn.rs b/crates/honk-ebpf-common/src/conn.rs
 index 2bfd333..d6598ea 100644
 --- a/crates/honk-ebpf-common/src/conn.rs
@@ -1306,6 +2699,22 @@ index 5855b2f..496ec9a 100644
  pub const MAX_OUTBOUNDS: u32 = 256;
  
  // Rust struct with a memory layout identical to the C struct.
+diff --git a/crates/honk-ebpf-common/src/routing_policy.rs b/crates/honk-ebpf-common/src/routing_policy.rs
+index a0c8a10..f18945b 100644
+--- a/crates/honk-ebpf-common/src/routing_policy.rs
++++ b/crates/honk-ebpf-common/src/routing_policy.rs
+@@ -479,7 +479,10 @@ unsafe fn read_name_byte(input: &[u8], offset: usize) -> u8 {
+ #[inline(always)]
+ unsafe fn write_name_byte(output: &mut [u8; ROUTING_PROCESS_MAX_LEN], offset: usize, byte: u8) {
+     // Linux 6.12 does not bound BPF_MOD results; check before deriving the pointer.
+-    let offset = unsafe { core::ptr::read_volatile(&offset) };
++    // Masking with 0x3f after volatile reload clears register `id` aliasing so the
++    // Linux 6.1 verifier does not propagate dead-branch bounds (`umin=48 > umax=45`)
++    // back onto `written` across consecutive UTF-8 replacement writes.
++    let offset = unsafe { core::ptr::read_volatile(&offset) } & 0x3f;
+     if offset < ROUTING_PROCESS_MAX_LEN {
+         unsafe { *output.as_mut_ptr().add(offset) = byte };
+     }
 diff --git a/crates/honk-ebpf/src/auxiliary.rs b/crates/honk-ebpf/src/auxiliary.rs
 index 61379e6..863fdcc 100644
 --- a/crates/honk-ebpf/src/auxiliary.rs

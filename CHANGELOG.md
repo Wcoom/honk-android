@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.3 (2026-11-21)
+
+### Android GKI Linux 6.1+ 全栈适配（兼容 6.1–6.5 与 6.6+）
+- **Linux 6.1 eBPF Verifier 适配**：`crates/honk-ebpf-common/src/routing_policy.rs` 的 `write_name_byte` 在 volatile 回读偏移后增加 `& 0x3f` 掩码，清除寄存器 `id` 别名传递，消除 Linux 6.1 Verifier 在连续 UTF-8 替换写入中的死分支边界倒挂（`umin=48 > umax=45`）。
+- **Linux < 6.6 `clsact` Netlink TC 自动回退与健康校验**：在 `netlink.rs`、`interface.rs`、`bindings.rs`、`attach.rs`、`observation.rs` 中新增 Netlink `clsact` qdisc / `cls_bpf` 过滤器管理与 `BindingHandle(Tcx | Netlink)` 句柄；Linux 6.6+ 仍保持原生 TCX 链路，Linux 6.1–6.5 在内核无 TCX 支持时自动回退至 `clsact`/`cls_bpf` 并完整接入 Doona `/api/v1/datapath` 健康校验。
+- **Linux 6.1 `ROUTING_POLICY_ROOT` map-in-map BTF 适配**：`crates/honk-core/src/ebpf/real/routing.rs` 创建内层 `RoutingPolicyDescriptor` 数组时自动附带匹配结构体 BTF（含无 BTF 回退及单元测试），解决 Linux 6.1 `bpf_map_meta_equal()` 的 `timer_off` 冲突（`-ENOENT` vs `-EINVAL`）。
+- **内核版本解析修复与默认门槛放宽至 6.1+**：`crates/honk-core/src/ebpf/real/mod.rs` 修复 `kernel_version()` 对带 `-android` 后缀补丁号的解析，`attach.rs` 将 Android 默认内核门槛放宽至 `6.1.0`（设置 `HONK_MIN_KERNEL=1` 仍恢复上游 `6.12.0`）。
+- **测试与补丁同步**：同步补齐 `--features ebpf` 下 `BindingHandle` 与 `start_interfaces` 单元测试签名（130/130 通过），重新生成 `patches/honk-android.patch`。
+
 ## v1.0.2 (2026-11-21)
 
 ### 新版 BoxProxy (`v199 / 26.11.20.7fc0984`) 共存 APK 全面对接

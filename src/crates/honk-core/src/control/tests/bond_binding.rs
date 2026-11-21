@@ -372,6 +372,7 @@ fn run_child(case: &str) -> anyhow::Result<()> {
                 &scenario.wan,
                 &degradations,
                 crate::ebpf::interface::read_topology,
+                false,
             )
             .await?;
             backend.attach_dae0_programs()?;
