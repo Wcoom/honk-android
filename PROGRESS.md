@@ -23,7 +23,7 @@
 
 ```
 honk-android/
-├── src/                  honk 源码（基于 v0.1.0-beta.6 / 8a7611e）+ Android 适配补丁
+├── src/                  honk 源码（同步上游 main 至 8919784a）+ Android 适配补丁
 ├── toolchain/
 │   ├── aarch64-linux-musl-gcc    cc-rs 找的 C 编译器（zig 冒充 musl gcc）
 │   ├── aarch64-linux-musl-g++    同上（C++）

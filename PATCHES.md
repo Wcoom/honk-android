@@ -1,6 +1,6 @@
-# honk-android：对 honk v0.1.0-beta.6 的改动清单
+# honk-android：对上游 honk 的改动清单
 
-基线：`daeuniverse/honk` tag `v0.1.0-beta.6`（提交 `8a7611e`）。
+基线：`daeuniverse/honk` `main` 分支（提交 `8919784a`，在 `v0.1.0-beta.6` / `8a7611e` 基础上同步上游至 `#518`）。
 
 ## 1. eBPF 数据面：适配 Android GKI 6.6 Verifier（1M 指令上限 + 512B 栈上限）
 

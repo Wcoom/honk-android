@@ -343,10 +343,38 @@ index 4901b24..2aafe98 100644
          None
      };
 diff --git a/crates/honk-core/src/ebpf/real/attach.rs b/crates/honk-core/src/ebpf/real/attach.rs
-index c4e2cf4..1e58abc 100644
+index a3038f8..1e58abc 100644
 --- a/crates/honk-core/src/ebpf/real/attach.rs
 +++ b/crates/honk-core/src/ebpf/real/attach.rs
-@@ -236,6 +236,7 @@ impl RealEbpfBackend {
+@@ -34,9 +34,25 @@ impl RealEbpfBackend {
+     ) -> anyhow::Result<Self> {
+         let version =
+             kernel_version().ok_or_else(|| anyhow::anyhow!("cannot determine kernel version"))?;
++        // [honk-android] Upstream hard-rejects kernels older than 6.12 because
++        // the synchronous map-in-map publication it relies on was only audited
++        // there. Android GKI 6.6 kernels are NOT upstream 6.6: the vendor tree
++        // carries map-in-map (maybe_wait_bpf_programs -> synchronize_rcu_expedited,
++        // backported before 6.6.0), BPF_MAP_FREEZE and BPF_LINK_CREATE for
++        // BPF_PROG_TYPE_EXT. The floor is therefore relaxed here and the real
++        // capability checks below (BTF, freplace, TCX, cgroup attach) decide.
++        // Override with HONK_MIN_KERNEL=1 to restore the upstream gate.
++        let min_version = if std::env::var_os("HONK_MIN_KERNEL").is_some() {
++            (6, 12, 0)
++        } else {
++            (6, 6, 0)
++        };
+         anyhow::ensure!(
+-            version >= (6, 12, 0),
+-            "compiled routing requires Linux 6.12 or newer (running {}.{}.{})",
++            version >= min_version,
++            "compiled routing requires Linux {}.{} or newer (running {}.{}.{}); \
++             set HONK_MIN_KERNEL=1 to restore the upstream floor",
++            min_version.0,
++            min_version.1,
+             version.0,
+             version.1,
+             version.2
+@@ -220,6 +236,7 @@ impl RealEbpfBackend {
              .map_err(|error| anyhow::anyhow!("required socket identity capture: {error}"))?;
          let cgroup_file = std::fs::File::open(&cgroup_path)
              .map_err(|e| anyhow::anyhow!("open cgroup {}: {}", cgroup_path, e))?;
@@ -354,7 +382,7 @@ index c4e2cf4..1e58abc 100644
          let (create_name, cg_addr_names) = match pname_mode {
              process_name::PnameCaptureMode::Argv0 => (
                  "tproxy_wan_cg_sock_create",
-@@ -268,7 +269,7 @@ impl RealEbpfBackend {
+@@ -252,7 +269,7 @@ impl RealEbpfBackend {
          let link_id = p
              .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
              .map_err(|error| {
@@ -363,7 +391,7 @@ index c4e2cf4..1e58abc 100644
              })?;
          cgroup_sock_links.push(p.take_link(link_id)?);
          for name in &cg_addr_names {
-@@ -284,7 +285,7 @@ impl RealEbpfBackend {
+@@ -268,7 +285,7 @@ impl RealEbpfBackend {
              let link_id = p
                  .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
                  .map_err(|error| {
@@ -372,7 +400,7 @@ index c4e2cf4..1e58abc 100644
                  })?;
              cgroup_sock_addr_links.push(p.take_link(link_id)?);
          }
-@@ -445,3 +446,75 @@ impl RealEbpfBackend {
+@@ -429,3 +446,75 @@ impl RealEbpfBackend {
          Self::attach_tc_at(bpf, prog, iface, aya::programs::TcAttachType::Ingress)
      }
  }
