@@ -8,8 +8,9 @@
   - 新增 `zero_in_place_volatile<T>(ptr: *mut T)`，按对齐字宽以 `write_volatile` 展开定长清零指令，彻底阻止 LLVM 将结构体清零合并成 `aya_ebpf::memset` 逐字节循环（verifier 对逐字节循环每次迭代派生新状态，在 L2/L3 多分支下会放大数十万条验证指令）。
   - `ParseTransportCtx::zero_in_place` 改用 `zero_in_place_volatile`。
   - `write_name_byte` 在 volatile 回读偏移后增加 `& 0x3f` 掩码，清除寄存器 `id` 别名传递，解决 Linux 6.1 Verifier 连续 UTF-8 替换写入时的死分支边界倒挂（`umin=48 > umax=45`）。
-- `crates/honk-ebpf/src/egress.rs`：
-  - 将 WAN egress 拆成平级子程序分派：`wan_egress_prelude`（64B 栈）、`do_tproxy_wan_egress_tcp_entry`（312B 栈）、`do_tproxy_wan_egress_udp_entry`（296B 栈），由 `wan_egress_dispatch` 平级调用；所有 `#[inline(never)]` 子程序统一返回单寄存器 `c_long`（避免 `Result<c_long, c_long>` 使用 `r2` 导致 `R2 !read_ok`）。
+- `crates/honk-ebpf/src/egress.rs`、`crates/honk-ebpf/src/ingress.rs`：
+  - 将 WAN egress 拆成平级子程序分派：`wan_egress_prelude`（64B 栈）、`do_tproxy_wan_egress_tcp_entry`（312B 栈）、`do_tproxy_wan_egress_udp_entry`（288B 栈），由 `wan_egress_dispatch` 平级调用；所有 `#[inline(never)]` 子程序统一返回单寄存器 `c_long`（避免 `Result<c_long, c_long>` 使用 `r2` 导致 `R2 !read_ok`）。
+  - 将 LAN ingress 同步拆成平级子程序分派：`lan_ingress_prelude`（56B 栈）、`do_tproxy_lan_ingress_tcp_entry`（208B 栈）、`lan_ingress_udp_pre_entry`（200B 栈，承载缓存查找与 `bpf_sock_tuple` + `BpfFibLookup` 本地探测）与 `do_tproxy_lan_ingress_udp_route_entry`（232B 栈，调用扁平化返回 `c_long` 的 `stage_udp_decision`），由 `lan_ingress_dispatch` 平级分派，将 `lan_ingress_l2`/`lan_ingress_l3` 全链栈深从超标的 `544B` 压降至 `448B`（修复配置热点/LAN 接口 `lan_interface` 时 GKI 6.6 Verifier 报 `combined stack size of 4 calls is 544. Too large` 的问题，Issue #1）。
   - 新增 `fill_handoff_fresh` 逐字段 volatile 直写 `RoutingHandoffEntry`。
 - `crates/honk-ebpf/src/maps.rs`、`contrack.rs`、`contrack/tcp.rs`、`contrack/udp.rs`：
   - `CONNTRACK_SNAPSHOT_MAP` 改为与 `FlowMapValue<ConnState>` 同布局的 `ConnSnapshotSlot`（80B），新增 `conntrack_output_flow_value` 与 `claim_udp_preparing_in`，使 `CONN_STATE_MAP.insert` 直接使用 per-CPU map 槽位而非在栈上构造 80B 的 `FlowMapValue` 临时量，将 `__mark_tcp_seen` / `__mark_udp_seen` 栈深压低 56–64B（总调用链栈深 ≤ 432B < 512B）。

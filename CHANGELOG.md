@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.4 (2026-11-21)
+
+### 修复配置 `lan_interface`（热点 / LAN 透明代理）时 `lan_ingress_l2/l3` 栈超限（Fixes #1）
+- **LAN ingress 平级子程序拆分**：参考 `wan_egress_dispatch`，将 `crates/honk-ebpf/src/ingress.rs` 中的单一 `do_tproxy_lan_ingress`（304B 栈 + 嵌套 `stage_udp_decision` 152B + `send_flow_expired` 16B，在 GKI 6.6 上叠加至 `544B > 512B`）重构为平级子程序分派：
+  - `lan_ingress_prelude`（56B，最大链深 128B）：包解析、VLAN/标记/广播过滤与协议分发；
+  - `do_tproxy_lan_ingress_tcp_entry`（208B，最大链深 352B）：LAN TCP 完整流处理；
+  - `lan_ingress_udp_pre_entry`（200B，最大链深 352B）：LAN UDP 缓存查找与 `bpf_sock_tuple` / `BpfFibLookup` 本地 socket 探测；
+  - `do_tproxy_lan_ingress_udp_route_entry`（232B，最大链深 448B）：LAN UDP 路由、流状态发布与扁平化 `c_long` 返回的 `stage_udp_decision`。
+- **全量 TC 栈深校验与真机验证**：全部 10 个 TC 入口程序（含 `lan_ingress_l2`、`lan_ingress_l3`、`wan_egress_l2`、`wan_egress_l3`）调用链最大栈深均控制在 `≤ 448B`（低于 512B 限制）；在 OnePlus 13 Android GKI 6.6 上使用 L2 `veth` 接口复现原 544B 报错并验证修复后 `lan_ingress_l2` 一次通过 Verifier 并成功绑定。
+
 ## v1.0.3 (2026-11-21)
 
 ### Android GKI Linux 6.1+ 全栈适配（兼容 6.1–6.5 与 6.6+）

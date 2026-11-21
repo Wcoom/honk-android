@@ -32,7 +32,7 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `honk-android-release-v1.0.3-arm64.tar.gz` | 完整正式版一体包（含二进制、共存版 APK、配置模板、指南、AI Skill、补丁与校验和） |
+| `honk-android-release-v1.0.4-arm64.tar.gz` | 完整正式版一体包（含二进制、共存版 APK、配置模板、指南、AI Skill、补丁与校验和） |
 | `honk-android-arm64` | 静态链接 `aarch64-unknown-linux-musl` 的 `honk-core`（支持 GKI 6.1+ / 6.6+，合并上游 `8919784a`，内置 eBPF 对象与 Doona 原生前端） |
 | `boxctl-android-arm64` | 适配 `honk` 核心、`ebpf` 模式与 `com.boxproxy.honk` 共存目录的静态 `boxctl` |
 | `BoxProxy-honk-arm64.apk` | 基于官方新版 BoxProxy (`26.11.20.7fc0984` / `v199`) 适配，独立包名 **`com.boxproxy.honk`**（`BoxProxy Honk`），可与官方原版 BoxProxy 直接共存安装 |
