@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.2 (2026-11-21)
+
+### 新版 BoxProxy (`v199 / 26.11.20.7fc0984`) 共存 APK 全面对接
+- **升级底座至官方 BoxProxy `v199` (`26.11.20.7fc0984`)**：基于最新官方版本完整移植 `Honk` 核心适配与 `com.boxproxy.honk` 共存隔离机制，支持直接覆盖升级安装，并与官方原版 `com.boxproxy.box` (`v199`) 完美并存。
+- **原生对接 `Honk` 核心与 `eBPF` 模式**：
+  - 在客户端核心枚举与资源表新增 `Honk`（`proxy_core_honk`），自动锁定并仅允许 `eBPF` 运行模式，配置文件选择器原生支持 `.dae` 扩展名（默认 `config.dae`）。
+  - 完整适配 `box.identity` 进程校验、首页实时状态与网速/流量卡片（兼容 `.dae` 中 `external_controller` 下划线键）、原生「面板」页 Clash API 仪表板（策略/规则/连接/趋势），以及首页「WebUI」一键直连内嵌 Doona 原生面板（`http://127.0.0.1:9527/ui/`）。
+  - 完整保留新版 `boxbpf` 资源并内嵌静态 `honk` 版 `boxctl`，同步覆盖手动核心导入、备份/恢复白名单及全组件隔离（独立包名、应用名 `BoxProxy Honk`、磁贴 `Box Honk`、权限、Authority、通知广播与自启脚本 `/data/adb/service.d/boxproxy-honk.sh`）。
+
+### 同步上游 `daeuniverse/honk` 主线与配置模板修复
+- **合并上游提交 `8a7611e..8919784a`（5 commits / 52 files）**：同步上游协议栈与隧道层重构（`honk-protocol` / `honk-outbound` 等），重新生成 `patches/honk-android.patch` 并完成单元测试、ARM64 静态编译与真机端到端验证。
+- **修复 `config.example.dae` 策略组名称引号问题**：移除 `group { ... }` 块头及路由目标 `default:` 中的多余单引号，修复初次使用模板启动时报错 `routing target is not a declared group or builtin` 的问题。
+
 ## v1.0.1 (2026-11-21)
 
 ### 与官方原版 BoxProxy 共存升级 (`com.boxproxy.honk`)
