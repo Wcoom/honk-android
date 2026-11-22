@@ -137,6 +137,17 @@ EOF
    - 配置：**`config.dae`**
    - 下方自动刷新延迟、WAN IP、实时网速与内存占用。
 
+### 第 5 步（可选）：开启开机自启动
+
+`BoxProxy Honk` 已完整对接独立开机自启脚本 **`/data/adb/service.d/boxproxy-honk.sh`**（与官方原版 `/data/adb/service.d/boxproxy-box.sh` 完全隔离，支持 Magisk / KernelSU / APatch）：
+
+1. 在 `BoxProxy Honk` 底部进入 **设置**，打开 **开机自启** 开关（或部署脚本追加 `--boot-autostart`）。
+2. 应用会自动写入 `/data/adb/service.d/boxproxy-honk.sh`（权限 `0755`，`root:root`，Logcat 标签 `BoxProxyHonkBoot`）。
+3. 手机重启并解锁屏幕后，脚本会自动等待开机动画结束及 `/data/user/0/com.boxproxy.honk/files/box/` 就绪，再调用 `boxctl --db "$db" boot` 拉起 `honk-core`；`honk-core` 会自动升级根 cgroup BPF 钩子为 `multi` 并通过 `iface_watch` 在网络就绪后自动挂接 WAN 网卡。
+4. 排查自启日志可查看 `/data/user/0/com.boxproxy.honk/files/box/run/boot.log` 或 `adb logcat -d -s BoxProxyHonkBoot`。
+
+> **提示**：如已开启 `BoxProxy Honk` 的开机自启，请关闭官方原版 `BoxProxy` 内的「开机自启」（移除 `/data/adb/service.d/boxproxy-box.sh`），避免两个透明代理在开机时同时拉起产生冲突。
+
 ---
 
 ## 四、使用双面板：BoxProxy 内置面板 + 原生 Doona 全功能面板

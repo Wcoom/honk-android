@@ -32,10 +32,10 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `honk-android-release-v1.0.4-arm64.tar.gz` | 完整正式版一体包（含二进制、共存版 APK、配置模板、指南、AI Skill、补丁与校验和） |
-| `honk-android-arm64` | 静态链接 `aarch64-unknown-linux-musl` 的 `honk-core`（支持 GKI 6.1+ / 6.6+，合并上游 `8919784a`，内置 eBPF 对象与 Doona 原生前端） |
-| `boxctl-android-arm64` | 适配 `honk` 核心、`ebpf` 模式与 `com.boxproxy.honk` 共存目录的静态 `boxctl` |
-| `BoxProxy-honk-arm64.apk` | 基于官方新版 BoxProxy (`26.11.20.7fc0984` / `v199`) 适配，独立包名 **`com.boxproxy.honk`**（`BoxProxy Honk`），可与官方原版 BoxProxy 直接共存安装 |
+| `honk-android-release-v1.0.5-arm64.tar.gz` | 完整正式版一体包（含二进制、共存版 APK、配置模板、指南、AI Skill、补丁与校验和） |
+| `honk-android-arm64` | 静态链接 `aarch64-unknown-linux-musl` 的 `honk-core`（支持 GKI 6.1+ / 6.6+，合并上游 `7cd8b13c`，内置 eBPF 对象与 Doona 原生前端） |
+| `boxctl-android-arm64` | 适配 `honk` 核心、`ebpf` 模式、`boot` 自启与 `com.boxproxy.honk` 共存目录的静态 `boxctl` |
+| `BoxProxy-honk-arm64.apk` | 基于官方新版 BoxProxy (`26.11.21.5e4c0b7` / `v204`) 适配，独立包名 **`com.boxproxy.honk`**（`BoxProxy Honk`），完整对接独立开机自启脚本 `/data/adb/service.d/boxproxy-honk.sh`，可与官方原版 BoxProxy 直接共存安装 |
 | `config.example.dae` | 脱敏后的 Android 推荐配置模板 |
 | `SHA256SUMS.txt` | 所有发布产物的 SHA-256 校验值 |
 
@@ -79,7 +79,7 @@ cp target/bpfel-unknown-none/release/honk-ebpf ../../target/honk-core.o
 
 ```text
 honk-android/
-├── src/                  honk 完整源码（同步上游 main 8919784a）+ Android 全功能适配
+├── src/                  honk 完整源码（同步上游 main 7cd8b13c）+ Android 全功能适配
 ├── boxproxy/             boxproxy / boxctl 源码（新增 honk 核心与 ebpf 模式生命周期管理）
 ├── toolchain/            zig + rust-lld 的 aarch64-linux-musl 交叉编译包装器
 ├── lib/                  静态链接所需的 aarch64 libc++ / libc++abi / compiler_rt 归档

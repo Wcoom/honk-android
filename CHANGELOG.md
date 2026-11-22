@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.0.5 (2026-11-23)
+
+### 合并上游 `daeuniverse/honk` 主线至 `7cd8b13c`
+- **同步上游提交 `7cd8b13c`（`fix(relay): bound copy drain from the first EOF (#526)`）**：
+  - 用户态 TCP 复制中继自首次读到 EOF 起以单调时钟严格约束 30 秒空闲排空超时（覆盖最终 flush 与写端半关闭），避免延迟调度无限延长空闲排空，并在超时截断时仅统计目的端实际接受的字节数。
+  - 同步更新 `relay`、`vision` 与 `dns::transport::retry` 单元测试（40/40 relay、4/4 dns retry、130/130 `--features ebpf` 全部通过），并基于 `7cd8b13c` 重新生成与校验 `patches/honk-android.patch`。
+
+### 升级共存客户端至官方 BoxProxy `v204` (`26.11.21.5e4c0b7`) 并完整对接开机自启动脚本
+- **升级底座至官方 BoxProxy `v204` (`26.11.21.5e4c0b7`)**：
+  - 完整移植 `com.boxproxy.honk`（`BoxProxy Honk` / 磁贴 `Box Honk`）独立包名与全组件共存隔离机制，可与官方原版 `com.boxproxy.box` (`v204`) 免卸载直接并存。
+  - 完整对接 `Honk` 核心（`proxy_core_honk`）、锁定 `eBPF` 模式、`.dae` 配置选择（默认 `config.dae`）、`box.identity` 进程白名单、全链路 Clash API `external[-_]controller:` 兼容（首页实时速率/状态与原生「面板」页），以及首页「WebUI」一键直连内嵌 Doona 原生面板（`http://127.0.0.1:9527/ui/`）；完整保留新版 `boxbpf` 并内嵌静态 `honk` 版 `boxctl`。
+- **完整对接并验证 BoxProxy 开机自启动脚本 (`/data/adb/service.d/boxproxy-honk.sh`)**：
+  - 在 `BoxProxy Honk` 内置 **设置 → 开机自启** 开关中将自启脚本路径、临时写入文件与 Logcat 标签完整隔离为 `/data/adb/service.d/boxproxy-honk.sh`、`.boxproxy-honk.sh.tmp` 与 `BoxProxyHonkBoot`，开启/关闭互不干扰官方 `/data/adb/service.d/boxproxy-box.sh`。
+  - 真机端到端实测执行 `/data/adb/service.d/boxproxy-honk.sh` 调用 `boxctl --db "$db" boot` 拉起 `honk-core v1.0.5`，确认 `boot.log` 全流程记录正常、数据路径健康且应用状态自动同步。
+  - 一键部署脚本 `skill/honk-android/scripts/deploy_honk_android.sh` 新增 `--boot-autostart` 选项，并同步完善 `GUIDE.md` 与 `SKILL.md` 开机自启章节。
+
 ## v1.0.4 (2026-11-21)
 
 ### 修复配置 `lan_interface`（热点 / LAN 透明代理）时 `lan_ingress_l2/l3` 栈超限（Fixes #1）

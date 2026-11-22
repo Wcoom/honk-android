@@ -1,6 +1,6 @@
 ---
 name: honk-android
-description: Deploy, configure, verify, troubleshoot, and migrate existing Clash/Mihomo configs to honk-core (ARM64 eBPF transparent proxy) with coexisting BoxProxy Honk (com.boxproxy.honk) and embedded full-feature native Doona WebUI on rooted Android (Linux 6.6+ GKI) devices via ADB. Use when the user asks to install, configure, update, migrate to, or debug honk on Android.
+description: Deploy, configure, verify, troubleshoot, and migrate existing Clash/Mihomo configs to honk-core (ARM64 eBPF transparent proxy) with coexisting BoxProxy Honk (com.boxproxy.honk) and embedded full-feature native Doona WebUI on rooted Android (Linux 6.1+ / 6.6+ GKI) devices via ADB. Use when the user asks to install, configure, update, migrate to, or debug honk on Android.
 ---
 
 # Honk for Android Automated Deployment & Operations Skill
@@ -47,7 +47,7 @@ EOF
 
 **Gate checks:**
 - `arch` MUST be `aarch64`.
-- `kernel` MUST be Linux `6.6` or newer (warn and stop if `< 6.6` unless the user explicitly overrides).
+- `kernel` MUST be Linux `6.1` or newer (`6.6+` uses native TCX; `6.1–6.5` automatically falls back to Netlink `clsact`/`cls_bpf`; warn and stop if `< 6.1`).
 - `uid` MUST be `0` (`su` root works).
 
 ### Phase 2: Install `BoxProxy-honk-arm64.apk` (`com.boxproxy.honk`)
@@ -94,8 +94,11 @@ bash skill/honk-android/scripts/deploy_honk_android.sh \
   --geoip /path/to/geoip.dat \
   --geosite /path/to/geosite.dat \
   --configure-db \
+  --boot-autostart \
   --start
 ```
+
+> Pass `--boot-autostart` (or toggle **设置 → 开机自启** inside `BoxProxy Honk`) to install `/data/adb/service.d/boxproxy-honk.sh` (isolated from official `/data/adb/service.d/boxproxy-box.sh`). Ensure official `BoxProxy`'s boot auto-start is disabled if enabling `BoxProxy Honk` boot auto-start so both proxies do not race at boot.
 
 ### Phase 5: Automated End-to-End Verification
 
