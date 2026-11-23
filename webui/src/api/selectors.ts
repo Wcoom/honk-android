@@ -1,0 +1,328 @@
+import type {Key, Translator} from '../i18n';
+import {enumLabel} from '../i18n/enum';
+import {formatNumber, LOCALE, readLang} from '../i18n';
+import type {
+  ApiEvent,
+  Connection,
+  ConnectionList,
+  DnsQueryResponse,
+  EventKind,
+  Group,
+  GroupSummary,
+  HealthObservation,
+  LogLevel,
+  Node,
+  Provider,
+  Runtime,
+  RuntimeOutbounds
+} from './model';
+import {addU64, parseU64, pctU64} from './u64';
+import {isBuiltinOutbound} from '../dae/vocab';
+
+// The contract's SafeHttpUrl as honk checks it: an explicit http or https scheme, a host, no user info, at most 2048
+// bytes, and no whitespace or comma.
+export function safeHttpUrl(value: string): boolean {
+  if (new TextEncoder().encode(value).length > 2048 || /[\s,]/.test(value) || !/^https?:\/\/[^/?#@]+(?:[/?#]|$)/i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return !!url.hostname && url.port !== '0';
+  } catch {
+    return false;
+  }
+}
+
+// Backends offer different TCP data probes: rank by warmth, then by measurement, preferring one that went through the
+// node over a bare connect to its server endpoint, which says nothing about a UDP-only protocol; unknown values sort
+// last. The IPv4 and IPv6 rows of the best kind fold into one state.
+const warmthRank: Record<string, number> = {warm: 0, unknown: 1, mixed: 2, cold: 3};
+const measurementRank: Record<string, number> = {
+  http_headers: 0,
+  http_round_trip: 1,
+  quic_handshake: 2,
+  tcp_connect: 3,
+  mixed: 4,
+  unknown: 5,
+  dns_round_trip: 6
+};
+const observationRank = (h: HealthObservation) => (warmthRank[h.warmth] ?? 1) * 10 + (measurementRank[h.measurement] ?? 5);
+export function preferredObservation<T extends HealthObservation>(health: T[]): T | undefined {
+  const data = health.filter(h => h.transport === 'tcp' && h.purpose === 'data');
+  const best = Math.min(...data.map(observationRank));
+  return foldFamilies(data.filter(h => observationRank(h) === best));
+}
+// One state for the IPv4 and IPv6 rows of one measurement: available when any family answered, unavailable when every
+// family that finished failed, unknown only when none finished. The row returned carries that state, IPv4 first.
+export function foldFamilies<T extends Pick<HealthObservation, 'state' | 'latency_ms' | 'ip_version'>>(rows: T[]): T | undefined {
+  const ordered = [...rows].sort((a, b) => (a.ip_version === 'ipv4' ? 0 : 1) - (b.ip_version === 'ipv4' ? 0 : 1));
+  return (
+    ordered.find(row => row.state === 'healthy' && row.latency_ms != null) ??
+    ordered.find(row => row.state === 'healthy') ??
+    ordered.find(row => row.state === 'unavailable') ??
+    ordered[0]
+  );
+}
+export const preferredHealth = (node: Node) => preferredObservation(node.health);
+
+// A node's latest result per probe kind: DNS for a DNS probe, UDP for a UDP data probe, and HTTP or TCP for a TCP data
+// probe by its measurement. Keep the latest per family, rank by warmth and measurement, then fold IPv4 and IPv6.
+type ProbeKind = 'TCP' | 'HTTP' | 'UDP' | 'DNS';
+const probeKindOrder: ProbeKind[] = ['TCP', 'HTTP', 'UDP', 'DNS'];
+const probeKind = (h: HealthObservation): ProbeKind =>
+  h.purpose === 'dns' ? 'DNS' : h.transport === 'udp' ? 'UDP' : h.measurement.startsWith('http') ? 'HTTP' : 'TCP';
+export function probeKinds<T extends HealthObservation>(health: T[]) {
+  const kinds = new Map<string, {kind: ProbeKind; transport: T['transport']; rows: T[]}>();
+  for (const h of health) {
+    const kind = probeKind(h);
+    const key = kind + '/' + h.transport;
+    const entry = kinds.get(key);
+    if (entry) entry.rows.push(h);
+    else kinds.set(key, {kind, transport: h.transport, rows: [h]});
+  }
+  return [...kinds.values()]
+    .map(({kind, transport, rows}) => {
+      const latest = new Map<T['ip_version'], number>();
+      for (const h of rows) latest.set(h.ip_version, Math.max(latest.get(h.ip_version) ?? -Infinity, Date.parse(h.observed_at)));
+      const current = rows.filter(h => Date.parse(h.observed_at) === latest.get(h.ip_version));
+      const best = Math.min(...current.map(observationRank));
+      return {kind, transport, observation: foldFamilies(current.filter(h => observationRank(h) === best))!};
+    })
+    .sort((a, b) => probeKindOrder.indexOf(a.kind) - probeKindOrder.indexOf(b.kind) || a.transport.localeCompare(b.transport));
+}
+export const healthMillis = (health: Pick<HealthObservation, 'state' | 'latency_ms'> | undefined) =>
+  health?.state === 'healthy' && health.latency_ms != null ? health.latency_ms : undefined;
+export const compareLatency = (a: number | undefined, b: number | undefined) => (a ?? Infinity) - (b ?? Infinity) || 0;
+
+export function outboundUsage(snapshot: RuntimeOutbounds | undefined) {
+  const total = snapshot ? addU64(...snapshot.outbounds.map(row => row.download_bytes)) : null;
+  const rows = (snapshot?.outbounds ?? []).map(row => ({
+    name: row.name,
+    kind: row.kind,
+    bytes: parseU64(row.download_bytes),
+    errors: parseU64(row.errors),
+    percent: pctU64(row.download_bytes, total)
+  }));
+  rows.sort((a, b) => (a.bytes === b.bytes ? 0 : a.bytes === null ? 1 : b.bytes === null ? -1 : a.bytes > b.bytes ? -1 : 1));
+  return {rows, total};
+}
+
+// A client dials one address per family, so the first answer of an A or AAAA result is the one simulated.
+export function simulatedAddress(result: DnsQueryResponse['results'][number]): string | null {
+  if (result.type !== 'A' && result.type !== 'AAAA') return null;
+  return (result.answers ?? []).find(answer => answer.type === result.type)?.data ?? null;
+}
+
+export function ipLiteral(text: string): string | undefined {
+  const value = text.trim().replace(/^\[([^\]]+)\]$/, '$1');
+  if (/^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/.test(value) && value.split('.').every(n => Number(n) <= 255)) return value;
+  if (!value.includes(':') || !/^[\da-f:.]+$/i.test(value)) return undefined;
+  try {
+    return new URL('http://[' + value + ']/').hostname.slice(1, -1);
+  } catch {
+    return undefined;
+  }
+}
+
+// A node no provider lists belongs to a pseudo owner on the nodes page: the built-in outbounds or the unattributed
+// nodes. The owner's id is its kind, lengthened while a real provider already uses that id.
+export type PseudoOwner = 'builtin' | 'unattributed';
+export const pseudoOwner = (node: Pick<Node, 'protocol'>): PseudoOwner => (isBuiltinOutbound(node.protocol) ? 'builtin' : 'unattributed');
+// Whether the loaded lists have no subscription or file provider and no node beyond the built-in outbounds.
+export function noNodeSources(providers: readonly Pick<Provider, 'kind'>[] | undefined, nodes: readonly Pick<Node, 'protocol'>[] | undefined): boolean {
+  return (
+    !!providers &&
+    !!nodes &&
+    !providers.some(provider => provider.kind === 'subscription' || provider.kind === 'file') &&
+    nodes.every(node => pseudoOwner(node) === 'builtin')
+  );
+}
+export function pseudoOwnerId(kind: PseudoOwner, providers: ReadonlyArray<{id: string}>): string {
+  let id: string = kind;
+  while (providers.some(provider => provider.id === id)) id += '-';
+  return id;
+}
+// The owner the nodes page files a node under, as its `provider` filter spells it.
+export const nodeOwner = (node: Pick<Node, 'provider_id' | 'protocol'>, providers: ReadonlyArray<{id: string}>) =>
+  node.provider_id ?? pseudoOwnerId(pseudoOwner(node), providers);
+
+export function sourceIp(src: string | undefined): string | undefined {
+  if (!src) return undefined;
+  return ipLiteral(src.startsWith('[') ? src.slice(1, src.indexOf(']')) : src.split(':').length === 2 ? src.split(':')[0] : src);
+}
+// The port of an `ip:port` or `[ipv6]:port` address; a bare address has none.
+export const addressPort = (address: string | undefined) => address?.match(/^(?:\[[^\]]+\]|[^:]+):(\d+)$/)?.[1];
+
+export function outboundLabel(name: string | null, label: LabelFn): string {
+  return name === 'direct' ? label('ui.direct') : name === 'block' ? label('ui.block') : name === null || name === 'unknown' ? label('ui.unknown') : name;
+}
+// A chain carries group ids followed by the leaf node id; `names` turns them into what the config calls them.
+export type OutboundNames = ReadonlyMap<string, string>;
+export const chainNames = (chain: string[], names?: OutboundNames) => chain.map(id => names?.get(id) ?? id);
+export function chainLabel(row: Pick<Connection, 'chain' | 'outbound'>, label?: LabelFn, names?: OutboundNames): string {
+  if (isBuiltinOutbound(row.outbound)) return label ? outboundLabel(row.outbound, label) : row.outbound!;
+  return chainNames(row.chain, names).join(' → ') || '—';
+}
+// The leaf node alone, for narrow table cells; the full chain stays in details and the tooltip.
+export function nodeLabel(row: Pick<Connection, 'chain' | 'outbound'>, label: LabelFn, names?: OutboundNames): string {
+  if (isBuiltinOutbound(row.outbound)) return outboundLabel(row.outbound, label);
+  const leaf = row.chain.at(-1);
+  if (leaf) return names?.get(leaf) ?? leaf;
+  return row.outbound && row.outbound !== 'unknown' ? row.outbound : '—';
+}
+// The subscription the leaf node came from, by node id; null for a built-in outbound or an inline or file node.
+export const nodeSubscription = (row: Pick<Connection, 'chain' | 'outbound'>, subscriptions?: OutboundNames) =>
+  (!isBuiltinOutbound(row.outbound) && subscriptions?.get(row.chain.at(-1) ?? '')) || null;
+// The full path for a node cell's tooltip; null when the node alone already says it.
+export const chainPath = (row: Pick<Connection, 'chain' | 'outbound'>, label: LabelFn, names?: OutboundNames) =>
+  row.chain.length > 1 ? chainLabel(row, label, names) : null;
+export const lifecycleStates: Record<Runtime['lifecycle']['state'], Key> = {
+  starting: 'lifecycle.starting',
+  running: 'lifecycle.running',
+  reloading: 'lifecycle.reloading',
+  suspended: 'lifecycle.suspended',
+  draining: 'lifecycle.draining',
+  degraded: 'lifecycle.degraded',
+  failed: 'lifecycle.failed'
+};
+export const lifecycleTone = (state: Runtime['lifecycle']['state'] | undefined) => (state === 'running' ? 'ok' : state === 'failed' ? 'err' : 'warn');
+// Memory use as a share of the limit: past 90% it is near the limit, past 75% high.
+export const memoryTone = (percent: number): 'ok' | 'warn' | 'err' => (percent > 90 ? 'err' : percent > 75 ? 'warn' : 'ok');
+// Nothing closed is a failure; some skipped (already gone or not closable) is worth a look.
+export const closedAllTone = (tally: {closed: number; skipped: number}) => (!tally.closed ? 'negative' : tally.skipped ? 'info' : 'positive');
+export const connectionStates: Record<Connection['state'], Key> = {
+  observed: 'conn.state.observed',
+  routing: 'conn.state.routing',
+  dialing: 'conn.state.dialing',
+  active: 'conn.state.active',
+  closed: 'conn.state.closed',
+  blocked: 'conn.state.blocked',
+  failed: 'conn.state.failed',
+  unknown: 'conn.state.unknown'
+};
+
+// A connection a poll re-reads unchanged keeps its identity, so its row with the network does too, and the tables'
+// caches keyed on the row survive the poll.
+const withNetwork = new WeakMap<Connection, Connection & {network: string}>();
+const tagged = (c: Connection, network: string) => {
+  let row = withNetwork.get(c);
+  if (row?.network !== network) withNetwork.set(c, (row = {...c, network}));
+  return row;
+};
+export function connectionRows(snapshot: ConnectionList | undefined) {
+  return snapshot ? [...snapshot.tcp.map(c => tagged(c, 'tcp')), ...snapshot.udp.map(c => tagged(c, 'udp'))] : [];
+}
+
+export type MessageRef = {key: Key; params?: Record<string, string | number>};
+
+type LabelFn = (key: Key) => string;
+export const eventKindLabels: Record<EventKind, Key> = {
+  'stream.ready': 'event.k.streamReady',
+  'runtime.updated': 'event.k.runtimeUpdated',
+  'flow.updated': 'event.k.flowUpdated',
+  'flow.gap': 'event.k.flowGap',
+  'operation.updated': 'event.k.operationUpdated',
+  'generation.changed': 'event.k.generationChanged'
+};
+export const eventKinds = Object.keys(eventKindLabels) as EventKind[];
+// Eviction, sampling and buffer overflow are routine: the backend drops records by design under load, so they stay
+// off the home card. A recording-scope change is still reported.
+export function routineGap(event: ApiEvent): boolean {
+  if (event.event !== 'flow.gap') return false;
+  const {reason} = event.data;
+  return reason === 'evicted' || reason === 'sampled' || reason === 'buffer_overflow';
+}
+const gapReasons: Record<string, Key> = {
+  buffer_overflow: 'event.gap.overflow',
+  sampled: 'event.gap.sampled',
+  evicted: 'event.gap.evicted',
+  recording_changed: 'event.gap.recording'
+};
+// A safe integer goes to the translator, which groups it in the caller's language; a larger UInt64 is grouped
+// here as a bigint, since a JS number would round it.
+function droppedCount(value: string | null): string | number {
+  const count = parseU64(value);
+  if (count === null) return value ?? '—';
+  return count <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(count) : formatNumber(count, LOCALE[readLang()]);
+}
+const operationStatuses: Record<string, Key> = {queued: 'ov.queued', running: 'ov.running', succeeded: 'ov.succeeded', failed: 'ov.failed'};
+export function eventSummary(event: ApiEvent, t?: Translator): MessageRef {
+  switch (event.event) {
+    case 'stream.ready':
+      return {key: 'event.resource', params: {resource: event.data.instance_id}};
+    case 'runtime.updated':
+      return {key: 'event.resource', params: {resource: event.data.href}};
+    case 'flow.updated':
+      return {key: 'event.flow', params: {resourceId: event.data.resource_id, revision: String(event.data.revision)}};
+    case 'operation.updated': {
+      const status = event.data.status;
+      return {key: 'event.operation', params: {resourceId: event.data.resource_id, status: t ? enumLabel(operationStatuses, status, t) : status}};
+    }
+    case 'generation.changed':
+      return {key: 'event.generation', params: {previous: event.data.previous_generation_id, current: event.data.generation_id}};
+    // A gap names no record when it spans the whole stream; the summary then starts at the reason. A gap that
+    // dropped nothing, as when recording is switched, marks where history breaks off: the summary leaves the count
+    // out rather than report zero records lost. An unknown count is still shown.
+    case 'flow.gap': {
+      const reason = t && gapReasons[event.data.reason] ? t(gapReasons[event.data.reason]) : event.data.reason;
+      const id = event.data.resource_id;
+      if (parseU64(event.data.dropped_records) === 0n)
+        return id === null ? {key: 'event.gapUnscopedNoCount', params: {reason}} : {key: 'event.gapNoCount', params: {reason, resourceId: id}};
+      const params = {reason, n: droppedCount(event.data.dropped_records)};
+      return id === null ? {key: 'event.gapUnscoped', params} : {key: 'event.gap', params: {...params, resourceId: id}};
+    }
+    // An event kind from a newer backend: the resource it names, when it names one.
+    default: {
+      const data = (event as {data?: {resource_id?: unknown; href?: unknown}}).data;
+      const resource = [data?.resource_id, data?.href].find(value => typeof value === 'string');
+      return {key: 'event.resource', params: {resource: resource ?? '—'}};
+    }
+  }
+}
+
+export const shortId = (id: string) => (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(id) ? id.slice(0, 8) : id);
+
+export function resolveSelectedLeaf(
+  outbound: string,
+  network: 'tcp' | 'udp',
+  groupsByName: ReadonlyMap<string, GroupSummary>,
+  groupsById: ReadonlyMap<string, GroupSummary>,
+  nodesById: ReadonlyMap<string, Node>
+): {groups: GroupSummary[]; member: string | null; node: Node | null} {
+  const groups: GroupSummary[] = [];
+  const visited = new Set<string>();
+  let group = groupsByName.get(outbound);
+  while (group && !visited.has(group.id)) {
+    visited.add(group.id);
+    groups.push(group);
+    const member = network === 'udp' ? group.selection.udp_member_id : group.selection.tcp_member_id;
+    if (!member) return {groups, member: null, node: null};
+    const next = groupsById.get(member);
+    if (!next) return {groups, member, node: nodesById.get(member) ?? null};
+    group = next;
+  }
+  return {groups, member: null, node: null};
+}
+
+// Labels that more than one page shows.
+export const policyKindLabels: Record<Group['policy']['kind'], Key> = {
+  fixed: 'policy.kind.fixed',
+  selector: 'policy.kind.selector',
+  urltest: 'policy.kind.urltest',
+  loadbalance: 'policy.kind.loadbalance',
+  fallback: 'policy.kind.fallback',
+  random: 'policy.kind.random',
+  score: 'policy.kind.score'
+};
+// Contract order, least severe first: trace < debug < info < warn < error.
+export const logLevels = ['trace', 'debug', 'info', 'warn', 'error'] as const satisfies readonly LogLevel[];
+export const logLevelLabels: Record<LogLevel, Key> = {
+  trace: 'log.level.trace',
+  debug: 'log.level.debug',
+  info: 'log.level.info',
+  warn: 'log.level.warn',
+  error: 'log.level.error'
+};
+export const operationLabels = {reload: 'ov.reload', suspend: 'ov.suspend', resume: 'ov.resume'} as const;
+
+// Snapshot refreshes, flow updates and a stream (re)opening are routine lifecycle, not notices; the events page keeps them.
+export const interestingNotice = (event: ApiEvent) =>
+  event.event !== 'stream.ready' && event.event !== 'runtime.updated' && event.event !== 'flow.updated' && !routineGap(event);

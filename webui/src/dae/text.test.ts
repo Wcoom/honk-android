@@ -1,0 +1,64 @@
+import {describe, expect, it} from 'vitest';
+import {blockFields, scanConfig, uncomment, isFragment, quote, unquote} from './text';
+import {writeGroupEntry, namedIn, readGroupEntries} from './groups';
+import {LocalError} from '../api/error';
+
+it('keeps source ranges through quoted braces, escaped quotes, comments and repeated inline sections', () => {
+  const text = `# group { fake {} }
+node { value: 'https://example.org/{#}' }
+group { 'proxy.eu' { filter: name(regex: 'a{2}#b') policy: fixed(2) } } # }
+group {
+  "quoted group" { filter: name('a\\\"}b') policy: random } # {
+}
+dns { routing { request { fallback: direct } } }
+`;
+  const {blocks, tokens} = scanConfig(text);
+  expect(blocks.map(block => block.name)).toEqual(['node', 'group', 'group', 'dns']);
+  expect(text.slice(blocks[1].from, blocks[1].to)).toBe("group { 'proxy.eu' { filter: name(regex: 'a{2}#b') policy: fixed(2) } }");
+  expect(blockFields(text, blocks[1].children[0], tokens).map(field => [field.name, field.value])).toEqual([
+    ['filter', "name(regex: 'a{2}#b')"],
+    ['policy', 'fixed(2)']
+  ]);
+  expect(readGroupEntries(text).map(entry => entry.name)).toEqual(['proxy.eu', 'quoted group']);
+  expect(blocks[3].children[0].children[0].name).toBe('request');
+});
+
+it('strips only comments, not quoted hashes or URL fragments', () => {
+  expect(uncomment(`url: 'https://example.org/#{}' # }`)).toBe(`url: 'https://example.org/#{}' `);
+  expect(uncomment('url: https://example.org/#fragment # {')).toBe('url: https://example.org/#fragment ');
+});
+
+it('keeps comments adjacent to braces out of section headers and depth', () => {
+  const text = 'group # { ignored\n{ a { policy: random } }# }\nrouting { fallback: a }\n';
+  expect(scanConfig(text).blocks.map(block => block.name)).toEqual(['group', 'routing']);
+  expect(readGroupEntries(text).map(entry => entry.name)).toEqual(['a']);
+});
+
+describe('isFragment', () => {
+  it('accepts one balanced line and rejects text that would escape it', () => {
+    for (const ok of ['domain(geosite:cn)', 'name(\'a # b\', "c}")', 'min_moving_avg', "!name('direct')"]) expect(isFragment(ok)).toBe(true);
+    for (const bad of ['domain(a) # x', 'domain(a', 'domain(a))', 'a } routing {', 'domain(a)\nb', 'name({a})']) expect(isFragment(bad)).toBe(false);
+  });
+});
+
+it('scans the routing arrow as its own token when written without spaces', () => {
+  const text = 'routing { dip(geoip:private)->direct\n domain(a)->proxy(must) }';
+  const arrows = scanConfig(text).tokens.filter(token => text.slice(token.from, token.to) === '->');
+  expect(arrows).toHaveLength(2);
+  expect(scanConfig('a-b c->d').tokens.map(token => 'a-b c->d'.slice(token.from, token.to))).toEqual(['a-b', 'c', '->', 'd']);
+});
+
+it('preserves representable names and URLs without decoding backslashes', () => {
+  const name = 'edge "west" \\ path';
+  expect(unquote(quote(name))).toBe(name);
+  const out = writeGroupEntry('group { proxy {} }', 'proxy', {filters: [`name(${quote(name)})`], policy: null});
+  expect(namedIn(readGroupEntries(out)[0])).toEqual([name]);
+  const url = 'https://example.org/{#}?token=a\\b';
+  expect(unquote(quote(url))).toBe(url);
+});
+
+it('refuses apostrophes instead of silently changing group names or subscription URLs', () => {
+  const url = "https://example.org/o'brien";
+  expect(() => quote("o'brien")).toThrowError(new LocalError('config.unquotable'));
+  expect(() => quote(url)).toThrowError(LocalError);
+});

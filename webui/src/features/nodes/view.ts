@@ -1,0 +1,428 @@
+import {isNodeLink} from '../../dae/nodes';
+import type {Capabilities, ConfigSource, HealthObservation, Node, Provider, ProviderCreate} from '../../api/model';
+import {enumLabel} from '../../i18n/enum';
+import {
+  compareLatency,
+  healthMillis,
+  memoryTone,
+  nodeOwner,
+  preferredHealth,
+  probeKinds,
+  pseudoOwner,
+  pseudoOwnerId,
+  type PseudoOwner
+} from '../../api/selectors';
+import type {TableSort} from '../../ui/ui';
+import {completeSubscriptionUrl, isSubscriptionUrl, urlHost, type SubscriptionOption, type SubscriptionText} from '../../dae/subscriptions';
+import {formatList, formatNumber, type Lang, type Translator} from '../../i18n';
+import type {Key} from '../../i18n';
+import type {OutboundNames} from '../../api/selectors';
+import {addU64, pctU64} from '../../api/u64';
+import {compareNames, localMinute, localTime, formatBytes, formatBytesFraction, formatLatency} from '../../i18n/format';
+import {backendCode, backendMessage, knownCode, oneLine} from '../../i18n/backend';
+import {latencyTone} from '../../ui/ui';
+import {isQuotable} from '../../dae/text';
+import {nodeReferenced, readNodeEntries, type NodeEntry} from '../../dae/nodes';
+import {
+  addNodesToGroup,
+  citingGroups,
+  describeFilters,
+  exactTokens,
+  groupsNamingTag,
+  isWritableName,
+  namedInExpression,
+  noNodes,
+  readGroupEntries,
+  writeGroupEntry,
+  type GroupEntry
+} from '../../dae/groups';
+import {groupOwners} from '../shared/groupText';
+import {subscriptionNames, verifiedTags} from '../shared/subscriptionNames';
+import {draftInterval, intervalText} from './subscription';
+
+const streamTransportLabels = new Map([
+  ['tcp', 'TCP'],
+  ['ws', 'WS'],
+  ['grpc', 'gRPC'],
+  ['xhttp', 'XHTTP']
+]);
+
+export function nodeRowView(node: Node, names: OutboundNames, lang: Lang, t: Translator) {
+  const latency = healthView(preferredHealth(node), t);
+  const kinds = probeKindLines(node, t);
+  const protocol = node.protocol ?? '—';
+  const transport = node.stream_transport;
+  return {
+    id: node.id,
+    name: node.name,
+    protocol: transport ? t('ui.aside', {text: protocol, note: streamTransportLabels.get(transport) ?? transport}) : protocol,
+    latency: latency.value,
+    latencyClass: latency.tone,
+    groups: node.group_ids.length
+      ? formatList(
+          lang,
+          node.group_ids.map(id => names.get(id) ?? id)
+        )
+      : '—',
+    probeKinds: kinds,
+    showProbeKinds: kinds.length > 1,
+    probeLabel: t('nodes.probe', {name: node.name}),
+    removeLabel: t('nodes.remove', {name: node.name})
+  };
+}
+
+function healthView(health: HealthObservation | undefined, t: Translator, failure?: string) {
+  const ms = healthMillis(health);
+  return {
+    value: ms !== undefined ? formatLatency(ms, t) : health?.state === 'unavailable' ? (failure ?? t('ui.unavailable')) : '—',
+    tone: ms !== undefined ? `ms ${latencyTone(ms)}` : health?.state === 'unavailable' ? 'ms err' : 'ms'
+  };
+}
+
+// One line per probe kind the node reports: its latency, or why the probe failed. A kind seen over both transports
+// names the transport on each line.
+export function probeKindLines(node: Pick<Node, 'health'>, t: Translator) {
+  const kinds = probeKinds(node.health);
+  return kinds.map(({kind, transport, observation: h}) => {
+    return {
+      label: kinds.some(other => other.kind === kind && other.transport !== transport) ? t('ui.aside', {text: kind, note: transport.toUpperCase()}) : kind,
+      ...healthView(h, t, h.error ? backendCode(h.error, t) : undefined)
+    };
+  });
+}
+
+export type ProviderRow = (Provider | (Omit<Provider, 'kind'> & {kind: 'builtin' | 'unattributed'})) & {
+  displayName?: string;
+  sourceTag?: string;
+  configTag?: string;
+};
+const latencyOf = (node: Node) => healthMillis(preferredHealth(node));
+
+export const editableSource = (daeText: boolean, canWrite: boolean, source: ConfigSource, complete: boolean | null | undefined) =>
+  daeText && canWrite && source.writable && complete === true;
+
+// What the edit dialog changes in the entry, as the write reads it: names and URLs trimmed, a blank User-Agent as none,
+// an empty route as `routing`, and the cache switch against the entry's value or the default it falls back to. An
+// interval not yet valid counts as changed, so the draft is kept; the dialog refuses to save it.
+export function providerChanges(form: ProviderForm, entry: SubscriptionText, defaultCache: boolean | undefined) {
+  const interval = draftInterval(form.interval);
+  return {
+    name: form.name.trim() !== entry.tag,
+    url: completeSubscriptionUrl(form.value) !== entry.url,
+    interval: form.interval !== '' && (interval === null || interval !== entry.interval),
+    agent: form.agent !== (entry.ua ?? '') && (form.agent.trim() || null) !== (entry.ua ?? null),
+    cache: form.cache !== null && form.cache !== (entry.cache ?? defaultCache),
+    route: (form.route || 'routing') !== (entry.route || 'routing')
+  };
+}
+
+export function subscriptionActionKind(unique: boolean, daeText: boolean, canWrite: boolean, source: ConfigSource, complete: boolean | undefined) {
+  if (unique && daeText && canWrite && source.writable && complete === undefined) return null;
+  return unique && editableSource(daeText, canWrite, source, complete) ? 'edit' : 'open';
+}
+
+export function subscriptionPlace(places: Array<{source: ConfigSource; entry: SubscriptionText}>, item: ProviderRow, providers: Provider[]) {
+  if (!places.length) return null;
+  // Duplicate tags only open the source, preferring the one on this provider's host.
+  const own = places.length > 1 ? places.filter(({entry}) => urlHost(entry.url) === urlHost(item.url_redacted)) : places;
+  return {
+    ...(own.length === 1 ? own[0] : places[0]),
+    unique: places.length === 1 && providers.filter(other => other.kind === 'subscription' && other.name === item.name).length === 1
+  };
+}
+
+export function nodeEditState(sources: ConfigSource[], source: ConfigSource, entry: NodeEntry, nodes: Node[], form: ProviderForm, t: Translator) {
+  const name = form.name.trim();
+  const renamed = name !== entry.name;
+  const blocked = renamed && sources.some(item => item.id !== source.id && nodeReferenced(item.content, entry.name));
+  const taken =
+    renamed &&
+    (nodes.some(node => node.name === name) ||
+      sources.some(item => (item.kind === 'main' || item.kind === 'include') && readNodeEntries(item.content).some(entry => entry.name === name)));
+  const nameError = !name ? t('nodes.nameMissing') : taken ? t('nodes.nameTaken') : !isQuotable(name) ? t('config.unquotable') : null;
+  const linkError = nodeLinkError(form.value, t) ?? (!form.value.trim() ? t('nodes.linkInvalid') : null);
+  const reason = nameError ?? linkError ?? (blocked ? t('nodes.renameElsewhere') : null);
+  return {
+    nameError,
+    linkError,
+    reason,
+    valid: reason === null && (form.name !== entry.name || form.value !== entry.link)
+  };
+}
+
+// honk removes only the main declaration; any include declaration would return on reload.
+export const declaredInInclude = (places: Array<{source: ConfigSource}>) => places.some(({source}) => source.kind !== 'main');
+
+export function subscriptionRemoval(sources: ConfigSource[] | undefined, loading: boolean, item: Provider | null) {
+  const subscription = item?.kind === 'subscription';
+  return {
+    blockers: subscription ? [...new Set((sources ?? []).flatMap(source => groupsNamingTag(source.content, item.name)))] : [],
+    checking: subscription && loading && !sources
+  };
+}
+
+// A rename rewrites only exact subtag filters in the declaring source, so groups elsewhere that name the tag, and any
+// expression naming it, are left for the person to edit.
+export function renameReferences(sources: ConfigSource[], declaring: ConfigSource, tag: string) {
+  return {
+    here: citingGroups(declaring.content ?? '', tag),
+    elsewhere: sources.filter(
+      item => (item.id !== declaring.id && citingGroups(item.content ?? '', tag).length > 0) || namedInExpression(item.content ?? '', tag)
+    )
+  };
+}
+
+export function providerRows(providers: Provider[], nodes: Node[], entries: SubscriptionText[], t: Translator) {
+  const verifiedTag = verifiedTags(nodes);
+  const named = subscriptionNames(providers, nodes, entries);
+  const rows: ProviderRow[] = providers.map(item => {
+    const tag = verifiedTag(item.id);
+    return {
+      ...item,
+      displayName: named.get(item.id) ?? item.name,
+      configTag: item.kind === 'subscription' && tag && entries.filter(entry => entry.tag === tag).length === 1 ? tag : undefined,
+      // A subscription provider is named by its tag, so an entry is found before any fetch has tagged a node.
+      sourceTag: item.kind === 'subscription' ? item.name : undefined
+    };
+  });
+  const counts: Record<PseudoOwner, number> = {builtin: 0, unattributed: 0};
+  for (const node of nodes) if (node.provider_id == null) counts[pseudoOwner(node)]++;
+  const pseudo: ProviderRow[] = [];
+  for (const kind of ['builtin', 'unattributed'] as const) {
+    const count = counts[kind];
+    if (!count) continue;
+    pseudo.push({
+      id: pseudoOwnerId(kind, providers),
+      name: t(kind === 'builtin' ? 'nodes.kind.builtin' : 'nodes.kind.unattributed'),
+      kind,
+      url_redacted: null,
+      node_count: count,
+      updated_at: null,
+      expires_at: null,
+      traffic: null,
+      status: 'ok',
+      last_error: null
+    });
+  }
+  return {list: [...pseudo, ...rows]};
+}
+
+// The provider the link names while it is listed; a stale one falls back to the first real source, not every node.
+export function selectedProvider(list: ProviderRow[], requested: string | null): string | null {
+  if (requested !== null && list.some(item => item.id === requested)) return requested;
+  return (list.find(item => item.kind !== 'builtin' && item.kind !== 'unattributed') ?? list[0])?.id ?? null;
+}
+export function ownedNodes(nodes: Node[], ownerId: string | null | undefined, kind?: ProviderRow['kind']) {
+  return nodes.filter(
+    node =>
+      ownerId === undefined ||
+      (ownerId === null ? node.provider_id == null && (pseudoOwner(node) === 'builtin') === (kind === 'builtin') : node.provider_id === ownerId)
+  );
+}
+
+// The name of the source row a node is listed under, for results that span every source.
+// `names` maps each owner's id to the name its row shows.
+export function nodeSource(names: Map<string, string>, providers: Array<Pick<Provider, 'id'>>): (node: Node) => string {
+  return node => names.get(nodeOwner(node, providers)) ?? '—';
+}
+
+// `contains` is the locale-aware matcher the policy grid also uses, so both pages find the same names.
+export function nodeRows(
+  owned: Node[],
+  search: string,
+  group: string,
+  protocol: string,
+  sort: TableSort,
+  contains: (value: string, query: string) => boolean,
+  locale: string
+) {
+  const needle = search.trim();
+  const kept = owned.filter(
+    node => (!needle || contains(node.name, needle)) && (!group || node.group_ids.includes(group)) && (!protocol || node.protocol === protocol)
+  );
+  const sign = sort.direction === 'ascending' ? 1 : -1;
+  const byName = compareNames(locale);
+  const latency = sort.column === 'latency' ? new Map(kept.map(node => [node.id, latencyOf(node)])) : new Map();
+  const by: Record<string, (a: Node, b: Node) => number> = {
+    name: (a, b) => byName(a.name, b.name),
+    protocol: (a, b) => byName(a.protocol ?? '', b.protocol ?? ''),
+    latency: (a, b) => compareLatency(latency.get(a.id), latency.get(b.id)) || byName(a.name, b.name)
+  };
+  return kept.sort((a, b) => sign * (by[sort.column] ?? by.name)(a, b));
+}
+
+// The options an edit leaves as written. The User-Agent, interval, cache
+// and the download route while their controls show, have their own controls.
+export function keptOptions(options: SubscriptionOption[], controls: {cache: boolean; route: boolean}): SubscriptionOption[] {
+  return options.filter(
+    option =>
+      option.name !== 'ua' &&
+      option.name !== 'interval' &&
+      !(option.name === 'cache' && controls.cache) &&
+      !((option.name === 'route' || option.name === 'download_detour') && controls.route)
+  );
+}
+
+export type ProviderForm = {name: string; value: string; interval: string; agent: string; cache: boolean | null; route: string};
+type CreateOptions = Capabilities['resources']['providers']['create_options'];
+// An option left at the backend's default is not sent, so the entry stays a one-line scalar.
+export function providerCreate(form: ProviderForm, options: CreateOptions): ProviderCreate {
+  const request: ProviderCreate = {name: form.name.trim(), kind: 'subscription', url: completeSubscriptionUrl(form.value)};
+  const seconds = draftInterval(form.interval);
+  if (options?.update_interval !== undefined && seconds != null && seconds !== options.update_interval) request.update_interval = seconds;
+  const agent = form.agent.trim();
+  if (options?.user_agent !== undefined && agent && agent !== options.user_agent) request.user_agent = agent;
+  if (options?.cache !== undefined && form.cache !== null && form.cache !== options.cache) request.cache = form.cache;
+  return request;
+}
+
+// honk sends details {stage, node, group_id} with a fetch_failed: the step that failed, and the node name and group id the download took.
+// An engine that sends none keeps the plain error text. A direct download has neither node nor group, and an engine
+// that omits `download` only fetches directly; a download that failed before an outbound was chosen says nothing.
+export function fetchFailure(item: ProviderRow, names: OutboundNames | undefined, t: Translator): string[] | undefined {
+  const error = item.last_error;
+  const details = error?.details as {stage?: unknown; node?: unknown; group_id?: unknown} | null | undefined;
+  if (error?.code !== 'fetch_failed' || typeof details?.stage !== 'string') return undefined;
+  const {stage} = details;
+  // The node comes as the name the engine knows it by; only the group is an id, which the page words by its name.
+  const node = typeof details.node === 'string' && details.node ? details.node : null;
+  const group = typeof details.group_id === 'string' && details.group_id ? (names?.get(details.group_id) ?? details.group_id) : null;
+  const via =
+    node && group
+      ? t('nodes.fetchViaNodeGroup', {node, group})
+      : node
+        ? t('nodes.fetchViaNode', {node})
+        : group
+          ? t('nodes.fetchViaGroup', {group})
+          : !item.download || item.download.route === 'direct'
+            ? t('nodes.fetchDirect')
+            : null;
+  // A stage with words of its own replaces the code's, which said the nodes are kept; any other stage is appended to them.
+  const ownWords = stage !== error.code && knownCode(stage);
+  const reason = oneLine(backendMessage(error.code, error.message, t, details), t);
+  return [reason, via, ownWords ? t('nodes.fetchKept') : null].filter((line): line is string => line !== null);
+}
+
+export function providerRowView(item: ProviderRow, seconds: number | null | undefined, locale: string, t: Translator, names?: OutboundNames) {
+  const kinds: Record<ProviderRow['kind'], Key> = {
+    subscription: 'nodes.kind.subscription',
+    file: 'nodes.kind.file',
+    inline: 'nodes.kind.inline',
+    builtin: 'nodes.kind.builtin',
+    unattributed: 'nodes.kind.unattributed'
+  };
+  const statuses: Record<Provider['status'], Key> = {ok: 'nodes.status.ok', stale: 'nodes.status.stale', error: 'nodes.status.error'};
+  const tones = {ok: 'ok', stale: 'warn', error: 'err'} as const;
+  const pseudo = item.kind === 'builtin' || item.kind === 'unattributed';
+  // stale also covers a subscription that holds nothing yet: never loaded, and no failure to say why.
+  const never = item.kind === 'subscription' && item.status === 'stale' && item.updated_at === null && item.last_error === null;
+  const used = item.traffic ? addU64(item.traffic.upload_bytes, item.traffic.download_bytes) : null;
+  // The share of the allowance used, for a meter; none without a reported, non-zero allowance.
+  const share = used !== null && item.traffic?.total_bytes && item.traffic.total_bytes !== '0' ? pctU64(used, item.traffic.total_bytes) : null;
+  // undefined: no configuration entry to write; null: an entry without an interval, which can still get one.
+  const interval = item.kind === 'subscription' ? seconds : undefined;
+  const name = item.displayName ?? item.name;
+  const failure = fetchFailure(item, names, t);
+  return {
+    id: item.id,
+    name,
+    url: item.url_redacted ?? undefined,
+    kind: enumLabel(kinds, item.kind, t),
+    count: formatNumber(item.node_count, locale),
+    usage: used === null ? '—' : item.traffic?.total_bytes ? formatBytesFraction(used, item.traffic.total_bytes, locale, t) : formatBytes(used, locale),
+    updatedAt: pseudo ? null : item.updated_at,
+    expires: item.expires_at ? localTime(item.expires_at, locale) : '—',
+    // To the minute, for a card too narrow for the seconds; `expires` is its full form.
+    expiresShort: item.expires_at ? localMinute(item.expires_at, locale) : '—',
+    quota: share === null ? null : {pct: share, tone: memoryTone(share)},
+    interval: interval == null ? '—' : intervalText(interval, locale, t),
+    status: pseudo ? null : never ? t('nodes.status.never') : enumLabel(statuses, item.status, t),
+    tone: never ? ('neutral' as const) : tones[item.status],
+    // A failure the engine explained is shown by the help popover beside the status, so it has no tooltip as well.
+    error: !failure && item.last_error ? oneLine(backendMessage(item.last_error.code, item.last_error.message, t), t) : undefined,
+    failure,
+    refreshLabel: t('nodes.refresh', {name}),
+    removeLabel: t('nodes.remove', {name})
+  };
+}
+
+// The inline errors of the two value fields: shown once something is typed and it cannot be used, so an empty form
+// stays quiet.
+// The same criterion as the dialogs' submit: readable, and writable between quotes.
+export function subscriptionUrlError(value: string, t: Translator) {
+  const url = completeSubscriptionUrl(value);
+  return !url ? null : !isSubscriptionUrl(url) ? t('nodes.urlInvalid') : !isQuotable(url) ? t('config.unquotable') : null;
+}
+export function nodeLinkError(value: string, t: Translator, schemes?: readonly string[] | null) {
+  const link = value.trim();
+  return !link
+    ? null
+    : !isNodeLink(link) || (schemes && !schemes.includes(link.split(':', 1)[0].toLowerCase()))
+      ? t('nodes.linkInvalid')
+      : !isQuotable(link)
+        ? t('config.unquotable')
+        : null;
+}
+// The name field's inline error, quiet while empty: any text the configuration can quote, without the control
+// characters POST /providers refuses, within the 64 characters it takes.
+const MAX_SUBSCRIPTION_NAME = 64;
+export function subscriptionNameError(name: string, t: Translator) {
+  return !name || (isWritableName(name) && !/\p{Cc}/u.test(name) && [...name].length <= MAX_SUBSCRIPTION_NAME)
+    ? null
+    : t('nodes.nameInvalid', {n: MAX_SUBSCRIPTION_NAME});
+}
+
+// POST /nodes takes at most this many characters; a longer declaration still fits a configuration source edit.
+const MAX_CREATE_LINK = 8192;
+
+// Why the add dialog's submit is disabled, first applicable.
+export function nodeFormReason(kind: string | undefined, name: string, value: string, t: Translator): string | null {
+  const bare = name.trim();
+  if (kind !== 'provider' && kind !== 'node') return null;
+  if (!bare) return t('nodes.nameMissing');
+  if (kind === 'node') {
+    const link = value.trim();
+    if (!link) return t('nodes.linkInvalid');
+    return nodeLinkError(value, t) ?? ([...link].length > MAX_CREATE_LINK ? t('nodes.linkTooLong', {n: MAX_CREATE_LINK}) : null);
+  }
+  return subscriptionNameError(bare, t) ?? subscriptionUrlError(value, t) ?? (value.trim() ? null : t('nodes.urlInvalid'));
+}
+
+// Joining opens the group's editor in the source that declares it, so only a group that editor can write is offered:
+// declared once, in a writable source whose content is known complete and that no write is changing.
+export function joinableOwners(
+  sources: ConfigSource[],
+  isComplete: (source: ConfigSource) => boolean | undefined,
+  isBusy: (source: ConfigSource) => boolean
+): {entry: GroupEntry; origin: ConfigSource}[] {
+  return [...groupOwners(sources).values()].flatMap(owner =>
+    owner !== 'ambiguous' && owner.origin.writable && isComplete(owner.origin) === true && !isBusy(owner.origin) ? [owner] : []
+  );
+}
+export const joinableGroups = (...args: Parameters<typeof joinableOwners>): GroupEntry[] => joinableOwners(...args).map(owner => owner.entry);
+
+// A group without a filter line, or with one that takes every node, holds a new node already; a name filter would narrow it.
+export const holdsEveryNode = (entry: Pick<GroupEntry, 'filters'>) => !entry.filters.some(filter => filter.trim()) || describeFilters(entry.filters).everyNode;
+
+// A custom group lists its nodes by exact name, or holds the empty placeholder; any other filter (subscription, region,
+// keyword, regex, nested group) selects by a rule that a node name does not belong in.
+export const customGroup = (entry: Pick<GroupEntry, 'filters'>) =>
+  entry.filters.some(filter => filter.trim()) && entry.filters.every(filter => filter.trim() === noNodes || exactTokens(filter.trim(), 'name') !== null);
+
+// The source text with `names` added to each group's node list, or null when a group is gone or a name cannot be written.
+export function joinNodesToGroups(text: string, groups: string[], names: string[]): string | null {
+  if (!names.every(isWritableName)) return null;
+  let out = text;
+  for (const group of groups) {
+    const entry = readGroupEntries(out)
+      .filter(item => item.name === group)
+      .at(-1);
+    if (!entry) return null;
+    if (holdsEveryNode(entry)) continue;
+    // The placeholder says the group is empty; it goes once the group names a node.
+    if (entry.filters.some(filter => filter.trim() === noNodes))
+      out = writeGroupEntry(out, group, {filters: entry.filters.filter(filter => filter.trim() !== noNodes), policy: entry.policy});
+    out = addNodesToGroup(out, group, names);
+  }
+  return out;
+}

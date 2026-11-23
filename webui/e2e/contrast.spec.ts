@@ -1,0 +1,248 @@
+import {expect, linkPaletteSheets, test} from './fixtures';
+import type {PaletteId} from '../src/shell/preferences';
+
+// Every palette, both schemes: the accent, the status tones and secondary text as text on the base, the surface, a
+// tile (the overlay) and a selected tile, text on an accent, success, error and notice fill, and body text.
+// Palettes keep their official values, so a failing pair is fixed by the token a use reads, never by a new colour.
+// Glass is left out: its surfaces are translucent over a gradient. Halloween's tokens load only with its palette, so the
+// page starts in it.
+const palettes = {
+  'rose-pine/main': 1,
+  'rose-pine/moon': 1,
+  'catppuccin/frappe': 1,
+  'catppuccin/macchiato': 1,
+  'catppuccin/mocha': 1,
+  'nord/nord': 1,
+  'kary/kary': 1,
+  'glass/glass': 0,
+  'glass/clear': 0,
+  'glass/frosted': 0,
+  'glass/tinted': 0,
+  'antd/antd': 1,
+  'arco/arco': 1,
+  'semi/semi': 1,
+  'qiangguo/qiangguo': 1,
+  'halloween/halloween': 1
+} satisfies Record<PaletteId, 0 | 1>;
+test.beforeEach(({page}) => page.addInitScript(() => localStorage.setItem('doona-palette', 'halloween/halloween')));
+const roles = ['accent', 'negative', 'notice', 'positive', 'info'];
+// Page-level secondary text reads the palette's own subtle, a known exception on the base and surface as in the a11y
+// spec: [base, surface] floors for each look under 4.5:1 on either, 4.5 on a side that passes. Tiles read
+// --rp-subtle-text and get no exception.
+const subtleFloors: Record<string, [number, number]> = {
+  'rose-pine/main light': [4, 4.2],
+  'rose-pine/moon light': [4, 4.2],
+  'rose-pine/moon dark': [4.5, 4.4],
+  'catppuccin/frappe light': [4, 4.3],
+  'catppuccin/macchiato light': [4, 4.3],
+  'catppuccin/mocha light': [4, 4.3],
+  'kary/kary light': [3.4, 3.6],
+  'antd/antd light': [3.3, 3.3],
+  'antd/antd dark': [4.4, 4.5],
+  'arco/arco light': [3.2, 3.2]
+};
+// Kary's light body text is 4.1:1 on its base, 4.3:1 on its surface, 3.9:1 on a tile and 3.4:1 on a selected tile;
+// its tones sit at the same level and its accent, info and tile secondary text fall back to that body text. Its
+// page-level subtle keeps the lower floors above.
+const karyFloors: Record<string, number> = {base: 4, surface: 4.2, tile: 3.8, 'selected tile': 3.4};
+// Text on a success or error fill (a toast) or a notice fill (a badge) that stays under 4.5:1 because no colour of the palette
+// reaches it on that tone; the fill keeps the palette's own on-colour. Light schemes write notice fills in white, as
+// Adobe S2 does, so those entries give the white's ratio on the palette's own notice tone: 2.24:1 on Rose Pine, 2.62:1 on
+// Catppuccin, 2.84:1 on Nord, 1.90:1 on Ant Design, 1.75:1 on Arco and 2.42:1 on Semi. Each floor sits just under the
+// measured ratio.
+const fillFloors: Record<string, number> = {
+  'rose-pine/main light text on positive': 3.2,
+  'rose-pine/main light text on negative': 4,
+  'rose-pine/moon light text on positive': 3.2,
+  'rose-pine/moon light text on negative': 4,
+  'rose-pine/main light text on notice': 2.2,
+  'rose-pine/moon light text on notice': 2.2,
+  'catppuccin/frappe light text on notice': 2.6,
+  'catppuccin/macchiato light text on notice': 2.6,
+  'catppuccin/mocha light text on notice': 2.6,
+  'nord/nord light text on notice': 2.8,
+  'antd/antd light text on notice': 1.8,
+  'arco/arco light text on notice': 1.7,
+  'semi/semi light text on notice': 2.4,
+  'catppuccin/frappe light text on positive': 3.7,
+  'catppuccin/macchiato light text on positive': 3.7,
+  'catppuccin/mocha light text on positive': 3.7,
+  'nord/nord dark text on negative': 3,
+  'arco/arco light text on positive': 2.7,
+  'arco/arco light text on negative': 3.7,
+  'semi/semi light text on positive': 2.7,
+  'semi/semi light text on negative': 3.7
+};
+const known = new Map<string, number>([
+  ...Object.entries(fillFloors),
+  ...Object.entries(karyFloors).flatMap(([ground, floor]) =>
+    ['text', 'subtle text', 'code string', ...roles.map(role => `${role} text`)].map(name => [`kary/kary light ${name} on ${ground}`, floor] as const)
+  ),
+  ...Object.entries(subtleFloors).flatMap(([look, [base, surface]]) => [
+    [`${look} subtle text on base`, base] as const,
+    [`${look} subtle text on surface`, surface] as const
+  ])
+]);
+test('accent, status and secondary text and text on accent, success, error and notice fills reach 4.5:1 in every palette, and tones keep their colour where they read', async ({
+  page
+}) => {
+  await page.goto('/#/activity');
+  await linkPaletteSheets(page);
+  const failures: string[] = [];
+  for (const [palette, checked] of Object.entries(palettes)) {
+    if (!checked) continue;
+    for (const scheme of ['light', 'dark']) {
+      const {ratios, faded} = await page.evaluate(
+        ([palette, scheme, roles]) => {
+          const [family, flavour] = palette.split('/');
+          Object.assign(document.documentElement.dataset, {family, flavour, scheme});
+          const rgb = (value: string) => {
+            const probe = document.createElement('i');
+            probe.style.color = value;
+            document.body.append(probe);
+            const color = getComputedStyle(probe).color;
+            probe.remove();
+            const channels = color.match(/[\d.]+/g)!.map(Number);
+            // A mixed colour computes to color(srgb r g b / a) with channels from 0 to 1.
+            return color.startsWith('color(') ? channels.map((channel, i) => (i < 3 ? channel * 255 : channel)) : channels;
+          };
+          // A translucent colour is drawn over what lies beneath it: the background over the base, the text over that.
+          const over = (value: number[], below: number[]) => {
+            const [r, g, b, a = 1] = value;
+            return [r, g, b].map((channel, i) => channel * a + below[i] * (1 - a));
+          };
+          const luminance = (channels: number[]) => {
+            const [r, g, b] = channels.map(c => ((c /= 255) <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          };
+          const pair = (fg: string, bg: string, page: string) => {
+            const below = over(rgb(bg), rgb(page));
+            const [hi, lo] = [luminance(over(rgb(fg), below)), luminance(below)].sort((x, y) => y - x);
+            return (hi + 0.05) / (lo + 0.05);
+          };
+          const ratio = (fg: string, bg: string) => pair(fg, bg, 'var(--rp-base)');
+          // Tiles sit in cards on the base and in panels on the surface; a translucent tile takes the lower of the two.
+          const tile = (fg: string, bg: string) => Math.min(pair(fg, bg, 'var(--rp-base)'), pair(fg, bg, 'var(--rp-surface)'));
+          const on = (fg: string) => ({
+            base: ratio(fg, 'var(--rp-base)'),
+            surface: ratio(fg, 'var(--rp-surface)'),
+            tile: tile(fg, 'var(--rp-overlay)'),
+            'selected tile': tile(fg, 'var(--rp-selected)')
+          });
+          const each = (name: string, values: Record<string, number>) =>
+            Object.entries(values).map(([ground, value]): [string, number] => [`${name} on ${ground}`, value]);
+          // An undefined token falls back to transparent, which measures 1:1 instead of passing as inherited text.
+          const subtle = on('var(--rp-subtle-text, transparent)');
+          // A tone that reads on the base and the surface keeps its colour as page text, whatever tiles need.
+          const faded = roles.filter(
+            role =>
+              Math.min(ratio(`var(--rp-${role})`, 'var(--rp-base)'), ratio(`var(--rp-${role})`, 'var(--rp-surface)')) >= 4.5 &&
+              rgb(`var(--rp-${role}-text)`).join() !== rgb(`var(--rp-${role})`).join()
+          );
+          const ratios = {
+            // Page text reads the role's token, judged on the base and the surface; tiles read the role's tile token.
+            ...Object.fromEntries(
+              roles.flatMap(role => {
+                const page = on(`var(--rp-${role}-text, transparent)`);
+                const tiled = on(`var(--rp-${role}-tile-text, transparent)`);
+                return each(`${role} text`, {base: page.base, surface: page.surface, tile: tiled.tile, 'selected tile': tiled['selected tile']});
+              })
+            ),
+            // Page-level secondary text reads the palette's subtle; tiles read --rp-subtle-text.
+            'subtle text on base': ratio('var(--rp-subtle)', 'var(--rp-base)'),
+            'subtle text on surface': ratio('var(--rp-subtle)', 'var(--rp-surface)'),
+            'subtle text on tile': subtle.tile,
+            'subtle text on selected tile': subtle['selected tile'],
+            'text on accent': ratio('var(--rp-on-accent)', 'var(--rp-accent)'),
+            'text on positive': ratio('var(--rp-on-positive, transparent)', 'var(--rp-positive)'),
+            'text on negative': ratio('var(--rp-on-negative, transparent)', 'var(--rp-negative)'),
+            'text on notice': ratio('var(--rp-on-notice, transparent)', 'var(--rp-notice)'),
+            // The editor and the highlighted code read their own string colour on the base.
+            'code string on base': ratio('var(--rp-code-string, transparent)', 'var(--rp-base)'),
+            'code string on surface': ratio('var(--rp-code-string, transparent)', 'var(--rp-surface)'),
+            ...Object.fromEntries(each('text', on('var(--rp-text)')))
+          };
+          return {ratios, faded};
+        },
+        [palette, scheme, roles] as const
+      );
+      for (const role of faded) failures.push(`${palette} ${scheme} ${role} text lost its colour on the page`);
+      for (const [pair, value] of Object.entries(ratios))
+        if (value < (known.get(`${palette} ${scheme} ${pair}`) ?? 4.5)) failures.push(`${palette} ${scheme} ${pair}: ${value.toFixed(2)}`);
+    }
+  }
+  expect(failures).toEqual([]);
+});
+
+// A warning toast takes the same text, icon and close button colour as the info toast in every palette and scheme,
+// Glass included; the notice fill's own text colour is for badges.
+test('the warning toast takes the text colour of the info toast in every palette', async ({page}) => {
+  await page.goto('/#/activity');
+  await linkPaletteSheets(page);
+  const differing = await page.evaluate(palettes => {
+    const colour = (className: string) => {
+      const toast = document.createElement('div');
+      toast.className = `rp-toast ${className}`;
+      document.body.append(toast);
+      const {color} = getComputedStyle(toast);
+      toast.remove();
+      return color;
+    };
+    return palettes.flatMap(palette =>
+      ['light', 'dark'].flatMap(scheme => {
+        const [family, flavour] = palette.split('/');
+        Object.assign(document.documentElement.dataset, {family, flavour, scheme});
+        const [warning, info] = [colour('warning'), colour('info')];
+        return warning === info ? [] : [`${palette} ${scheme}: ${warning} against ${info}`];
+      })
+    );
+  }, Object.keys(palettes));
+  expect(differing).toEqual([]);
+});
+
+// Table rows, card dividers, hover and empty cells draw --rp-line and --rp-fill on a card. Several palettes set
+// highlight low to their own surface, where both vanished; the palette points them at a step that shows instead.
+// Lines and quiet fills only need to show; chart marks that carry a value (the latency ring and range line read
+// --rp-subtle) are non-text graphics and need 3:1 on the card and the page.
+test('lines and quiet fills show on a card, and chart marks reach 3:1, in every palette', async ({page}) => {
+  await page.goto('/#/activity');
+  await linkPaletteSheets(page);
+  const failures: string[] = [];
+  for (const [palette, checked] of Object.entries(palettes)) {
+    if (!checked) continue;
+    for (const scheme of ['light', 'dark']) {
+      const ratios = await page.evaluate(
+        ([palette, scheme]) => {
+          const [family, flavour] = palette.split('/');
+          Object.assign(document.documentElement.dataset, {family, flavour, scheme});
+          const rgb = (value: string) => {
+            const probe = document.createElement('i');
+            probe.style.color = value;
+            document.body.append(probe);
+            const color = getComputedStyle(probe).color;
+            probe.remove();
+            const channels = color.match(/[\d.]+/g)!.map(Number);
+            return color.startsWith('color(') ? channels.map((channel, i) => (i < 3 ? channel * 255 : channel)) : channels;
+          };
+          const luminance = (value: number[], below: number[]) => {
+            const [r, g, b, a = 1] = value;
+            const [lr, lg, lb] = [r, g, b]
+              .map((channel, i) => (channel * a + below[i] * (1 - a)) / 255)
+              .map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+            return 0.2126 * lr + 0.7152 * lg + 0.0722 * lb;
+          };
+          const on = (token: string, ground = '--rp-surface') => {
+            const below = rgb(`var(${ground})`);
+            const [hi, lo] = [luminance(rgb(`var(${token})`), below), luminance(below, below)].sort((x, y) => y - x);
+            return (hi + 0.05) / (lo + 0.05);
+          };
+          return {line: on('--rp-line'), fill: on('--rp-fill'), mark: on('--rp-subtle'), 'mark on base': on('--rp-subtle', '--rp-base')};
+        },
+        [palette, scheme] as const
+      );
+      for (const [token, value] of Object.entries(ratios))
+        if (value < (token.startsWith('mark') ? 3 : 1.1)) failures.push(`${palette} ${scheme} ${token}: ${value.toFixed(3)}`);
+    }
+  }
+  expect(failures).toEqual([]);
+});

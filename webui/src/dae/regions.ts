@@ -1,0 +1,173 @@
+// Common proxy regions in picker order, with aliases for name-based detection.
+type RegionNames = {short: Partial<Record<string, string>>; official?: string[]};
+export const regions: Array<[string, string[], RegionNames?]> = [
+  [
+    'HK',
+    ['hk', 'hkg', 'hongkong', 'hong kong', '香港', '港'],
+    {short: {en: 'Hong Kong', 'zh-TW': '香港', 'zh-CN': '香港'}, official: ['Hong Kong SAR China', '中國香港特別行政區', '中国香港特别行政区']}
+  ],
+  ['TW', ['tw', 'tpe', 'taiwan', 'taipei', '台灣', '台湾', '臺灣', '台北'], {short: {en: 'Taiwan', 'zh-TW': '台灣', 'zh-CN': '台湾'}}],
+  ['JP', ['jp', 'jpn', 'japan', 'tokyo', 'osaka', 'nrt', 'hnd', 'kix', '日本', '東京', '东京', '大阪']],
+  ['SG', ['sg', 'sgp', 'singapore', 'sin', '新加坡', '獅城', '狮城']],
+  [
+    'US',
+    [
+      'us',
+      'usa',
+      'united states',
+      'america',
+      'lax',
+      'sjc',
+      'sea',
+      'nyc',
+      'los angeles',
+      'san jose',
+      'seattle',
+      '美國',
+      '美国',
+      '洛杉磯',
+      '洛杉矶',
+      '聖何塞',
+      '圣何塞',
+      '西雅圖',
+      '西雅图'
+    ]
+  ],
+  ['KR', ['kr', 'kor', 'korea', 'seoul', 'icn', 'south korea', '南韩', '南韓', '韓國', '韩国', '首爾', '首尔'], {short: {'zh-TW': '韓國'}}],
+  ['CA', ['can', 'canada', 'toronto', 'yyz', '加拿大']],
+  ['GB', ['gb', 'uk', 'united kingdom', 'britain', 'london', 'lhr', '英國', '英国', '倫敦', '伦敦']],
+  ['DE', ['de', 'deu', 'germany', 'frankfurt', 'fra', '德國', '德国', '法蘭克福', '法兰克福']],
+  ['FR', ['fr', 'france', 'paris', 'cdg', '法國', '法国', '巴黎']],
+  ['NL', ['nl', 'nld', 'netherlands', 'amsterdam', 'ams', '荷蘭', '荷兰', '阿姆斯特丹']],
+  ['RU', ['ru', 'rus', 'russia', 'moscow', '俄羅斯', '俄罗斯', '莫斯科']],
+  ['AU', ['au', 'aus', 'australia', 'sydney', 'syd', '澳洲', '澳大利亞', '澳大利亚', '悉尼']],
+  ['IN', ['in', 'ind', 'india', 'mumbai', 'bom', '印度', '孟買', '孟买']],
+  ['TR', ['tr', 'tur', 'turkey', 'türkiye', 'istanbul', '土耳其']],
+  ['BR', ['br', 'bra', 'brazil', 'sao paulo', 'gru', '巴西']],
+  ['AR', ['ar', 'arg', 'argentina', '阿根廷']],
+  ['MY', ['my', 'mys', 'malaysia', 'kul', '馬來西亞', '马来西亚']],
+  ['TH', ['th', 'tha', 'thailand', 'bangkok', 'bkk', '泰國', '泰国']],
+  ['VN', ['vn', 'vnm', 'vietnam', '越南']],
+  ['PH', ['ph', 'phl', 'philippines', 'manila', '菲律賓', '菲律宾']],
+  ['ID', ['id', 'idn', 'indonesia', 'jakarta', '印度尼西亚', '印度尼西亞', '印尼']],
+  ['AE', ['ae', 'are', 'uae', 'united arab emirates', '阿联酋', '阿聯酋', 'dubai', 'dxb', '阿聯', '阿联', '杜拜', '迪拜']],
+  ['CH', ['ch', 'che', 'switzerland', 'zurich', '瑞士']],
+  ['SE', ['se', 'swe', 'sweden', 'stockholm', '瑞典']],
+  ['FI', ['fi', 'fin', 'finland', 'helsinki', '芬蘭', '芬兰']],
+  ['IT', ['it', 'ita', 'italy', 'milan', '義大利', '意大利']],
+  ['ES', ['es', 'esp', 'spain', 'madrid', '西班牙']],
+  ['PL', ['pl', 'pol', 'poland', 'warsaw', '波蘭', '波兰']],
+  [
+    'MO',
+    ['mo', 'mac', 'macau', 'macao', '澳門', '澳门'],
+    {short: {en: 'Macao', 'zh-TW': '澳門', 'zh-CN': '澳门'}, official: ['Macao SAR China', '中國澳門特別行政區', '中国澳门特别行政区']}
+  ],
+  ['NZ', ['new zealand', '新西兰', '紐西蘭']],
+  ['MX', ['mexico', '墨西哥']],
+  ['NO', ['norway', '挪威']],
+  ['DK', ['denmark', '丹麦', '丹麥']],
+  ['IE', ['ireland', '爱尔兰', '愛爾蘭']],
+  ['ZA', ['south africa', '南非']],
+  ['IL', ['israel', '以色列']],
+  ['UA', ['ukraine', '乌克兰', '烏克蘭']],
+  ['PT', ['portugal', '葡萄牙']],
+  ['CN', ['cn', 'chn', 'china', 'shanghai', 'beijing', 'shenzhen', '中國', '中国', '上海', '北京', '深圳']],
+  ['KZ', ['kazakhstan', 'almaty', '哈萨克斯坦', '哈薩克斯坦', '哈萨克', '哈薩克']],
+  ['AT', ['austria', 'vienna', '奥地利', '奧地利']],
+  ['BE', ['belgium', 'brussels', '比利时', '比利時']],
+  ['LU', ['luxembourg', '卢森堡', '盧森堡']],
+  ['CZ', ['czech', 'czechia', 'prague', '捷克']],
+  ['RO', ['romania', 'bucharest', '罗马尼亚', '羅馬尼亞']],
+  ['IS', ['iceland', 'reykjavik', '冰岛', '冰島']],
+  ['CL', ['chile', 'santiago', '智利']],
+  ['CO', ['colombia', 'bogota', '哥伦比亚', '哥倫比亞']],
+  ['SA', ['saudi', 'riyadh', '沙特', '沙烏地']],
+  ['PK', ['pakistan', 'karachi', '巴基斯坦']],
+  ['NG', ['nigeria', 'lagos', '尼日利亚', '尼日利亞', '奈及利亞']],
+  ['EG', ['egypt', 'cairo', '埃及']],
+  ['KH', ['cambodia', '柬埔寨']]
+];
+
+export const flagRegions =
+  'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW'.split(
+    ' '
+  );
+export const regionFlag = (region: string) => String.fromCodePoint(...[...region].map(letter => 0x1f1e6 + letter.charCodeAt(0) - 65));
+export const capitalOnlyRegionCodes: Partial<Record<string, true>> = {
+  IN: true,
+  IT: true,
+  MY: true,
+  NO: true,
+  ID: true,
+  KZ: true,
+  AT: true,
+  BE: true,
+  LU: true,
+  CZ: true,
+  RO: true,
+  IS: true,
+  CL: true,
+  CO: true,
+  SA: true,
+  PK: true,
+  NG: true,
+  EG: true,
+  KH: true
+};
+
+// The alias regions, then every other flag with no text alias at all: a two-letter code such as AS or PM would match
+// ordinary words in a node name, so only the flag names those regions.
+export const allRegions: Array<[string, string[], RegionNames?]> = [
+  ...regions,
+  ...flagRegions.filter(code => !regions.some(([iso]) => iso === code)).map((code): [string, string[]] => [code, []])
+];
+
+// Aliases in priority order. ISO codes that are also common words only match in capitals.
+const aliases = regions.flatMap(([iso, keys]) =>
+  [...new Set([iso, ...keys].map(key => (key.toUpperCase() === iso ? iso : key)))].map(key => ({
+    iso,
+    key,
+    exactCase: key.toUpperCase() === iso && capitalOnlyRegionCodes[iso] === true
+  }))
+);
+// One alternation per case rule. A regex takes the leftmost position where any alternative matches and, there,
+// the first alternative that matches. Each alias matches exactly its own length (the case-insensitive folds of
+// these keys are single code units), so sorting longest first, then by priority, picks the alias the old
+// one-regex-per-alias loop picked. Han aliases never share a first character with Latin ones, so the two groups
+// cannot both match at one position; only Latin aliases need whole-word bounds.
+const matchers = [false, true].map(exactCase => {
+  const members = aliases
+    .map((alias, rank) => ({...alias, rank}))
+    .filter(alias => alias.exactCase === exactCase)
+    .sort((a, b) => b.key.length - a.key.length || a.rank - b.rank);
+  const han = members.filter(({key}) => /\p{Script=Han}/u.test(key));
+  const latin = members.filter(member => !han.includes(member));
+  const group = (list: typeof members) => list.map(({key}) => `(${key})`).join('|');
+  const source = [latin.length && `(?<![\\p{L}\\p{M}])(?:${group(latin)})(?![\\p{L}\\p{M}])`, han.length && group(han)].filter(Boolean).join('|');
+  return {members: [...latin, ...han], pattern: new RegExp(source, exactCase ? 'u' : 'iu')};
+});
+// A flag names its region like an alias, so a node called only by its flag is found too.
+const flagPattern = /[\u{1F1E6}-\u{1F1FF}]{2}/gu;
+const regionByFlag = new Map(allRegions.map(([iso]) => [regionFlag(iso), iso]));
+function matchFlag(name: string) {
+  for (const {0: flag, index} of name.matchAll(flagPattern)) {
+    const iso = regionByFlag.get(flag);
+    if (iso) return {iso, index};
+  }
+  return null;
+}
+export function matchRegion(name: string): string | null {
+  // Prefer the first location, then the longest alias (Indonesia before India), then priority.
+  let chosen: {iso: string; index: number; length: number; rank: number} | undefined;
+  for (const {members, pattern} of matchers) {
+    const match = pattern.exec(name);
+    if (!match) continue;
+    const {iso, rank} = members[match.findIndex((group, i) => i > 0 && group !== undefined) - 1];
+    const {index, 0: text} = match;
+    if (!chosen || index < chosen.index || (index === chosen.index && (text.length > chosen.length || (text.length === chosen.length && rank < chosen.rank))))
+      chosen = {iso, index, length: text.length, rank};
+  }
+  // No alias starts with a regional indicator, so a flag never ties with one.
+  const flag = matchFlag(name);
+  return flag && (!chosen || flag.index < chosen.index) ? flag.iso : (chosen?.iso ?? null);
+}

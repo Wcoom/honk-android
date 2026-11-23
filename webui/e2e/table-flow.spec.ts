@@ -1,0 +1,408 @@
+import {expect, fulfillStream, mockBackend, test, box, settleFrames} from './fixtures';
+import type {Page} from '@playwright/test';
+
+async function feed(page: Page, kind: 'events' | 'logs', count: number) {
+  const {api, capabilities} = await mockBackend(page);
+  capabilities.resources.events.available = kind === 'events';
+  const runtime = await api.runtime();
+  const data = {instance_id: runtime.instance_id, observed_at: runtime.observed_at};
+  const frame = (id: number) =>
+    kind === 'logs'
+      ? {id: `log:${id}`, event: 'log', data: {ts: runtime.observed_at, level: 'info', target: 'honk::dns', message: `Record ${id}`, fields: null}}
+      : {id: `event:${id}`, event: 'stream.ready', data: {...data, instance_id: `Record ${id}`}};
+  await page.addInitScript(
+    ({kind, records}) => {
+      const fetch = window.fetch;
+      const encode = (record: unknown) => {
+        const r = record as {id: string; event: string; data: unknown};
+        return new TextEncoder().encode(`id: ${r.id}\nevent: ${r.event}\ndata: ${JSON.stringify(r.data)}\n\n`);
+      };
+      window.fetch = (input, init) => {
+        const url = String(input instanceof Request ? input.url : input);
+        if (!new URL(url, location.href).pathname.endsWith(`/api/v1/${kind}`)) return fetch(input, init);
+        const body = new ReadableStream({
+          start(controller) {
+            for (const record of records) controller.enqueue(encode(record));
+            (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord = record => controller.enqueue(encode(record));
+          }
+        });
+        return Promise.resolve(new Response(body, {headers: {'Content-Type': 'text/event-stream'}}));
+      };
+    },
+    {kind, records: [...(kind === 'logs' ? [{id: 'ready:0', event: 'stream.ready', data}] : []), ...Array.from({length: count}, (_, i) => frame(i + 1))]}
+  );
+  await page.goto(`/#/${kind}`);
+  const grid = page.getByRole('grid', {name: kind === 'logs' ? 'Logs' : 'Events', exact: true});
+  await expect(grid).toHaveAttribute('aria-rowcount', String(Math.min(count, kind === 'logs' ? 1000 : 200) + 1));
+  return {grid, frame};
+}
+
+for (const kind of ['events', 'logs'] as const) {
+  test(`${kind} renew selection state when rows arrive`, async ({page}) => {
+    const {grid, frame} = await feed(page, kind, 200);
+    const freshSelection = () =>
+      grid.evaluate(element => {
+        // RAC passes this state to useGridState, which mutates its focus setter on every collection render.
+        type Fiber = {return: Fiber | null; child: Fiber | null; sibling: Fiber | null; stateNode: {current: Fiber}; memoizedProps?: {selectionState?: object}};
+        const key = Object.keys(element).find(key => key.startsWith('__reactFiber$'))!;
+        let root = (element as unknown as Record<string, Fiber>)[key];
+        while (root.return) root = root.return;
+        const pending = [root.stateNode.current];
+        const probe = window as unknown as {selectionStates?: WeakSet<object>};
+        probe.selectionStates ??= new WeakSet();
+        while (pending.length) {
+          const fiber = pending.pop()!;
+          const state = fiber.memoizedProps?.selectionState;
+          if (state) {
+            const fresh = !probe.selectionStates.has(state);
+            probe.selectionStates.add(state);
+            return fresh;
+          }
+          if (fiber.child) pending.push(fiber.child);
+          if (fiber.sibling) pending.push(fiber.sibling);
+        }
+        throw new Error('RAC selection state was not found');
+      });
+    expect(await freshSelection()).toBe(true);
+    for (let id = 201; id <= 208; id++) {
+      await page.evaluate(record => (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord(record), frame(id));
+      await expect(grid.getByRole('rowheader').first()).toHaveText(`Record ${id}`);
+      expect(await freshSelection()).toBe(true);
+    }
+  });
+}
+
+test('events yield prepend anchoring to upward wheel scrolling', async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 900});
+  const {grid, frame} = await feed(page, 'events', 200);
+  await page.mouse.move(1000, 400);
+  await page.mouse.wheel(0, 4000);
+  await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(3500);
+  await settleFrames(page);
+  const before = await page.evaluate(() => scrollY);
+  const held = await grid.locator('[role=row][data-key]').evaluateAll(rows => {
+    const row = rows.find(row => row.getBoundingClientRect().top >= 110 && row.getBoundingClientRect().bottom <= innerHeight)!;
+    return {key: row.getAttribute('data-key')!, index: Number(row.getAttribute('aria-rowindex'))};
+  });
+  await page.mouse.wheel(0, -240);
+  await page.evaluate(
+    records => {
+      for (const record of records) (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord(record);
+    },
+    Array.from({length: 8}, (_, index) => frame(201 + index))
+  );
+  await expect(grid.locator(`[data-key="${held.key}"]`)).toHaveAttribute('aria-rowindex', String(held.index + 8));
+  await settleFrames(page);
+  expect(await page.evaluate(() => scrollY)).toBeLessThan(before);
+
+  // Let the wheel gesture settle before checking that reading-position anchoring resumes.
+  await page.waitForTimeout(300);
+  const resting = await grid.locator('[role=row][data-key]').evaluateAll(rows => {
+    const row = rows.find(row => row.getBoundingClientRect().top >= 110 && row.getBoundingClientRect().bottom <= innerHeight)!;
+    return {key: row.getAttribute('data-key')!, top: row.getBoundingClientRect().top, index: Number(row.getAttribute('aria-rowindex'))};
+  });
+  await page.evaluate(record => (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord(record), frame(209));
+  const restingRow = grid.locator(`[data-key="${resting.key}"]`);
+  await expect(restingRow).toHaveAttribute('aria-rowindex', String(resting.index + 1));
+  await expect.poll(() => restingRow.evaluate(el => el.getBoundingClientRect().top)).toBe(resting.top);
+});
+
+for (const kind of ['events', 'logs'] as const) {
+  test(`${kind} retain prepend anchoring during horizontal wheel input`, async ({page}) => {
+    await page.setViewportSize({width: 1440, height: 900});
+    const {grid, frame} = await feed(page, kind, 200);
+    await page.evaluate(() => window.scrollTo(0, 4000));
+    await settleFrames(page);
+    const held = await grid.locator('[role=row][data-key]').evaluateAll(rows => {
+      const row = rows.find(row => row.getBoundingClientRect().top >= 110 && row.getBoundingClientRect().bottom <= innerHeight)!;
+      return {key: row.getAttribute('data-key')!, top: row.getBoundingClientRect().top, index: Number(row.getAttribute('aria-rowindex'))};
+    });
+    await page.mouse.move(1000, 400);
+    await page.mouse.wheel(240, 0);
+    await page.evaluate(record => (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord(record), frame(201));
+    const row = grid.locator(`[data-key="${held.key}"]`);
+    await expect(row).toHaveAttribute('aria-rowindex', String(held.index + 1));
+    await settleFrames(page);
+    expect(await row.evaluate(element => element.getBoundingClientRect().top)).toBe(held.top);
+  });
+}
+
+test('events retain prepend anchoring while a box that scrolls on its own takes the wheel', async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 900});
+  const {grid, frame} = await feed(page, 'events', 200);
+  await page.evaluate(() => window.scrollTo(0, 4000));
+  await page.evaluate(() => {
+    const scroller = Object.assign(document.createElement('div'), {style: 'position:fixed;left:900px;top:300px;width:240px;height:240px;overflow-y:auto'});
+    scroller.append(Object.assign(document.createElement('div'), {style: 'height:2400px'}));
+    document.body.append(scroller);
+    scroller.scrollTop = 1000;
+  });
+  await settleFrames(page);
+  const held = await grid.locator('[role=row][data-key]').evaluateAll(rows => {
+    const row = rows.find(row => row.getBoundingClientRect().top >= 110 && row.getBoundingClientRect().bottom <= innerHeight)!;
+    return {key: row.getAttribute('data-key')!, top: row.getBoundingClientRect().top, index: Number(row.getAttribute('aria-rowindex'))};
+  });
+  await page.mouse.move(1000, 400);
+  await page.mouse.wheel(0, -240);
+  await page.evaluate(record => (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord(record), frame(201));
+  const row = grid.locator(`[data-key="${held.key}"]`);
+  await expect(row).toHaveAttribute('aria-rowindex', String(held.index + 1));
+  await settleFrames(page);
+  expect(await row.evaluate(element => element.getBoundingClientRect().top)).toBe(held.top);
+});
+
+test.describe('touch flow', () => {
+  test.use({viewport: {width: 390, height: 844}, hasTouch: true});
+
+  test('events retain prepend anchoring during a sideways swipe and yield to a vertical one', async ({page}) => {
+    const {grid, frame} = await feed(page, 'events', 200);
+    await page.evaluate(() => window.scrollTo(0, 4000));
+    await settleFrames(page);
+    const cdp = await page.context().newCDPSession(page);
+    const swipe = async (x: number, y: number) => {
+      await cdp.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x: 200, y: 500}]});
+      for (let step = 1; step <= 8; step++)
+        await cdp.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: [{x: 200 + (x * step) / 8, y: 500 + (y * step) / 8}]});
+      await cdp.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+    };
+    const reading = () =>
+      grid.locator('[role=row][data-key]').evaluateAll(rows => {
+        const row = rows.find(row => row.getBoundingClientRect().top >= 110 && row.getBoundingClientRect().bottom <= innerHeight)!;
+        return {key: row.getAttribute('data-key')!, top: row.getBoundingClientRect().top, index: Number(row.getAttribute('aria-rowindex'))};
+      });
+    const append = (id: number) => page.evaluate(record => (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord(record), frame(id));
+    const sideways = await reading();
+    await swipe(-160, 0);
+    expect(await page.evaluate(() => scrollY)).toBe(4000);
+    await append(201);
+    const row = grid.locator(`[data-key="${sideways.key}"]`);
+    await expect(row).toHaveAttribute('aria-rowindex', String(sideways.index + 1));
+    await settleFrames(page);
+    expect(await row.evaluate(element => element.getBoundingClientRect().top)).toBe(sideways.top);
+
+    // A vertical swipe moves the page, so the next prepend leaves the view to it instead of scrolling by a row.
+    await page.waitForTimeout(300);
+    const resting = await page.evaluate(() => scrollY);
+    await swipe(0, 120);
+    await page.evaluate(() => {
+      const scrollBy = window.scrollBy.bind(window);
+      (window as unknown as {compensated: number}).compensated = 0;
+      window.scrollBy = ((...args: [number, number]) => {
+        (window as unknown as {compensated: number}).compensated++;
+        scrollBy(...args);
+      }) as typeof window.scrollBy;
+    });
+    await append(202);
+    await expect(row).toHaveAttribute('aria-rowindex', String(sideways.index + 2));
+    expect(await page.evaluate(() => scrollY)).toBeLessThan(resting);
+    expect(await page.evaluate(() => (window as unknown as {compensated: number}).compensated)).toBe(0);
+  });
+});
+
+for (const viewport of [
+  {width: 1440, height: 900},
+  {width: 1700, height: 1150},
+  {width: 768, height: 1024},
+  {width: 390, height: 844}
+]) {
+  test.describe(`${viewport.width}px flow`, () => {
+    test.use({viewport});
+    for (const kind of ['events', 'logs'] as const) {
+      test(`${kind} scroll with the page, keep headings and virtualise rows`, async ({page}) => {
+        const {grid, frame} = await feed(page, kind, kind === 'logs' ? 2000 : 200);
+        const mounted = grid.locator('[role=row][data-key]');
+        const geometry = () => grid.evaluate(el => ({height: el.clientHeight, overflow: el.scrollHeight - el.clientHeight, top: el.scrollTop}));
+        await expect.poll(async () => (await geometry()).height).toBeGreaterThan(viewport.height);
+        await expect.poll(async () => (await geometry()).overflow).toBeLessThanOrEqual(1);
+        expect(await mounted.count()).toBeLessThan(150);
+        await page.evaluate(() => window.scrollTo(0, 2400));
+        await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(2000);
+        const heading = grid.getByRole('columnheader').first();
+        await expect.poll(async () => Math.round((await box(heading)).y)).toBe(64);
+        expect((await geometry()).top).toBe(0);
+        expect(await mounted.count()).toBeLessThan(150);
+        const visible = await mounted.evaluateAll(rows =>
+          rows
+            .filter(row => row.getBoundingClientRect().top >= 110 && row.getBoundingClientRect().bottom <= innerHeight)
+            .map(row => ({key: row.getAttribute('data-key')!, top: row.getBoundingClientRect().top, index: Number(row.getAttribute('aria-rowindex'))}))
+        );
+        expect(visible.length).toBeGreaterThan(0);
+        const held = visible[0];
+        await page.evaluate(record => (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord(record), frame(2001));
+        await expect(grid.locator(`[data-key="${held.key}"]`)).toHaveAttribute('aria-rowindex', String(held.index + 1));
+        await expect.poll(() => grid.locator(`[data-key="${held.key}"]`).evaluate(el => el.getBoundingClientRect().top)).toBe(held.top);
+        // Keyboard navigation crosses the virtual window without selecting on focus.
+        const row = grid.locator(`[data-key="${held.key}"]`);
+        await row.click();
+        await expect(page.locator('.rp-table-detail')).toBeInViewport();
+        await page.getByRole('button', {name: 'Close', exact: true}).click();
+        await expect(page.locator('.rp-table-detail')).toBeEmpty();
+        await expect.poll(() => page.evaluate(() => document.activeElement?.closest('[data-key]')?.getAttribute('data-key'))).toBe(held.key);
+        await page.keyboard.press('PageDown');
+        await expect.poll(() => page.evaluate(() => document.activeElement?.closest('[data-key]')?.getAttribute('data-key'))).not.toBe(held.key);
+        const nextIndex = await page.evaluate(() => Number(document.activeElement?.closest('[data-key]')?.getAttribute('aria-rowindex')));
+        expect(nextIndex - held.index - 1).toBeGreaterThan(1);
+        expect(nextIndex - held.index - 1).toBeLessThanOrEqual(Math.ceil(viewport.height / 40));
+        await page.keyboard.press('End');
+        const last = kind === 'logs' ? 'log:1002' : 'stream.ready:event:2';
+        await expect(grid.locator(`[data-key="${last}"]`)).toBeInViewport();
+        await expect.poll(() => page.evaluate(() => document.activeElement?.closest('[data-key]')?.getAttribute('data-key'))).toBe(last);
+        await page.keyboard.press('Home');
+        const first = grid.locator(`[data-key="${kind === 'logs' ? 'log:2001' : 'stream.ready:event:2001'}"]`);
+        await expect(first).toBeInViewport();
+        await expect.poll(async () => (await box(first)).y).toBeGreaterThanOrEqual(101);
+        await page.keyboard.press('End');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.rp-table-detail')).toContainText(kind === 'logs' ? 'Record 1002' : 'Record 2');
+        expect(await mounted.count()).toBeLessThan(150);
+        expect((await geometry()).top).toBe(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+      });
+    }
+  });
+}
+
+for (const viewport of [
+  {width: 390, height: 844},
+  {width: 1440, height: 900}
+]) {
+  test.describe(`${viewport.width}px detail`, () => {
+    test.use({viewport});
+    for (const kind of ['events', 'logs'] as const) {
+      test(`${kind} reveal End above the open detail`, async ({page}) => {
+        const {grid} = await feed(page, kind, 200);
+        const selectedKey = kind === 'logs' ? 'log:200' : 'stream.ready:event:200';
+        const selected = grid.locator(`[data-key="${selectedKey}"]`);
+        await selected.click();
+        await page.keyboard.press('End');
+        const lastKey = kind === 'logs' ? 'log:1' : 'stream.ready:event:1';
+        const last = grid.locator(`[data-key="${lastKey}"]`);
+        await expect(last).toBeFocused();
+        const detail = page.locator('.rp-table-detail');
+        await expect
+          .poll(async () => {
+            const row = await box(last);
+            const panel = await box(detail);
+            return panel.y - row.y - row.height;
+          })
+          .toBeGreaterThanOrEqual(0);
+      });
+      test(`${kind} restore focus after the selected row is unmounted`, async ({page}) => {
+        const {grid} = await feed(page, kind, 200);
+        const selectedKey = kind === 'logs' ? 'log:200' : 'stream.ready:event:200';
+        const selected = grid.locator(`[data-key="${selectedKey}"]`);
+        await selected.click();
+        await page.keyboard.press('End');
+        await expect(grid.locator(`[data-key="${kind === 'logs' ? 'log:1' : 'stream.ready:event:1'}"]`)).toBeFocused();
+        const detail = page.locator('.rp-table-detail');
+        await expect(selected).toHaveCount(0);
+        await page.keyboard.press('Tab');
+        await expect(detail.getByRole('button', {name: 'Close', exact: true})).toBeFocused();
+        await page.keyboard.press('Enter');
+        await expect(detail).toBeEmpty();
+        await expect(selected).toBeFocused();
+        await expect(selected).toHaveAttribute('data-focus-visible');
+        await expect.poll(async () => (await box(selected)).y).toBeGreaterThanOrEqual(101);
+        await page.keyboard.press('ArrowDown');
+        await expect(grid.locator(`[data-key="${kind === 'logs' ? 'log:199' : 'stream.ready:event:199'}"]`)).toBeFocused();
+      });
+    }
+    test('logs return focus to the grid when the selected record is evicted', async ({page}) => {
+      const {grid, frame} = await feed(page, 'logs', 1000);
+      await grid.locator('[data-key="log:1000"]').focus();
+      await page.keyboard.press('End');
+      await page.keyboard.press('Enter');
+      const detail = page.locator('.rp-table-detail');
+      await expect(detail).toContainText('Record 1');
+      await detail.getByRole('button', {name: 'Close', exact: true}).focus();
+      await page.evaluate(record => (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord(record), frame(1001));
+      await expect(detail).toBeEmpty();
+      await expect.poll(() => grid.evaluate(el => el.contains(document.activeElement))).toBe(true);
+    });
+  });
+}
+
+test('navigation releases hover and press when the pointer leaves after a route change', async ({page}) => {
+  await page.setViewportSize({width: 1700, height: 1150});
+  const {api} = await mockBackend(page);
+  // The Logs page opens its stream when it mounts; serve it, since a busy run can reach the request before leaving.
+  const runtime = await api.runtime();
+  await page.route('**/api/v1/logs?*', route =>
+    fulfillStream(route, [{id: 'ready:0', event: 'stream.ready', data: {instance_id: runtime.instance_id, observed_at: runtime.observed_at}}])
+  );
+  await page.goto('/#/events');
+  const logs = page.locator('.rp-nav[href="#/logs"]');
+  const events = page.locator('.rp-nav[href="#/events"]');
+  await logs.click();
+  await events.click();
+  await page.locator('.rp-nav[href="#/overview"]').hover();
+  await expect(events).toHaveAttribute('aria-current', 'page');
+  for (const attr of ['data-hovered', 'data-pressed', 'data-focus-visible']) await expect(logs).not.toHaveAttribute(attr);
+});
+
+for (const kind of ['events', 'logs'] as const) {
+  test(`${kind} fit a single row without an empty band`, async ({page}) => {
+    const {grid, frame} = await feed(page, kind, 1);
+    await expect(grid.getByRole('rowheader')).toHaveCount(1);
+    expect((await box(grid)).height).toBe(77);
+    expect(await grid.evaluate(el => el.scrollHeight - el.clientHeight)).toBe(0);
+    await page.evaluate(record => (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord(record), frame(2));
+    await expect(grid.getByRole('rowheader').first()).toHaveText('Record 2');
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  });
+}
+
+// Counts, per React commit, the components that rendered a mounted row element. A fiber still in the tree from the
+// previous commit was not rendered again; one swapped in for it was, when React marked it as having performed work.
+function countRowRenders() {
+  const target = window as unknown as {rowRenders: number};
+  target.rowRenders = 0;
+  let previous = new WeakSet<object>();
+  type Fiber = {tag: number; flags: number; stateNode: unknown; child: Fiber | null; sibling: Fiber | null; return: Fiber | null};
+  (window as unknown as {__REACT_DEVTOOLS_GLOBAL_HOOK__: object}).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+    supportsFiber: true,
+    renderers: new Map(),
+    inject: () => 1,
+    checkDCE() {},
+    onScheduleFiberRoot() {},
+    onCommitFiberUnmount() {},
+    onPostCommitFiberRoot() {},
+    onCommitFiberRoot(_: number, root: {current: Fiber}) {
+      const seen = new WeakSet<object>();
+      const rendered = (fiber: Fiber) => !previous.has(fiber) && (fiber.flags & 1) === 1;
+      const visit = (start: Fiber | null) => {
+        for (let fiber = start; fiber; fiber = fiber.sibling) {
+          seen.add(fiber);
+          const node = fiber.stateNode;
+          if (node instanceof Element && node.matches('[role=row][data-key]')) {
+            let owner = fiber.return;
+            // Function, forwardRef and memo components.
+            while (owner && ![0, 11, 14, 15].includes(owner.tag)) owner = owner.return;
+            if (owner && rendered(owner)) target.rowRenders++;
+          }
+          visit(fiber.child);
+        }
+      };
+      visit(root.current.child);
+      previous = seen;
+    }
+  };
+}
+
+for (const kind of ['events', 'logs'] as const) {
+  test(`${kind} render each mounted row once per published batch`, async ({page}) => {
+    await page.addInitScript(countRowRenders);
+    const {grid, frame} = await feed(page, kind, kind === 'logs' ? 1200 : 300);
+    const mounted = grid.locator('[role=row][data-key]');
+    await expect.poll(() => mounted.count()).toBeGreaterThan(5);
+    for (let i = 1; i <= 3; i++) {
+      // The list holds as many records as it keeps, so a record in replaces one out and the row count stays the same.
+      await page.waitForTimeout(500);
+      await page.evaluate(() => ((window as unknown as {rowRenders: number}).rowRenders = 0));
+      await page.evaluate(record => (window as unknown as {appendRecord: (record: unknown) => void}).appendRecord(record), frame(5000 + i));
+      await expect(grid.getByRole('rowheader').first()).toHaveText(`Record ${5000 + i}`);
+      await page.waitForTimeout(500);
+      expect(await page.evaluate(() => (window as unknown as {rowRenders: number}).rowRenders)).toBeLessThanOrEqual(await mounted.count());
+    }
+  });
+}

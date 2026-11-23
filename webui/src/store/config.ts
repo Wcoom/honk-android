@@ -1,0 +1,288 @@
+import {ApiError, clientError} from '../api/error';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {getApi} from '../api/index';
+import type {ConfigSource, ConfigValidationRequest, ConfigValidationResult, OperationAccepted} from '../api/model';
+import {LocalError} from '../api/error';
+import {sha256} from '../api/hash';
+import {useResource} from './resource';
+import {useCapabilities} from './runtime';
+import {activationError, etag, finished, settle, useAction} from './action';
+import type {Api} from '../api/api';
+import type {EngineConfig} from '../api/engines';
+import {refetchAll} from './resourceCore';
+import {sourceAt} from '../dae/newSource';
+import {sharedControl, useSharedControl} from './sharedControl';
+
+export function useConfig(enabled = true) {
+  const api = getApi();
+  return useResource({key: ['config'], every: 0, fetch: signal => api.config(signal)}, {enabled});
+}
+
+// The configuration as the backend holds it now, read past the watched resource, for a check that must see the
+// latest revision rather than the one last fetched. The watched resource is left as it is.
+export function readConfigFresh(api: Api, signal: AbortSignal) {
+  return api.config(signal);
+}
+
+async function completeSource(source: Pick<ConfigSource, 'content' | 'content_sha256'>): Promise<boolean> {
+  return source.content !== undefined && (await sha256(source.content)) === source.content_sha256;
+}
+
+// Whether a text matches its digest depends on nothing else, so the verdicts are kept for the session by source, digest
+// and text: a page opened again, or a refetch of the same text, answers at once instead of dropping back to unknown.
+// Each batch of new verdicts replaces the map, so a hook holding the map it last read re-renders only for new answers.
+type Verdicts = ReadonlyMap<string, {content: string | undefined; complete: boolean}>;
+let verdicts: Verdicts = new Map();
+const VERDICTS_KEPT = 64;
+const activeSources = new Set<ReadonlySet<string>>();
+const verdictKey = (source: ConfigSource) => `${source.id}\u0000${source.content_sha256}`;
+const verdictIn = (known: Verdicts, source: ConfigSource) => {
+  const found = known.get(verdictKey(source));
+  return found && found.content === source.content ? found.complete : undefined;
+};
+const answered = (known: Verdicts, sources: ConfigSource[]) => sources.every(source => verdictIn(known, source) !== undefined);
+
+// Whether each source's text matches its digest; undefined until checked.
+export function useCompleteness(sources: ConfigSource[]): (source: ConfigSource) => boolean | undefined {
+  const [known, setKnown] = useState(verdicts);
+  useEffect(() => {
+    const held = new Set(sources.map(verdictKey));
+    activeSources.add(held);
+    let live = true;
+    const show = () => setKnown(current => (answered(current, sources) ? current : verdicts));
+    const unknown = sources.filter(source => verdictIn(verdicts, source) === undefined);
+    if (!unknown.length) {
+      show();
+    } else
+      void Promise.all(unknown.map(async source => [source, await completeSource(source)] as const)).then(results => {
+        const next = new Map(verdicts);
+        for (const [source, complete] of results) {
+          next.delete(verdictKey(source));
+          next.set(verdictKey(source), {content: source.content, complete});
+        }
+        const active = new Set([...activeSources].flatMap(keys => [...keys]));
+        for (const key of next.keys()) if (next.size > VERDICTS_KEPT && !active.has(key)) next.delete(key);
+        verdicts = next;
+        if (live) show();
+      });
+    return () => {
+      live = false;
+      activeSources.delete(held);
+    };
+  }, [sources]);
+  return useCallback((source: ConfigSource) => verdictIn(known, source), [known]);
+}
+
+// One source's verdict: null until checked, and for no source at all.
+export function useSourceComplete(source: ConfigSource | null): boolean | null {
+  const sources = useMemo(() => (source ? [source] : []), [source]);
+  const isComplete = useCompleteness(sources);
+  return source ? (isComplete(source) ?? null) : null;
+}
+
+// A 412 on replacing `source`, given the digest the backend reports for it after a refetch (undefined when that
+// failed). A new digest means the file changed, which the editor then puts to the person. The same digest refused
+// twice in a row means the disk is ahead of the running configuration and no refetch helps; the first may only be a
+// reload still in progress. Returns the error to raise and the refusal to remember for the next 412.
+export function refusalOutcome(
+  error: ApiError,
+  source: Pick<ConfigSource, 'id' | 'content_sha256'>,
+  current: string | undefined,
+  lastRefused: string | null
+): {error: Error; lastRefused: string | null} {
+  if (current !== source.content_sha256) return {error, lastRefused};
+  const refused = source.id + ':' + source.content_sha256;
+  return refused === lastRefused ? {error: new LocalError('config.diskAhead'), lastRefused} : {error, lastRefused: refused};
+}
+
+// Advertised byte limits for one kind of write, from discovery; either may be missing on an older backend.
+type WriteLimits = {content?: number; body?: number};
+const utf8 = (text: string) => new TextEncoder().encode(text).length;
+const tooLarge = (limit: number) => clientError(413, 'request_too_large', `Configuration exceeds the ${limit}-byte limit`, 'config.tooLarge', {limit});
+
+// The contract applies the content limit to the source text and the shared JSON body limit to the request, which
+// escaping makes larger than the text. Returns the advertised limit this write uses the largest share of: the one it
+// exceeds, if any, and otherwise the likeliest cause of a 413, which does not say which limit refused it.
+export function closestLimit(limits: WriteLimits, content: string, body: unknown): {limit: number; exceeded: boolean} | undefined {
+  const [closest] = [
+    {limit: limits.content, size: utf8(content)},
+    {limit: limits.body, size: utf8(JSON.stringify(body))}
+  ]
+    .filter((share): share is {limit: number; size: number} => share.limit !== undefined)
+    .sort((a, b) => b.size / b.limit - a.size / a.limit);
+  return closest && {limit: closest.limit, exceeded: closest.size > closest.limit};
+}
+
+export async function withinLimits<T>(limits: WriteLimits, content: string, body: unknown, send: () => Promise<T>): Promise<T> {
+  const closest = closestLimit(limits, content, body);
+  if (closest?.exceeded) throw tooLarge(closest.limit);
+  return send().catch((error: unknown) => {
+    throw error instanceof ApiError && error.status === 413 && closest ? tooLarge(closest.limit) : error;
+  });
+}
+
+// Creates an empty source at `path` and returns the id the reloaded configuration lists it under, or null when it
+// lists none there. A failed reload removes the new file, which the operation reports as not written. Once the reload
+// succeeded the file exists, so a failed read-back only leaves the id unknown: the create still succeeded.
+export async function createSource(api: Api, path: string, signal: AbortSignal): Promise<string | null> {
+  const accepted = await api.createConfigSource(path, '', signal).catch(error => {
+    throw activationError(error) ?? error;
+  });
+  const operation = await settle(api, accepted, signal);
+  finished(operation, 'reload');
+  signal.throwIfAborted();
+  const config = await readConfigFresh(api, signal).catch(() => {
+    signal.throwIfAborted();
+    return null;
+  });
+  return config && (sourceAt(config.sources, path)?.id ?? null);
+}
+
+export function useConfigCreate(refetch: () => void) {
+  const api = getApi();
+  const {busy, run} = useAction<'create'>({rethrow: true});
+  return {
+    busy: busy !== null,
+    create: useCallback(
+      (path: string) =>
+        run('create', async signal => {
+          const id = await createSource(api, path, signal).finally(refetch);
+          return {id};
+        }),
+      [api, run, refetch]
+    )
+  };
+}
+
+export type ConfigTransform = (
+  text: string,
+  validate: (request: ConfigValidationRequest) => Promise<ConfigValidationResult>
+) => string | null | Promise<string | null>;
+
+// `refetch` may return the read it starts: the write then settles once the new configuration is read back, so a caller that
+// drops its draft on success is not left showing the old text with the old digest. A read that fails after the write
+// landed ends the action with `ui.writtenNotRead`, so the draft stays until the read succeeds.
+export function useConfigEditor(refetch: () => unknown, {rethrow = false, shared}: {rethrow?: boolean; shared?: string} = {}) {
+  const api = getApi();
+  const capabilities = useCapabilities().data;
+  const validation = capabilities?.resources.config_validate;
+  const canValidate = validation?.available === true && validation.modes?.includes('full') === true;
+  const body = capabilities?.limits.max_json_body_bytes;
+  const writeMax = capabilities?.resources.config.max_bytes;
+  const validateMax = validation?.max_bytes;
+  const validateConfig = useCallback(
+    (request: ConfigValidationRequest, signal: AbortSignal) =>
+      withinLimits({content: validateMax, body}, request.sources.map(source => source.content ?? '').join(''), request, () =>
+        api.validateConfig(request, signal)
+      ),
+    [api, validateMax, body]
+  );
+  const {busy, error, run, cancel} = useAction<'validate' | 'save'>({rethrow, shared});
+  const [sourceId, setSourceId] = useState<string | null>(null);
+  const lastRefused = useRef<string | null>(null);
+  return {
+    busy,
+    cancel,
+    error,
+    errorSource: error ? sourceId : null,
+    validate: useCallback(
+      (request: ConfigValidationRequest): Promise<ConfigValidationResult | undefined> =>
+        run('validate', signal => {
+          setSourceId(request.sources.length === 1 ? (request.sources[0].id ?? null) : null);
+          return validateConfig(request, signal);
+        }),
+      [validateConfig, run]
+    ),
+    apply: useCallback(
+      (source: ConfigSource, candidate: string | ConfigTransform) =>
+        run('save', async signal => {
+          setSourceId(source.id);
+          if (!source.writable) throw new LocalError('config.readOnly');
+          if (!(await completeSource(source))) throw new LocalError('config.incomplete');
+          signal.throwIfAborted();
+          const content = typeof candidate === 'string' ? candidate : await candidate(source.content!, request => validateConfig(request, signal));
+          signal.throwIfAborted();
+          if (content === null) return undefined;
+          if (canValidate && source.kind === 'main' && source.path !== '<redacted>') {
+            const check = await validateConfig({sources: [{id: source.id, path: source.path, content}], mode: 'full'}, signal);
+            signal.throwIfAborted();
+            if (!check.valid) return {diagnostics: check.diagnostics};
+          }
+          const accepted = await withinLimits({content: writeMax, body}, content, {content}, () =>
+            api.replaceConfigSource(source.id, content, etag(source.content_sha256), signal)
+          ).catch(async error => {
+            // A 409 is a change the If-Match still matched, or another write still activating: nothing was stored and
+            // the validated candidate is stale, so the next attempt starts from a fresh read.
+            if (error instanceof ApiError && error.status === 409 && error.code === 'state_conflict') {
+              refetch();
+              throw new LocalError('config.changedMeanwhile');
+            }
+            if (!(error instanceof ApiError) || error.status !== 412) throw activationError(error) ?? error;
+            // The file changed on disk: fetch it, so the next attempt starts from what is there rather than 412 again.
+            const fresh = await readConfigFresh(api, signal).catch(() => null);
+            refetch();
+            const outcome = refusalOutcome(error, source, fresh?.sources.find(item => item.id === source.id)?.content_sha256, lastRefused.current);
+            lastRefused.current = outcome.lastRefused;
+            throw outcome.error;
+          });
+          lastRefused.current = null;
+          signal.throwIfAborted();
+          const operation = await settle(api, accepted, signal);
+          signal.throwIfAborted();
+          const read = (await refetch()) as {ok?: boolean; error?: Error} | undefined;
+          const result = finished(operation, 'reload', {written: true});
+          if (read?.ok === false && read.error?.name !== 'AbortError') throw new LocalError('ui.writtenNotRead');
+          return {result};
+        }),
+      [api, canValidate, validateConfig, writeMax, body, run, refetch]
+    )
+  };
+}
+
+export function useConfigRevisions(config: EngineConfig | null, enabled: boolean) {
+  const api = getApi();
+  return useResource({key: ['configRevisions'], every: 0, fetch: signal => api.configRevisions(config!, signal)}, {enabled: !!config && enabled});
+}
+type RevisionPending = {revision: number | null; head: number | null | undefined; operation: OperationAccepted};
+export function useConfigRevisionAction(config: EngineConfig | null) {
+  const api = getApi();
+  const action = useAction<'import' | 'activate' | 'read'>({shared: 'config-revisions', rethrow: true});
+  const [pending, setPending] = useSharedControl<RevisionPending | null>('config-revisions-pending', null);
+  return {
+    ...action,
+    pending,
+    apply: (revision: number | null, replace: boolean, head: number | null | undefined) =>
+      action.run(revision === null ? 'import' : 'activate', async signal => {
+        if (!config || sharedControl<RevisionPending | null>(api, 'config-revisions-pending', null).value) return;
+        try {
+          if (head !== undefined) {
+            const fresh = await api.configRevisions(config, signal);
+            if (fresh.active !== head) return {changed: fresh.active};
+          }
+          const accepted = await (revision === null ? api.importConfig(config, replace, signal) : api.activateConfigRevision(config, revision, signal)).catch(
+            error => {
+              throw activationError(error) ?? error;
+            }
+          );
+          setPending({revision, head, operation: accepted});
+          const operation = await settle(api, accepted, signal);
+          setPending(null);
+          return {result: finished(operation, 'reload')};
+        } finally {
+          if (getApi() === api) void refetchAll();
+        }
+      }),
+    reread: () =>
+      action.run('read', async signal => {
+        const retained = sharedControl<RevisionPending | null>(api, 'config-revisions-pending', null).value;
+        if (!retained) return;
+        try {
+          const operation = await settle(api, retained.operation, signal);
+          setPending(null);
+          return {result: finished(operation, 'reload')};
+        } finally {
+          if (getApi() === api) void refetchAll();
+        }
+      })
+  };
+}

@@ -1,0 +1,846 @@
+/* Holds a chart's or a card body's height while its first data arrives, so the card does not jump. */
+.rp-chart-wait {
+  min-height: 182px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.rp-chart-wait.tall {
+  min-height: 264px;
+}
+.rp-chart-wait.swarm {
+  min-height: 381px;
+}
+.rp-chart-wait.bars {
+  min-height: 136px;
+}
+/* The runtime settings form: a row of described fields, the recorders and the apply row. */
+.rp-chart-wait.form {
+  min-height: 204px;
+}
+/* S2's Skeleton (Skeleton.tsx): placeholder blocks in the loaded body's own grid and lines, so the card keeps its
+   height when the values arrive. The shimmer is S2's: a 300% gradient from the base fill to a lighter one, swept every
+   2s; reduced motion keeps the still base fill. */
+.rp-skeleton {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-3);
+}
+.rp-skeleton-text {
+  display: inline-block;
+  width: 50%;
+  height: 1em;
+  vertical-align: middle;
+  border-radius: 4px;
+}
+.rp-skeleton-text,
+.rp-skeleton-cards > .rp-card::after {
+  background-image: linear-gradient(to right, var(--rp-hl-med) 33%, var(--rp-hl-low), var(--rp-hl-med) 66%);
+  background-size: 300%;
+}
+:root[data-scheme='dark'] :is(.rp-skeleton-text, .rp-skeleton-cards > .rp-card::after) {
+  background-image: linear-gradient(to right, var(--rp-hl-med) 33%, var(--rp-hl-high), var(--rp-hl-med) 66%);
+}
+/* A label with a help button: its line is the button's height (buttons-menus.css), as the loaded label's is. */
+.rp-skeleton .k.helped {
+  display: flex;
+  align-items: center;
+  height: var(--rp-control-xs);
+}
+.rp-skeleton .v > .rp-skeleton-text {
+  width: 75%;
+}
+.rp-skeleton-below {
+  display: flex;
+  align-items: center;
+  font-size: var(--rp-text-xs);
+}
+.rp-skeleton-below > .rp-skeleton-text {
+  width: 40%;
+}
+.rp-skeleton-below.block > .rp-skeleton-text {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--rp-lg-radius);
+}
+/* A body of a known kind (SkeletonBody): in a ChartWait it fills the held box. */
+.rp-chart-wait > .rp-skeleton-body {
+  flex: 1 1 auto;
+  align-self: stretch;
+}
+.rp-skeleton-body:is(.block, .rows) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-2);
+}
+.rp-skeleton-body.block > .rp-skeleton-text {
+  flex: 1 1 auto;
+  width: 100%;
+  border-radius: var(--rp-lg-radius);
+}
+.rp-skeleton-row {
+  display: flex;
+  align-items: center;
+  height: var(--rp-control);
+}
+/* Fields as the settings grid lays them out (fields.css): a label line over a control. */
+.rp-skeleton-body.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  align-content: start;
+  gap: var(--rp-space-3);
+}
+.rp-skeleton-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-1);
+  font-size: var(--rp-text-sm);
+  line-height: var(--rp-line-caption);
+}
+.rp-skeleton-field > .rp-skeleton-text:last-child {
+  width: 100%;
+  height: var(--rp-control);
+  border-radius: var(--rp-lg-radius);
+}
+/* Bars a feature places beside its real labels (SkeletonBar), in a group that takes no box of its own. */
+.rp-skeleton-group {
+  display: contents;
+}
+.rp-skeleton-cover {
+  width: auto;
+  height: auto;
+  position: absolute;
+  inset: 0;
+  border-radius: var(--rp-lg-radius);
+}
+.rp-skeleton-bar {
+  display: block;
+  width: 100%;
+}
+.rp-skeleton-bar.control {
+  height: var(--rp-control);
+  border-radius: var(--rp-r-md);
+}
+.rp-skeleton-bar.body {
+  height: var(--rp-line-body);
+  width: 60%;
+}
+.rp-skeleton-bar.caption {
+  height: var(--rp-line-caption);
+  width: 40%;
+}
+/* A page's Skeleton (PageSkeleton): its parts at the page's gap, rows of M controls, cards to a row, table rows. */
+/* A stand-in never anchors the scroll position, so the page that replaces it does not move the reader. */
+.rp-page-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-6);
+  min-width: 0;
+  overflow-anchor: none;
+}
+.rp-page-skeleton.panel {
+  gap: var(--rp-space-4);
+}
+.rp-skeleton-row.line {
+  height: var(--rp-line-body);
+}
+.rp-skeleton-controls {
+  display: flex;
+  gap: var(--rp-space-2);
+  height: var(--rp-control);
+}
+.rp-skeleton-controls > .rp-skeleton-text {
+  height: 100%;
+  border-radius: var(--rp-r-md);
+}
+/* A summary's actions at the control height; on a phone the page's actions fold into one icon beside the first. */
+.rp-skeleton-summary > .rp-cluster:last-child > .rp-skeleton-text {
+  height: var(--rp-control);
+  border-radius: var(--rp-r-md);
+}
+@media (max-width: 599.98px) {
+  .rp-skeleton-summary > .rp-cluster:last-child > :nth-child(2) {
+    max-width: var(--rp-control);
+  }
+  .rp-skeleton-summary > .rp-cluster:last-child > :nth-child(n + 3) {
+    display: none;
+  }
+}
+/* The controls that sit at the row's end, as a toolbar's actions do. */
+.rp-skeleton-controls > .end {
+  margin-inline-start: auto;
+}
+.rp-page-skeleton > .rp-tabbar {
+  justify-self: auto;
+  align-self: start;
+}
+/* A table's header band, inside the frame the table's class draws. */
+.rp-table-skeleton-head {
+  height: 38px;
+  background: var(--rp-base);
+  border-bottom: 1px solid var(--rp-hl-med);
+}
+.rp-page-skeleton [style*='--wide'],
+.rp-skeleton-bar[style*='--wide'] {
+  height: var(--wide);
+}
+@media (max-width: 599.98px) {
+  .rp-page-skeleton [style*='--narrow'],
+  .rp-skeleton-bar[style*='--narrow'] {
+    height: var(--narrow);
+  }
+  /* Controls that wrap into rows on a phone, spread over the row's taller box. */
+  .rp-skeleton-controls[style*='--narrow'] {
+    flex-wrap: wrap;
+    align-content: space-between;
+  }
+  .rp-skeleton-controls[style*='--narrow'] > .rp-skeleton-text {
+    height: var(--rp-control);
+    flex: 1 1 40%;
+  }
+}
+.rp-skeleton-cards.page {
+  gap: var(--rp-space-6);
+}
+.rp-skeleton-cards.columns {
+  display: grid;
+  grid-template-columns: var(--columns);
+  gap: var(--rp-space-3);
+}
+@media (max-width: 599.98px) {
+  .rp-skeleton-cards.columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.rp-page-skeleton .rp-facts .rp-skeleton-text {
+  width: 60%;
+}
+/* Card surfaces (SkeletonBody cards), each with one block inside its padding. */
+.rp-skeleton-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-4);
+}
+.rp-skeleton-cards > .rp-card {
+  position: relative;
+}
+.rp-skeleton-cards > .rp-card::after {
+  content: '';
+  position: absolute;
+  inset: var(--rp-space-4);
+  border-radius: var(--rp-lg-radius);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rp-skeleton-cards > .rp-card::after,
+  .rp-skeleton-text {
+    animation: rp-skeleton var(--rp-duration-skeleton) ease-in-out infinite;
+  }
+}
+.rp-card-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  outline: none;
+  transition:
+    border-color var(--rp-duration) var(--rp-ease),
+    background var(--rp-duration) var(--rp-ease),
+    transform var(--rp-duration) var(--rp-ease);
+}
+.rp-card-link[data-hovered] {
+  border-color: var(--rp-accent);
+}
+.rp-card-link[data-pressed] {
+  background: var(--rp-overlay);
+}
+.rp-card {
+  scroll-margin-block-start: calc(var(--rp-topbar) + var(--rp-space-4));
+  background: var(--rp-base);
+  border: 1px solid color-mix(in srgb, var(--rp-hl-med) 70%, transparent);
+  border-radius: var(--rp-r-xl);
+  padding: var(--rp-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-3);
+  min-width: 0;
+  overflow: hidden;
+}
+.rp-titled > .rp-help-row {
+  min-height: var(--rp-space-6);
+}
+/* Sign-in takes the whole page: one card centred both ways on the content background, the same at every width. The
+   padding clears the corner controls on both sides, so a card taller than the window scrolls and stays centred. On
+   Glass the page shows the wallpaper behind, as the shell's content does. */
+.rp-login-page {
+  min-height: 100dvh;
+  background: var(--rp-surface);
+  color: var(--rp-text);
+}
+:root[data-family='glass'] .rp-login-page {
+  background: transparent;
+}
+/* The top bar's language, palette and scheme controls, in the page's corner. */
+.rp-login-controls {
+  position: absolute;
+  top: 12px;
+  inset-inline-end: 12px;
+  display: flex;
+  gap: var(--rp-space-1);
+}
+.rp-login-main {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 72px var(--rp-space-4);
+}
+/* The card keeps one spacing step: 32 between its parts, 24 between fields, 8 or 16 between what belongs together. */
+.rp-login-card {
+  width: min(400px, 100%);
+  gap: 0;
+  padding: var(--rp-space-8);
+  box-shadow: var(--rp-shadow);
+}
+.rp-login-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-3);
+  margin-bottom: var(--rp-space-8);
+  font-size: var(--rp-text-4xl);
+  line-height: 40px;
+  font-weight: 700;
+}
+.rp-login-brand img {
+  width: 40px;
+  height: 40px;
+}
+.rp-login-note {
+  margin: var(--rp-space-2) 0 0;
+  font-size: var(--rp-text-md);
+  line-height: 22px;
+  color: var(--rp-subtle-text);
+  overflow-wrap: anywhere;
+}
+.rp-login-card > .rp-alert,
+.rp-login-card > .rp-empty {
+  margin-top: var(--rp-space-6);
+}
+.rp-login {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-6);
+  margin-top: var(--rp-space-8);
+}
+/* The form's one action spans it; the ways out sit centred below, as secondary links. */
+.rp-login-submit {
+  width: 100%;
+  justify-content: center;
+  margin-top: var(--rp-space-2);
+}
+/* The demo's published account, one line of secondary text under the action. The spaces between its parts are part
+   of the text. */
+.rp-login-account {
+  margin-top: var(--rp-space-4);
+  text-align: center;
+  white-space: pre-wrap;
+}
+.rp-login-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--rp-space-2) var(--rp-space-6);
+  margin-top: var(--rp-space-6);
+  font-size: var(--rp-text-md);
+}
+.rp-link-out {
+  width: 10px;
+  height: 10px;
+}
+@media (max-width: 639.98px) {
+  .rp-login-card {
+    padding: var(--rp-space-6);
+  }
+}
+.rp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rp-space-3);
+  min-height: var(--rp-control);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.rp-row > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.rp-cluster {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.rp-global-controls {
+  flex: none;
+  /* Apply reads the cluster's gap (--rp-space-3) from the control before it in every control card: after a segmented
+     control's track that is the gap itself, and after this quiet picker it is the picker's own inline padding, which
+     draws nothing. */
+  gap: 0;
+  flex-wrap: nowrap;
+}
+:is(.rp-control-card > .rp-row, .rp-widget-row):has(> .rp-global-controls) {
+  gap: var(--rp-space-2);
+}
+.rp-widget-row:has(> .rp-global-controls) > .rp-kv-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A header that must keep its height: the title gives way (truncating) instead of the row wrapping. */
+.rp-row.nowrap,
+.rp-cluster.nowrap {
+  flex-wrap: nowrap;
+}
+.rp-row.nowrap > .rp-cluster {
+  flex: 1 1 auto;
+}
+.rp-row.nowrap .rp-h3 {
+  min-width: 0;
+}
+/* A card's title line is one M control high whether a control shares it, the header wraps, or the title stands alone:
+   the title is centred in that line and the controls beside it align to it, so the titles of neighbouring cards share a
+   baseline and their bodies start at one offset. */
+.rp-card > .rp-h3:first-child,
+.rp-card > :is(.rp-help-row, .rp-row):first-child > .rp-h3,
+.rp-card > :is(.rp-help-row, .rp-row):first-child > :is(.rp-help-row, .rp-cluster, .rp-truncate):first-child > .rp-h3 {
+  padding-block: calc((var(--rp-control) - 1lh) / 2);
+}
+/* A truncated title sits on the heading's line without adding descender room below it, so its heading is the 20px line
+   of every other card title and shares their baseline. */
+.rp-h3 > .rp-truncate {
+  vertical-align: top;
+}
+.rp-label {
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+  color: var(--rp-subtle);
+}
+.rp-strip {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--rp-space-3);
+}
+/* A phone fits two tiles side by side; an odd last tile fills its row. */
+@media (max-width: 599.98px) {
+  .rp-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .rp-strip > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
+/* An odd fifth tile fills its row until all five fit at 1280px. */
+@media (min-width: 600px) {
+  .rp-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .rp-strip > :nth-child(5):last-child {
+    grid-column: 1 / -1;
+  }
+}
+@media (min-width: 1100px) {
+  .rp-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  /* Five tiles at this width sit three over two, every row filled: six tracks, two or three per tile. */
+  .rp-strip:has(> :nth-child(5)) {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .rp-strip:has(> :nth-child(5)) > .rp-card {
+    grid-column: span 2;
+  }
+  .rp-strip:has(> :nth-child(5)) > :nth-child(n + 4) {
+    grid-column: span 3;
+  }
+}
+@media (min-width: 1280px) {
+  .rp-strip:has(> :nth-child(5)) {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .rp-strip:has(> :nth-child(5)) > .rp-card,
+  .rp-strip:has(> :nth-child(5)) > :nth-child(n + 4) {
+    grid-column: auto;
+  }
+}
+.rp-g21,
+.rp-g3 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--rp-space-3);
+  align-items: stretch;
+}
+/* Two thirds and a third of the row, on the column lines of a row of thirds (.rp-g3) with the same gap. */
+@media (min-width: 1024px) {
+  .rp-g21 {
+    grid-template-columns: minmax(0, 1fr) calc((100% - 2 * var(--rp-space-3)) / 3);
+  }
+}
+@media (min-width: 1024px) and (max-width: 1399.98px) {
+  .rp-overview-lower {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (min-width: 1024px) and (max-width: 1199.98px) {
+  .rp-chart-page > .rp-g21 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (min-width: 1024px) {
+  .rp-g3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1024px) and (max-width: 1279.98px) {
+  .rp-g3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .rp-g3 > :last-child:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+}
+/* The notices card keeps its waiting height, the chart-wait floor, when its rows arrive, and grows with them. */
+.rp-dash-section .rp-list-labeled {
+  min-height: 182px;
+}
+.rp-qlabel {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  font-weight: 500;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--rp-text);
+}
+.rp-tile-head {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  min-height: var(--rp-control);
+  flex-wrap: wrap;
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+  min-width: 0;
+  color: var(--rp-subtle);
+  white-space: nowrap;
+}
+/* The picker and help share the caption's line at every width: the picker gives way first and ellipsises its name.
+   The help target grows into the card's end inset, so the caption and picker keep their boxes. */
+.rp-tile-head[data-layout='responsive'] {
+  flex-wrap: nowrap;
+  margin-inline-end: calc(-1 * var(--rp-space-2));
+}
+.rp-tile-controls {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.rp-latency .rp-select {
+  min-width: 0;
+}
+.rp-latency .rp-btn.rp-help {
+  flex: none;
+  margin-inline-start: 0;
+}
+.rp-tile-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rp-space-3);
+  height: 32px;
+}
+.rp-tile-val {
+  display: flex;
+  align-items: baseline;
+  gap: var(--rp-space-2);
+  white-space: nowrap;
+}
+/* A value that opens what it measures is a link only as tall as the value, so the tile keeps its height. */
+.rp-tile-val > .rp-link {
+  min-height: 0;
+  padding: 0;
+}
+.rp-big {
+  font-size: var(--rp-text-3xl);
+  font-weight: 700;
+  line-height: var(--rp-value-line);
+}
+/* Label icons keep their size when the label truncates. */
+.rp-tile-head > svg,
+.rp-qlabel > svg {
+  flex: none;
+}
+/* Role colours on icons, nav groups, rankings, and the wordmark; each palette supplies its own categorical set
+   --rp-c1..c8. */
+.rp-tint-c1 > svg {
+  color: var(--rp-c1);
+}
+.rp-tint-c2 > svg {
+  color: var(--rp-c2);
+}
+.rp-tint-c3 > svg {
+  color: var(--rp-c3);
+}
+.rp-tint-c4 > svg {
+  color: var(--rp-c4);
+}
+.rp-tint-c5 > svg {
+  color: var(--rp-c5);
+}
+.rp-side [data-group='activity'] {
+  --rp-group: var(--rp-c1);
+}
+.rp-side [data-group='traffic'] {
+  --rp-group: var(--rp-c6);
+}
+.rp-side [data-group='routing'] {
+  --rp-group: var(--rp-c3);
+}
+.rp-side [data-group='settings'] {
+  --rp-group: var(--rp-c4);
+}
+.rp-nav > svg {
+  color: var(--rp-group, currentColor);
+}
+/* The group colour marks the current page through its icon and the slider; as text, gold or iris on a light base
+   reads below 4.5:1. */
+.rp-nav[aria-current='page'] {
+  font-weight: 600;
+  color: var(--rp-text);
+}
+.rp-side:has([data-group='activity'] [aria-current='page']) .rp-nav-slider {
+  --rp-group: var(--rp-c1);
+}
+.rp-side:has([data-group='traffic'] [aria-current='page']) .rp-nav-slider {
+  --rp-group: var(--rp-c6);
+}
+.rp-side:has([data-group='routing'] [aria-current='page']) .rp-nav-slider {
+  --rp-group: var(--rp-c3);
+}
+.rp-side:has([data-group='settings'] [aria-current='page']) .rp-nav-slider {
+  --rp-group: var(--rp-c4);
+}
+:root:not([data-wordmark='plain']) .rp-brand-text > span:first-child {
+  background: linear-gradient(90deg, var(--rp-c1), var(--rp-c3), var(--rp-c6));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+/* A sparkline starts at one column in every tile: after the room of the widest value and the gap, whatever the value
+   shown now, so tiles of one width draw sparklines of one start and width. It gives way to a wider value. */
+.rp-spark {
+  flex: 0 1 calc(100% - var(--rp-tile-value) - var(--rp-space-3));
+  min-width: 48px;
+  max-width: 120px;
+}
+/* A tile measures its own width, so every narrow placement stacks, whatever the viewport. Fact tiles already stack. */
+.rp-strip:not(.rp-facts) > *,
+.rp-tile-responsive {
+  container: rp-tile / inline-size;
+}
+/* A legend value given its widest text (`data-widest`) holds that width in tabular figures, so a live value never moves
+   the legend between one line and two. */
+.rp-legend b[data-widest] {
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+  white-space: nowrap;
+}
+.rp-legend b[data-widest]::before {
+  content: attr(data-widest);
+  display: block;
+  block-size: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+/* The widest value, 888 MB/s, is 98px at the value type in every locale (--rp-tile-value); beside it go the 12px gap
+   and the sparkline's 64px: 98 + 12 + 64 = 174px. Below that the sparkline takes its own row under the value. Every
+   narrow tile keeps that row, holding the status or nothing, so tiles in a row match before and after data. This is
+   the one place the width is set: a dashboard row reads --rp-tile-stack to stack all its tiles (see packSection). */
+@container rp-tile (width < 174px) {
+  /* Too narrow for the caption and a node name: the caption leaves the view, the icon and the picker stay, close
+     enough that a short node name still fits, and the caption still names the tile, as the wordmark still names its
+     button. */
+  .rp-tile-head[data-layout='responsive'] {
+    gap: var(--rp-space-1);
+  }
+  .rp-tile-head[data-layout='responsive'] > .rp-tile-caption {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .rp-tile-body {
+    --rp-tile-stack: 1;
+    display: grid;
+    grid-template-rows: var(--rp-value-line) 32px;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+    justify-items: start;
+    gap: var(--rp-space-2);
+    height: auto;
+  }
+  .rp-tile-body > .rp-spark {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+.rp-setup {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) max-content;
+  gap: var(--rp-space-3);
+}
+.rp-setup-step {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+}
+.rp-setup-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rp-setup-status {
+  color: var(--rp-subtle);
+}
+.rp-setup-step[data-complete='true'] > .rp-setup-status {
+  color: var(--rp-positive-text);
+}
+
+/* Where a link landed (src/ui/landing.ts): a card, the row of a field, whose wrapper may only pass its children on, or a
+   row of the page outside any card. */
+:is(.rp-card, [data-setting], [data-setting] > *, .rp-page > .rp-between)[data-highlighted] {
+  outline: 2px solid var(--rp-accent);
+  outline-offset: 2px;
+}
+:is([data-setting], [data-setting] > *, .rp-page > .rp-between)[data-highlighted]:not(.rp-card) {
+  border-radius: var(--rp-r-md);
+}
+
+/* S2 CardView at size M, regular density: every card is 256px wide, inside the size's 200-280px range and wide enough
+   for a date and time to the minute on one line, with 16px between them; as many columns as fit, and one full-width
+   column on a phone. A row's cards share its height, and the regular M card pads by 16px, the card's own padding. */
+.rp-cardview,
+.rp-skeleton-cards.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 256px), 256px));
+  gap: var(--rp-space-4);
+  outline: none;
+}
+@media (max-width: 599.98px) {
+  .rp-cardview,
+  .rp-skeleton-cards.grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* A first load's Skeleton cards (CardView) sit in the empty state's row, which takes no box, and span the grid. */
+.rp-cardview .rp-skeleton-cards {
+  grid-column: 1 / -1;
+}
+.rp-cardview:has(> .rp-empty) {
+  grid-template-columns: minmax(0, 1fr);
+}
+/* S2's highlight selection: a 2px stroke in the text colour on the card's edge, and the raised shadow that hover and
+   focus also take. The selectors outrank a family's card surface, such as glass's, so every family draws both. */
+.rp-cardview-card {
+  cursor: default;
+  outline: none;
+  transition:
+    box-shadow var(--rp-duration) var(--rp-ease),
+    border-color var(--rp-duration) var(--rp-ease);
+}
+:is(.rp-cardview > .rp-card, .rp-table-cards .rp-card).rp-cardview-card:is([data-hovered], [data-focus-visible]) {
+  box-shadow: var(--rp-elevated);
+}
+:is(.rp-cardview > .rp-card, .rp-table-cards .rp-card).rp-cardview-card[data-selected] {
+  border-color: var(--rp-text);
+  box-shadow:
+    var(--rp-elevated),
+    inset 0 0 0 1px var(--rp-text);
+}
+.rp-cardview-card[data-focus-visible] {
+  outline: var(--rp-focus-width) solid var(--rp-focus-color);
+  outline-offset: 2px;
+}
+.rp-cardview-head {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-1);
+  min-width: 0;
+  min-height: var(--rp-control);
+  margin-block: calc((20px - var(--rp-control)) / 2);
+}
+/* S2's title-sm, the M card's title. */
+.rp-cardview-title {
+  flex: 1 1 auto;
+  font-size: var(--rp-text-md);
+  line-height: var(--rp-line-body);
+  font-weight: 700;
+}
+.rp-cardview-actions {
+  display: flex;
+  flex: none;
+  gap: var(--rp-space-1);
+}
+/* Badges and a status light share a baseline: each lends its text's, so their words sit on one line whatever the font. */
+.rp-cardview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--rp-space-2) var(--rp-space-3);
+  min-width: 0;
+}
+/* A status with a tooltip truncates in an inline block, whose baseline would be its bottom edge; as a block it lends
+   the light its text's. */
+.rp-cardview-meta .rp-light > span > .rp-truncate {
+  display: block;
+}
+/* The facts two to a row, each label over its value, in S2's body-xs, the M card's description size. */
+.rp-cardview-card .rp-kv {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--rp-space-2) var(--rp-space-3);
+}
+.rp-cardview-card .rp-kv > div {
+  flex: 0 0 calc(50% - var(--rp-space-3) / 2);
+}
+.rp-cardview-card .rp-kv > .wide {
+  flex-basis: 100%;
+}
+/* A time written in 12 hours or with the year first is wider than half the card; it takes the width it needs, which
+   leaves it a row of its own, and stays half a card when it fits. */
+.rp-cardview-card .rp-kv > .fit {
+  flex: 0 1 auto;
+  min-width: calc(50% - var(--rp-space-3) / 2);
+  max-width: 100%;
+}
+.rp-cardview-card .rp-kv .v {
+  margin-block-start: var(--rp-space-half);
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+}
+/* A value with a tooltip, such as a relative time, sits on the same line as a plain one. */
+.rp-cardview-card .rp-kv .v > .rp-truncate {
+  display: block;
+}
+/* Inside the row, so the table's scroll box does not clip it. */
+.rp-table [role='row'][data-highlighted] {
+  outline: 2px solid var(--rp-accent);
+  outline-offset: -2px;
+}

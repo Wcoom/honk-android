@@ -1198,7 +1198,7 @@ index 564fc64..c086939 100644
      }
  
 diff --git a/crates/honk-core/src/ebpf/real/observation.rs b/crates/honk-core/src/ebpf/real/observation.rs
-index 0b7d482..fcc1791 100644
+index 0b7d482..df8a6b9 100644
 --- a/crates/honk-core/src/ebpf/real/observation.rs
 +++ b/crates/honk-core/src/ebpf/real/observation.rs
 @@ -1,5 +1,5 @@
@@ -1208,7 +1208,18 @@ index 0b7d482..fcc1791 100644
  use crate::ebpf::{
      DatapathAttachment, DatapathCheck, DatapathKind, DatapathObservation, DatapathObservationError,
      DatapathProgram, MAX_DATAPATH_ATTACHMENTS, MAX_DATAPATH_PROGRAMS,
-@@ -91,8 +91,8 @@ impl RealEbpfBackend {
+@@ -82,6 +82,10 @@ impl RealEbpfBackend {
+         {
+             result.hooks = DatapathCheck::Absent;
+         }
++        if result.programs == DatapathCheck::Unknown {
++            result.checked_at = std::time::SystemTime::now();
++            return result;
++        }
+         let tracked = owned.len() + usize::from(self.dae0_ingress_link.is_some());
+         let dae0 = self
+             .dae0_ingress_link
+@@ -91,8 +95,8 @@ impl RealEbpfBackend {
          let bound = owned
              .iter()
              .take(MAX_DATAPATH_ATTACHMENTS)
@@ -1219,7 +1230,7 @@ index 0b7d482..fcc1791 100644
              })
              .chain(dae0)
              .collect::<Vec<_>>();
-@@ -113,12 +113,116 @@ impl RealEbpfBackend {
+@@ -113,12 +117,116 @@ impl RealEbpfBackend {
          // Every hook the real datapath owns is required: the configured TCX
          // hooks, the cgroup hooks when cgroup v2 is present, and dae0_ingress,
          // dae0peer_ingress and tproxy_sk_lookup, which startup always attaches.
@@ -1337,7 +1348,7 @@ index 0b7d482..fcc1791 100644
  }
  
  /// An owned interface binding: the held link must be the one the owner
-@@ -126,33 +230,65 @@ impl RealEbpfBackend {
+@@ -126,33 +234,65 @@ impl RealEbpfBackend {
  fn observe_binding(
      binding: &Binding,
      link_id: u32,
@@ -1428,7 +1439,7 @@ index 0b7d482..fcc1791 100644
  }
  
  /// The dae0 ingress link is an Aya link: its IDs come from Aya, the chain from
-@@ -161,19 +297,50 @@ fn observe_dae0(
+@@ -161,19 +301,50 @@ fn observe_dae0(
      link: &aya::programs::tc::SchedClassifierLink,
      programs: &[DatapathProgram],
  ) -> anyhow::Result<DatapathAttachment> {
@@ -1488,6 +1499,24 @@ index 0b7d482..fcc1791 100644
          egress: false,
          state: if verified {
              DatapathCheck::Verified
+diff --git a/crates/honk-core/src/ebpf/real/programs.rs b/crates/honk-core/src/ebpf/real/programs.rs
+index 05563e7..731b916 100644
+--- a/crates/honk-core/src/ebpf/real/programs.rs
++++ b/crates/honk-core/src/ebpf/real/programs.rs
+@@ -101,7 +101,12 @@ impl ProgramLoader {
+     }
+ 
+     pub(super) fn try_object(&self) -> Option<parking_lot::MutexGuard<'_, Ebpf>> {
+-        self.object.try_lock()
++        // Concurrent telemetry/status polls can collide briefly while another reader enumerates
++        // loaded program IDs; wait up to 5ms before falling back to Unknown instead of spuriously
++        // reporting missing hook IDs under normal API concurrency, while still not blocking behind
++        // long BPF verifier loads.
++        self.object
++            .try_lock_for(std::time::Duration::from_millis(5))
+     }
+ 
+     #[cfg(test)]
 diff --git a/crates/honk-core/src/ebpf/real/receive_trace.rs b/crates/honk-core/src/ebpf/real/receive_trace.rs
 index dbf2d94..e184302 100644
 --- a/crates/honk-core/src/ebpf/real/receive_trace.rs
@@ -1940,10 +1969,29 @@ index adad0a8..c940b20 100644
          .expect("a configured interface never fails startup");
      let mut config = honk_config::Config::default();
 diff --git a/crates/honk-core/src/lib.rs b/crates/honk-core/src/lib.rs
-index 146372c..ce07996 100644
+index 146372c..1372745 100644
 --- a/crates/honk-core/src/lib.rs
 +++ b/crates/honk-core/src/lib.rs
-@@ -232,10 +232,14 @@ pub struct Cli {
+@@ -82,6 +82,18 @@ pub const REVISION: &str = env!("HONK_REVISION");
+ /// The target triple this binary was built for.
+ pub const TARGET: &str = env!("HONK_TARGET");
+ 
++static STARTUP_ARGS: std::sync::OnceLock<Vec<std::ffi::OsString>> = std::sync::OnceLock::new();
++
++/// Records CLI arguments passed at process entry so a self-update restart can re-exec cleanly.
++pub fn record_startup_args(args: Vec<std::ffi::OsString>) {
++    let _ = STARTUP_ARGS.set(args);
++}
++
++#[cfg(feature = "native-api")]
++pub(crate) fn startup_args() -> Option<&'static [std::ffi::OsString]> {
++    STARTUP_ARGS.get().map(Vec::as_slice)
++}
++
+ use clap::Parser;
+ use honk_config::Config;
+ use honk_config::diagnostic::{
+@@ -232,10 +244,14 @@ pub struct Cli {
      #[command(subcommand)]
      pub command: Option<ClashCommand>,
  
@@ -1960,7 +2008,7 @@ index 146372c..ce07996 100644
      /// Append operational logs to this path, overriding `global.log_file`
      #[arg(long, value_name = "PATH")]
      pub log_file: Option<PathBuf>,
-@@ -250,7 +254,7 @@ pub struct Cli {
+@@ -250,7 +266,7 @@ pub struct Cli {
      pub bpf_pin_root: PathBuf,
  
      /// Run in debug mode with verbose logging
@@ -1969,7 +2017,7 @@ index 146372c..ce07996 100644
      pub debug: bool,
  
      /// Omit timestamps from console log lines, for journald or another
-@@ -262,13 +266,19 @@ pub struct Cli {
+@@ -262,13 +278,19 @@ pub struct Cli {
      #[arg(long)]
      pub mock_ebpf: bool,
  
@@ -1991,7 +2039,7 @@ index 146372c..ce07996 100644
      pub data_dir: PathBuf,
  }
  
-@@ -325,7 +335,7 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
+@@ -325,7 +347,7 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
              }
          }
          ClashCommand::Reload => {
@@ -2000,7 +2048,7 @@ index 146372c..ce07996 100644
              println!("Reload requested for honk-core process {pid}");
          }
          ClashCommand::Mode { mode } => {
-@@ -369,6 +379,11 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
+@@ -369,6 +391,11 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
                      &config.global.bootstrap_resolver,
                  ),
              );
@@ -2012,7 +2060,7 @@ index 146372c..ce07996 100644
              let target_node = config
                  .nodes
                  .iter()
-@@ -398,7 +413,50 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
+@@ -398,7 +425,216 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
      Ok(())
  }
  
@@ -2061,10 +2109,176 @@ index 146372c..ce07996 100644
 +        }
 +    }
 +}
++
++/// [honk-android] 当进程处于根 cgroup（Android 常见）时，自动开启 memory 子树控制并迁入独立叶子 cgroup，
++/// 避免与其余系统/代理进程混用根 cgroup 导致 Native API 内存遥测全部缺失。
++#[cfg(target_os = "linux")]
++fn ensure_dedicated_cgroup() {
++    match ensure_dedicated_cgroup_in(std::path::Path::new("/proc/self"), std::process::id()) {
++        Ok(Some(path)) => tracing::debug!(cgroup = %path.display(), "migrated honk to dedicated cgroup"),
++        Ok(None) => {}
++        Err(error) => tracing::debug!(%error, "dedicated cgroup setup skipped"),
++    }
++}
++
++#[cfg(not(target_os = "linux"))]
++fn ensure_dedicated_cgroup() {}
++
++#[cfg(target_os = "linux")]
++fn unescape_proc_mount_path(value: &str) -> Option<PathBuf> {
++    let mut bytes = Vec::with_capacity(value.len());
++    let mut iter = value.as_bytes().iter().copied();
++    while let Some(byte) = iter.next() {
++        if byte == b'\\' {
++            let decoded = match [iter.next()?, iter.next()?, iter.next()?] {
++                [b'0', b'4', b'0'] => b' ',
++                [b'0', b'1', b'1'] => b'\t',
++                [b'0', b'1', b'2'] => b'\n',
++                [b'1', b'3', b'4'] => b'\\',
++                _ => return None,
++            };
++            bytes.push(decoded);
++        } else {
++            bytes.push(byte);
++        }
++    }
++    use std::os::unix::ffi::OsStringExt as _;
++    Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
++}
++
++#[cfg(target_os = "linux")]
++fn find_root_mount_in_mountinfo(mountinfo: &str, fstype: &str, required_option: Option<&str>) -> Option<PathBuf> {
++    mountinfo.lines().find_map(|line| {
++        let (left, right) = line.split_once(" - ")?;
++        let mut right_fields = right.split_whitespace();
++        if right_fields.next()? != fstype {
++            return None;
++        }
++        if let Some(opt) = required_option {
++            let has_opt = right_fields
++                .skip(1)
++                .chain(left.split_whitespace().nth(5))
++                .any(|opts| opts.split(',').any(|item| item == opt));
++            if !has_opt {
++                return None;
++            }
++        }
++        let mut left_fields = left.split_whitespace();
++        let root = unescape_proc_mount_path(left_fields.nth(3)?)?;
++        let mount = unescape_proc_mount_path(left_fields.next()?)?;
++        (root == std::path::Path::new("/")).then_some(mount)
++    })
++}
++
++#[cfg(target_os = "linux")]
++fn cgroup_dir_is_available_for_self(dir: &std::path::Path, pid: u32) -> bool {
++    let Ok(entries) = std::fs::read_dir(dir) else {
++        return false;
++    };
++    for entry in entries.flatten() {
++        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
++            return false;
++        }
++    }
++    let Ok(procs) = std::fs::read_to_string(dir.join("cgroup.procs")) else {
++        return true;
++    };
++    let pid_text = pid.to_string();
++    procs
++        .lines()
++        .map(str::trim)
++        .filter(|line| !line.is_empty())
++        .all(|line| line == pid_text)
++}
++
++#[cfg(target_os = "linux")]
++fn prune_empty_honk_sibling_cgroups(root: &std::path::Path) {
++    let Ok(entries) = std::fs::read_dir(root) else {
++        return;
++    };
++    for entry in entries.flatten() {
++        let name = entry.file_name();
++        let Some(name) = name.to_str() else { continue };
++        if !name.starts_with("honk-") || !entry.file_type().is_ok_and(|k| k.is_dir()) {
++            continue;
++        }
++        let dir = entry.path();
++        if std::fs::read_to_string(dir.join("cgroup.procs"))
++            .is_ok_and(|procs| procs.trim().is_empty())
++        {
++            let _ = std::fs::remove_dir(&dir);
++        }
++    }
++}
++
++#[cfg(target_os = "linux")]
++fn assign_leaf_cgroup(mount: &std::path::Path, pid: u32) -> anyhow::Result<PathBuf> {
++    prune_empty_honk_sibling_cgroups(mount);
++    let primary = mount.join("honk");
++    let target = if !primary.exists() {
++        std::fs::create_dir(&primary)?;
++        primary
++    } else if cgroup_dir_is_available_for_self(&primary, pid) {
++        primary
++    } else {
++        let fallback = mount.join(format!("honk-{pid}"));
++        if !fallback.exists() {
++            std::fs::create_dir(&fallback)?;
++        }
++        fallback
++    };
++    std::fs::write(target.join("cgroup.procs"), format!("{pid}\n"))?;
++    Ok(target)
++}
++
++#[cfg(target_os = "linux")]
++fn ensure_dedicated_cgroup_in(
++    proc_self: &std::path::Path,
++    pid: u32,
++) -> anyhow::Result<Option<PathBuf>> {
++    let membership = std::fs::read_to_string(proc_self.join("cgroup"))?;
++    let mountinfo = std::fs::read_to_string(proc_self.join("mountinfo"))?;
++
++    let v2_member = membership.lines().find_map(|line| line.strip_prefix("0::"));
++    if let Some(member) = v2_member {
++        if member.trim() != "/" {
++            return Ok(None);
++        }
++        if let Some(mount) = find_root_mount_in_mountinfo(&mountinfo, "cgroup2", None) {
++            let controllers = std::fs::read_to_string(mount.join("cgroup.controllers"))
++                .unwrap_or_default();
++            if controllers.split_whitespace().any(|c| c == "memory") {
++                let subtree = std::fs::read_to_string(mount.join("cgroup.subtree_control"))
++                    .unwrap_or_default();
++                if !subtree.split_whitespace().any(|c| c == "memory") {
++                    std::fs::write(mount.join("cgroup.subtree_control"), "+memory\n")?;
++                }
++                return assign_leaf_cgroup(&mount, pid).map(Some);
++            }
++        }
++    }
++
++    let v1_memory_root = membership.lines().any(|line| {
++        let mut parts = line.splitn(3, ':');
++        let Some(id) = parts.next() else { return false };
++        let Some(controllers) = parts.next() else { return false };
++        let Some(member) = parts.next() else { return false };
++        id != "0"
++            && controllers.split(',').any(|c| c == "memory")
++            && member.trim() == "/"
++    });
++    if v1_memory_root
++        && let Some(mount) = find_root_mount_in_mountinfo(&mountinfo, "cgroup", Some("memory"))
++    {
++        return assign_leaf_cgroup(&mount, pid).map(Some);
++    }
++
++    Ok(None)
++}
  
  fn publish_instance_pid(file: &mut std::fs::File) -> anyhow::Result<()> {
      use std::io::Write;
-@@ -540,7 +598,7 @@ fn instance_lock(mock_mode: bool) -> anyhow::Result<Option<nix::fcntl::Flock<std
+@@ -540,7 +776,7 @@ fn instance_lock(mock_mode: bool) -> anyhow::Result<Option<nix::fcntl::Flock<std
      }
      // /run, not the bpffs pin root, which rejects regular files.
      acquire_instance_lock(
@@ -2073,7 +2287,7 @@ index 146372c..ce07996 100644
          std::time::Duration::from_secs(240),
      )
      .map(Some)
-@@ -761,7 +819,7 @@ async fn abort_startup(
+@@ -761,7 +997,7 @@ async fn abort_startup(
      error
  }
  
@@ -2082,7 +2296,7 @@ index 146372c..ce07996 100644
      #[cfg(feature = "native-api")]
      let started_at = std::time::SystemTime::now();
      #[cfg(feature = "native-api")]
-@@ -777,12 +835,36 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+@@ -777,12 +1013,39 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
          cli.store == ConfigStore::File,
          "--store db needs the native-api feature"
      );
@@ -2100,6 +2314,9 @@ index 146372c..ce07996 100644
 +    let host_tproxy = cli.host_tproxy;
      // Everything else in `run` drops before it.
      let _instance_lock = instance_lock(mock_mode)?;
++    if !mock_mode {
++        ensure_dedicated_cgroup();
++    }
      #[cfg(feature = "native-api")]
      let mut database = None;
      let startup = (|| -> anyhow::Result<_> {
@@ -2119,7 +2336,7 @@ index 146372c..ce07996 100644
          #[cfg(feature = "native-api")]
          let mut config = if cli.store == ConfigStore::Db {
              // DbStore needs an absolute, lexically normal entry; a missing -c
-@@ -813,7 +895,21 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+@@ -813,7 +1076,21 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
          );
          #[cfg(not(feature = "dns-syslog"))]
          audit::validate_config(&config.global)?;
@@ -2142,7 +2359,7 @@ index 146372c..ce07996 100644
          let (runtime_data_dir, data_dir_creation_error) =
              prepare_runtime_data_dir(&requested_data_dir)?;
          #[cfg(feature = "native-api")]
-@@ -1004,9 +1100,18 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+@@ -1004,9 +1281,18 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
      honk_outbound::bootstrap::set_global(honk_outbound::bootstrap::BootstrapResolver::parse(
          &config.global.bootstrap_resolver,
      ));
@@ -2161,7 +2378,7 @@ index 146372c..ce07996 100644
  
      #[cfg(feature = "native-api")]
      if let Some(database) = database.as_mut() {
-@@ -1096,6 +1201,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+@@ -1096,6 +1382,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
      } else {
          #[cfg(feature = "ebpf")]
          {
@@ -2170,7 +2387,7 @@ index 146372c..ce07996 100644
              // PARAM.dae0_ifindex must describe the pair before eBPF load.
              let (guard, dae0_setup) = daens::create_dae0_link()?;
              info!(
-@@ -1124,6 +1231,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+@@ -1124,6 +1412,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                  &config.global.wan_interface,
                  &degradations,
                  ebpf::interface::read_topology,
@@ -2178,6 +2395,182 @@ index 146372c..ce07996 100644
              )
              .await?;
              interface_handoff = Some(handoff);
+@@ -1991,4 +2280,90 @@ mod startup_lifecycle_tests {
+         assert!(rendered.contains("node ID duplicates another node"));
+         assert!(!rendered.contains("configuration validation failed"));
+     }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn dedicated_cgroup_migrates_from_root_cgroup2_and_avoids_occupied_primary() {
++        let dir = tempfile::tempdir().unwrap();
++        let proc_self = dir.path().join("proc_self");
++        let cg2 = dir.path().join("cgroup2 mount");
++        std::fs::create_dir_all(&proc_self).unwrap();
++        std::fs::create_dir_all(&cg2).unwrap();
++        std::fs::write(proc_self.join("cgroup"), "0::/\n").unwrap();
++        let escaped = cg2.display().to_string().replace(' ', "\\040");
++        std::fs::write(
++            proc_self.join("mountinfo"),
++            format!("21 1 0:21 / {escaped} rw,nosuid - cgroup2 none rw\n"),
++        )
++        .unwrap();
++        std::fs::write(cg2.join("cgroup.controllers"), "cpu memory\n").unwrap();
++        std::fs::write(cg2.join("cgroup.subtree_control"), "cpu\n").unwrap();
++
++        let target = super::ensure_dedicated_cgroup_in(&proc_self, 4242)
++            .unwrap()
++            .expect("migrates from root cgroup2");
++        assert_eq!(target, cg2.join("honk"));
++        assert_eq!(
++            std::fs::read_to_string(cg2.join("cgroup.subtree_control")).unwrap(),
++            "+memory\n"
++        );
++        assert_eq!(
++            std::fs::read_to_string(cg2.join("honk/cgroup.procs")).unwrap(),
++            "4242\n"
++        );
++
++        // When /honk is occupied by another PID, isolate self into /honk-<pid>.
++        std::fs::write(cg2.join("honk/cgroup.procs"), "99999\n").unwrap();
++        std::fs::write(cg2.join("cgroup.subtree_control"), "cpu memory\n").unwrap();
++        let non_cgroup_sibling = cg2.join("honk-other");
++        std::fs::create_dir_all(&non_cgroup_sibling).unwrap();
++        let isolated = super::ensure_dedicated_cgroup_in(&proc_self, 4242)
++            .unwrap()
++            .expect("uses per-pid cgroup when primary occupied");
++        assert_eq!(isolated, cg2.join("honk-4242"));
++        assert!(
++            non_cgroup_sibling.exists(),
++            "directory without empty cgroup.procs must not be pruned"
++        );
++        assert_eq!(
++            std::fs::read_to_string(cg2.join("honk-4242/cgroup.procs")).unwrap(),
++            "4242\n"
++        );
++
++        // Existing systemd/service cgroup is left untouched.
++        std::fs::write(proc_self.join("cgroup"), "0::/system.slice/honk.service\n").unwrap();
++        assert_eq!(super::ensure_dedicated_cgroup_in(&proc_self, 4242).unwrap(), None);
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn dedicated_cgroup_falls_back_to_v1_memory_mount_when_v2_lacks_memory() {
++        let dir = tempfile::tempdir().unwrap();
++        let proc_self = dir.path().join("proc_self");
++        let cg2 = dir.path().join("cg2");
++        let memcg = dir.path().join("memcg");
++        std::fs::create_dir_all(&proc_self).unwrap();
++        std::fs::create_dir_all(&cg2).unwrap();
++        std::fs::create_dir_all(&memcg).unwrap();
++        std::fs::write(proc_self.join("cgroup"), "2:memory:/\n0::/\n").unwrap();
++        std::fs::write(
++            proc_self.join("mountinfo"),
++            format!(
++                "21 1 0:21 / {} rw - cgroup2 none rw\n22 1 0:22 / {} rw,nosuid - cgroup cgroup rw,memory\n",
++                cg2.display(),
++                memcg.display()
++            ),
++        )
++        .unwrap();
++        std::fs::write(cg2.join("cgroup.controllers"), "freezer\n").unwrap();
++
++        let target = super::ensure_dedicated_cgroup_in(&proc_self, 5150)
++            .unwrap()
++            .expect("falls back to cgroup v1 memory mount");
++        assert_eq!(target, memcg.join("honk"));
++        assert_eq!(
++            std::fs::read_to_string(memcg.join("honk/cgroup.procs")).unwrap(),
++            "5150\n"
++        );
++    }
+ }
+diff --git a/crates/honk-core/src/main.rs b/crates/honk-core/src/main.rs
+index 8a0ac31..fc64a11 100644
+--- a/crates/honk-core/src/main.rs
++++ b/crates/honk-core/src/main.rs
+@@ -38,6 +38,8 @@ where
+ }
+ 
+ fn main() -> anyhow::Result<()> {
++    honk_core::record_startup_args(std::env::args_os().skip(1).collect());
++
+     #[cfg(all(feature = "jemalloc", target_os = "linux"))]
+     disable_transparent_huge_pages()?;
+ 
+diff --git a/crates/honk-core/src/native_api.rs b/crates/honk-core/src/native_api.rs
+index 3f4907f..4833b33 100644
+--- a/crates/honk-core/src/native_api.rs
++++ b/crates/honk-core/src/native_api.rs
+@@ -6,6 +6,7 @@ pub(crate) mod catalog;
+ pub(crate) mod config;
+ mod config_write;
+ mod connections;
++mod core_update;
+ mod datapath;
+ pub(crate) mod dns;
+ pub(crate) mod events;
+@@ -64,6 +65,7 @@ pub struct NativeState {
+     pub(crate) auth: Option<Arc<auth::Auth>>,
+     /// Stored geodata sources and the update schedule; absent without a state db.
+     pub(crate) geodata: Option<Arc<geodata::Sources>>,
++    pub(crate) core_update: Arc<core_update::CoreUpdateService>,
+     ui: Option<ui::Ui>,
+     instance_id: String,
+     started_at: SystemTime,
+@@ -107,6 +109,43 @@ impl NativeState {
+         listen: SocketAddr,
+         started_at: SystemTime,
+         started: Instant,
++    ) -> anyhow::Result<Self> {
++        Self::with_observation_and_updater(
++            control,
++            observation,
++            listen,
++            started_at,
++            started,
++            core_update::CoreUpdateService::default(),
++        )
++        .await
++    }
++
++    #[cfg(test)]
++    pub(crate) async fn with_core_update_for_test(
++        control: &mut ControlPlane,
++        listen: SocketAddr,
++        core_update: core_update::CoreUpdateService,
++    ) -> anyhow::Result<Self> {
++        let observation = observation::NativeObservation::attach(control).await;
++        Self::with_observation_and_updater(
++            control,
++            observation,
++            listen,
++            SystemTime::now(),
++            Instant::now(),
++            core_update,
++        )
++        .await
++    }
++
++    async fn with_observation_and_updater(
++        control: &mut ControlPlane,
++        observation: Arc<observation::NativeObservation>,
++        listen: SocketAddr,
++        started_at: SystemTime,
++        started: Instant,
++        core_update: core_update::CoreUpdateService,
+     ) -> anyhow::Result<Self> {
+         let config = control.config_handle();
+         let (settings, geodata_file, clash_secret, data_dir) = {
+@@ -177,6 +216,7 @@ impl NativeState {
+             security: security::Security::new(&settings, listen),
+             auth,
+             geodata,
++            core_update: Arc::new(core_update),
+             ui: ui::load(&settings.ui).await?,
+             settings,
+             instance_id: observation.core.instance_id.clone(),
 diff --git a/crates/honk-core/src/native_api/config.rs b/crates/honk-core/src/native_api/config.rs
 index ecff621..4673c58 100644
 --- a/crates/honk-core/src/native_api/config.rs
@@ -2200,6 +2593,1754 @@ index ecff621..4673c58 100644
              Some(WriteRefusal::WritesDisabled)
          } else if source.contains_api_secret {
              Some(WriteRefusal::ListenerSecretSource)
+diff --git a/crates/honk-core/src/native_api/core_update.rs b/crates/honk-core/src/native_api/core_update.rs
+new file mode 100644
+index 0000000..dc7b830
+--- /dev/null
++++ b/crates/honk-core/src/native_api/core_update.rs
+@@ -0,0 +1,1261 @@
++//! Core self-check and atomic binary update against `Wcoom/honk-android` GitHub Releases.
++
++use std::fs::OpenOptions;
++use std::io::Write as _;
++use std::path::{Path, PathBuf};
++use std::sync::Arc;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::time::{Duration, SystemTime};
++
++use axum::Json;
++use axum::extract::Request;
++use axum::http::{StatusCode, Uri};
++use axum::response::{IntoResponse, Response};
++use honk_outbound::group::ScoreContinuation;
++use parking_lot::Mutex;
++use reqwest::Url;
++use serde::{Deserialize, Serialize};
++use serde_json::{Value, json};
++use sha2::{Digest, Sha256};
++use tokio::time::Instant;
++
++use super::{
++    ApiError, ErrorCode, NativeState, body, error, parse_query, timestamp, types::RequestId,
++};
++use crate::download_route::{self, Detour, Failed, Outbounds};
++use crate::marked_http::{self, Deadline, Reply};
++
++pub(super) const GITHUB_REPO: &str = "Wcoom/honk-android";
++const DEFAULT_API_LATEST_URL: &str =
++    "https://api.github.com/repos/Wcoom/honk-android/releases/latest";
++const DEFAULT_WEB_LATEST_URL: &str = "https://github.com/Wcoom/honk-android/releases/latest";
++const DEFAULT_DOWNLOAD_BASE_URL: &str =
++    "https://github.com/Wcoom/honk-android/releases/download";
++const DEFAULT_ASSET_NAME: &str = "honk-android-arm64";
++const CHECKSUM_FILE_NAME: &str = "SHA256SUMS.txt";
++
++const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
++const CHECKSUM_TIMEOUT: Duration = Duration::from_secs(15);
++const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
++const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
++const MAX_API_JSON_BYTES: usize = 512 * 1024;
++const MAX_CHECKSUM_BYTES: usize = 64 * 1024;
++const MAX_CORE_BINARY_BYTES: usize = 128 * 1024 * 1024;
++const MAX_REDIRECTS: usize = 5;
++
++const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
++const ELF_CLASS_64: u8 = 2;
++const ELF_DATA_LSB: u8 = 1;
++const EM_AARCH64: u16 = 0x00b7;
++
++#[derive(Clone, Debug)]
++pub(crate) struct CoreUpdateConfig {
++    pub(crate) repo: &'static str,
++    pub(crate) api_latest_url: String,
++    pub(crate) web_latest_url: String,
++    pub(crate) download_base_url: String,
++    pub(crate) asset_name: &'static str,
++    pub(crate) expected_elf_machine: Option<u16>,
++    pub(crate) verify_exec: bool,
++    pub(crate) skip_restart: bool,
++    pub(crate) target_path_override: Option<PathBuf>,
++}
++
++impl Default for CoreUpdateConfig {
++    fn default() -> Self {
++        Self {
++            repo: GITHUB_REPO,
++            api_latest_url: DEFAULT_API_LATEST_URL.to_owned(),
++            web_latest_url: DEFAULT_WEB_LATEST_URL.to_owned(),
++            download_base_url: DEFAULT_DOWNLOAD_BASE_URL.to_owned(),
++            asset_name: DEFAULT_ASSET_NAME,
++            expected_elf_machine: current_expected_elf_machine(),
++            verify_exec: true,
++            skip_restart: false,
++            target_path_override: None,
++        }
++    }
++}
++
++fn current_expected_elf_machine() -> Option<u16> {
++    if cfg!(target_arch = "aarch64") {
++        Some(EM_AARCH64)
++    } else {
++        None
++    }
++}
++
++fn current_arch_supported() -> bool {
++    cfg!(target_arch = "aarch64")
++}
++
++#[derive(Clone, Debug, Serialize)]
++struct CachedError {
++    code: &'static str,
++    message: String,
++}
++
++#[derive(Clone, Debug)]
++struct ReleaseMetadata {
++    source: &'static str,
++    tag_name: String,
++    release_url: Option<String>,
++    published_at: Option<String>,
++    notes: Option<String>,
++    asset_url: String,
++    checksum_url: Option<String>,
++    asset_size: Option<u64>,
++    asset_sha256: Option<String>,
++}
++
++#[derive(Default)]
++struct CachedCheck {
++    checked_at: Option<SystemTime>,
++    latest: Option<ReleaseMetadata>,
++    last_error: Option<CachedError>,
++    installed_version: Option<String>,
++}
++
++pub(crate) struct CoreUpdateService {
++    config: CoreUpdateConfig,
++    cache: Mutex<CachedCheck>,
++    check_lock: tokio::sync::Mutex<()>,
++    apply_lock: tokio::sync::Mutex<()>,
++    applying: AtomicBool,
++}
++
++impl Default for CoreUpdateService {
++    fn default() -> Self {
++        Self::with_config(CoreUpdateConfig::default())
++    }
++}
++
++impl CoreUpdateService {
++    pub(crate) fn with_config(config: CoreUpdateConfig) -> Self {
++        Self {
++            config,
++            cache: Mutex::new(CachedCheck::default()),
++            check_lock: tokio::sync::Mutex::new(()),
++            apply_lock: tokio::sync::Mutex::new(()),
++            applying: AtomicBool::new(false),
++        }
++    }
++
++    pub(super) fn capability(&self, admin_authorized: bool) -> Value {
++        let (_, can_apply, reason) = self.inspect_target(admin_authorized);
++        json!({
++            "available": true,
++            "can_apply": can_apply,
++            "cannot_apply_reason": reason,
++            "repo": self.config.repo,
++            "asset": self.config.asset_name,
++            "target": crate::TARGET,
++        })
++    }
++
++    fn inspect_target(&self, admin_authorized: bool) -> (Option<PathBuf>, bool, Option<&'static str>) {
++        let exe = self
++            .config
++            .target_path_override
++            .clone()
++            .or_else(resolve_current_executable_path);
++        let Some(exe_path) = exe else {
++            return (None, false, Some("executable_unavailable"));
++        };
++        if !admin_authorized {
++            return (Some(exe_path), false, Some("admin_authorization_required"));
++        }
++        if self.config.target_path_override.is_none() && !current_arch_supported() {
++            return (Some(exe_path), false, Some("unsupported_target"));
++        }
++        let Some(parent) = exe_path.parent() else {
++            return (Some(exe_path), false, Some("executable_dir_unavailable"));
++        };
++        if !dir_is_writable(parent) {
++            return (Some(exe_path), false, Some("executable_dir_read_only"));
++        }
++        (Some(exe_path), true, None)
++    }
++
++    fn status_json(&self, state: &NativeState) -> Value {
++        let admin = state.settings.admin_authorized();
++        let (exe_path, can_apply, cannot_apply_reason) = self.inspect_target(admin);
++        let applying = self.applying.load(Ordering::Acquire);
++        let cache = self.cache.lock();
++        let active_version = cache
++            .installed_version
++            .as_deref()
++            .unwrap_or(crate::VERSION)
++            .to_owned();
++        let latest = cache.latest.as_ref();
++        let has_update = latest
++            .is_some_and(|rel| version_is_newer(&active_version, &rel.tag_name));
++        json!({
++            "observed_at": timestamp(SystemTime::now()),
++            "repo": self.config.repo,
++            "current_version": crate::VERSION,
++            "current_revision": (!crate::REVISION.is_empty()).then_some(crate::REVISION),
++            "target": crate::TARGET,
++            "asset_name": self.config.asset_name,
++            "executable_path": exe_path.as_ref().map(|p| p.display().to_string()),
++            "can_apply": can_apply,
++            "cannot_apply_reason": cannot_apply_reason,
++            "applying": applying,
++            "checked_at": cache.checked_at.map(timestamp),
++            "source": latest.map(|rel| rel.source),
++            "latest_version": latest.map(|rel| rel.tag_name.as_str()),
++            "has_update": has_update,
++            "release_url": latest.and_then(|rel| rel.release_url.as_deref()),
++            "published_at": latest.and_then(|rel| rel.published_at.as_deref()),
++            "notes": latest.and_then(|rel| rel.notes.as_deref()),
++            "asset_size_bytes": latest.and_then(|rel| rel.asset_size.map(|n| n.to_string())),
++            "asset_sha256": latest.and_then(|rel| rel.asset_sha256.as_deref()),
++            "last_error": cache.last_error.as_ref(),
++        })
++    }
++
++    async fn check_latest(&self, state: &NativeState) -> Result<ReleaseMetadata, UpdateFailure> {
++        let _guard = self.check_lock.lock().await;
++        let result = fetch_latest_release(state, &self.config).await;
++        let mut cache = self.cache.lock();
++        cache.checked_at = Some(SystemTime::now());
++        match &result {
++            Ok(metadata) => {
++                cache.latest = Some(metadata.clone());
++                cache.last_error = None;
++            }
++            Err(failure) => {
++                cache.last_error = Some(CachedError {
++                    code: failure.stage,
++                    message: failure.detail.clone(),
++                });
++            }
++        }
++        result
++    }
++}
++
++#[derive(Deserialize)]
++#[serde(deny_unknown_fields)]
++struct ApplyBody {
++    #[serde(default)]
++    force: bool,
++}
++
++pub(super) async fn get(
++    state: &NativeState,
++    uri: &Uri,
++    id: &RequestId,
++) -> Result<Response, ApiError> {
++    let query = parse_query(uri, &["refresh"], id)?;
++    let refresh = match query.get("refresh").map(String::as_str) {
++        None | Some("0" | "false") => false,
++        Some("1" | "true") => true,
++        Some(_) => {
++            return Err(error(
++                StatusCode::BAD_REQUEST,
++                ErrorCode::InvalidRequest,
++                "Invalid query parameters",
++                id,
++            ));
++        }
++    };
++    if refresh {
++        state
++            .core_update
++            .check_latest(state)
++            .await
++            .map_err(|failure| failure.into_api_error())?;
++    }
++    Ok(Json(state.core_update.status_json(state)).into_response())
++}
++
++pub(super) async fn apply(
++    state: &Arc<NativeState>,
++    request: Request,
++    id: &RequestId,
++) -> Result<Response, ApiError> {
++    parse_query(request.uri(), &[], id)?;
++    if !state.settings.admin_authorized() {
++        return Err(ApiError::new(
++            StatusCode::FORBIDDEN,
++            ErrorCode::PermissionDenied,
++            "Core updates require administrative authorization",
++            None,
++        ));
++    }
++    let bytes = body::buffered(request.into_body()).await;
++    let params = if bytes.is_empty() {
++        ApplyBody { force: false }
++    } else {
++        body::decode(&bytes, || {
++            ApiError::new(
++                StatusCode::BAD_REQUEST,
++                ErrorCode::InvalidRequest,
++                "Invalid core update request body",
++                None,
++            )
++        })?
++    };
++
++    let (exe_path, can_apply, cannot_apply_reason) =
++        state.core_update.inspect_target(state.settings.admin_authorized());
++    let Some(exe_path) = exe_path.filter(|_| can_apply) else {
++        return Err(ApiError::new(
++            StatusCode::CONFLICT,
++            ErrorCode::StateConflict,
++            "Core self-update cannot be applied in this environment",
++            None,
++        )
++        .with_details(json!({"reason": cannot_apply_reason.unwrap_or("unavailable")})));
++    };
++
++    let Ok(_apply_guard) = state.core_update.apply_lock.try_lock() else {
++        return Err(ApiError::new(
++            StatusCode::CONFLICT,
++            ErrorCode::StateConflict,
++            "A core update is already in progress",
++            None,
++        ));
++    };
++
++    struct ApplyingReset<'a>(&'a AtomicBool);
++    impl Drop for ApplyingReset<'_> {
++        fn drop(&mut self) {
++            self.0.store(false, Ordering::Release);
++        }
++    }
++    state.core_update.applying.store(true, Ordering::Release);
++    let _applying_reset = ApplyingReset(&state.core_update.applying);
++
++    let metadata = state
++        .core_update
++        .check_latest(state)
++        .await
++        .map_err(|failure| failure.into_api_error())?;
++
++    let has_update = version_is_newer(crate::VERSION, &metadata.tag_name);
++    if !has_update && !params.force {
++        return Ok(Json(json!({
++            "status": "up_to_date",
++            "restarting": false,
++            "current_version": crate::VERSION,
++            "latest_version": metadata.tag_name,
++            "has_update": false,
++            "release_url": metadata.release_url,
++        }))
++        .into_response());
++    }
++
++    let expected_sha256 = resolve_expected_sha256(state, &state.core_update.config, &metadata)
++        .await
++        .map_err(|failure| failure.into_api_error())?;
++
++    let downloaded = download_release_asset(state, &metadata.asset_url)
++        .await
++        .map_err(|failure| failure.into_api_error())?;
++
++    let actual_sha256 = sha256_hex(&downloaded);
++    if !actual_sha256.eq_ignore_ascii_case(&expected_sha256) {
++        return Err(UpdateFailure::new(
++            "checksum_mismatch",
++            format!("expected {expected_sha256}, got {actual_sha256}"),
++        )
++        .into_api_error());
++    }
++
++    validate_elf_binary(&downloaded, state.core_update.config.expected_elf_machine)
++        .map_err(|failure| failure.into_api_error())?;
++
++    let staged_path = stage_path_for(&exe_path)?;
++    struct StagedCleanup(Option<PathBuf>);
++    impl Drop for StagedCleanup {
++        fn drop(&mut self) {
++            if let Some(path) = self.0.take() {
++                let _ = std::fs::remove_file(path);
++            }
++        }
++    }
++    let mut cleanup = StagedCleanup(Some(staged_path.clone()));
++
++    let exe_clone = exe_path.clone();
++    let staged_clone = staged_path.clone();
++    let verify_exec = state.core_update.config.verify_exec;
++    let payload_len = downloaded.len();
++    tokio::task::spawn_blocking(move || -> Result<(), UpdateFailure> {
++        write_staged_executable(&staged_clone, &downloaded)?;
++        drop(downloaded);
++        if verify_exec {
++            verify_staged_binary(&staged_clone)?;
++        }
++        preserve_owner_if_root(&exe_clone, &staged_clone);
++        std::fs::rename(&staged_clone, &exe_clone).map_err(|error| {
++            UpdateFailure::new(
++                "install_failed",
++                format!("atomic replace {} failed: {error}", exe_clone.display()),
++            )
++        })?;
++        sync_parent_dir(&exe_clone);
++        Ok(())
++    })
++    .await
++    .map_err(|error| UpdateFailure::new("install_failed", error.to_string()).into_api_error())?
++    .map_err(|failure| failure.into_api_error())?;
++
++    cleanup.0 = None;
++    {
++        let mut cache = state.core_update.cache.lock();
++        cache.installed_version = Some(metadata.tag_name.clone());
++        if let Some(rel) = cache.latest.as_mut() {
++            rel.asset_sha256.get_or_insert_with(|| actual_sha256.clone());
++        }
++    }
++
++    let restarting = !state.core_update.config.skip_restart;
++    if restarting {
++        let restart_exe = exe_path.clone();
++        tokio::spawn(async move {
++            tokio::time::sleep(Duration::from_millis(300)).await;
++            if let Err(error) = restart_self(&restart_exe) {
++                tracing::error!(%error, "failed to launch updated honk-core process");
++            }
++        });
++    }
++
++    Ok(Json(json!({
++        "status": if restarting { "restarting" } else { "updated" },
++        "restarting": restarting,
++        "previous_version": crate::VERSION,
++        "installed_version": metadata.tag_name,
++        "sha256": actual_sha256,
++        "bytes": payload_len.to_string(),
++        "release_url": metadata.release_url,
++    }))
++    .into_response())
++}
++
++#[derive(Debug)]
++struct UpdateFailure {
++    stage: &'static str,
++    detail: String,
++}
++
++impl UpdateFailure {
++    fn new(stage: &'static str, detail: impl Into<String>) -> Self {
++        Self {
++            stage,
++            detail: detail.into(),
++        }
++    }
++
++    fn into_api_error(self) -> ApiError {
++        let (status, code, msg): (StatusCode, ErrorCode, &'static str) = match self.stage {
++            "checksum_mismatch" | "checksum_unavailable" | "invalid_binary" | "asset_missing"
++            | "no_release_found" => (
++                StatusCode::BAD_GATEWAY,
++                ErrorCode::TemporarilyUnavailable,
++                "Core update release validation failed",
++            ),
++            "install_failed" | "self_check_failed" => (
++                StatusCode::INTERNAL_SERVER_ERROR,
++                ErrorCode::TemporarilyUnavailable,
++                "Failed to install updated core binary",
++            ),
++            _ => (
++                StatusCode::SERVICE_UNAVAILABLE,
++                ErrorCode::TemporarilyUnavailable,
++                "Failed to fetch core update information",
++            ),
++        };
++        ApiError::new(status, code, msg, None)
++            .with_details(json!({"stage": self.stage, "reason": self.detail}))
++    }
++}
++
++#[derive(Deserialize)]
++struct GithubRelease {
++    tag_name: String,
++    html_url: Option<String>,
++    published_at: Option<String>,
++    body: Option<String>,
++    #[serde(default)]
++    draft: bool,
++    #[serde(default)]
++    prerelease: bool,
++    #[serde(default)]
++    assets: Vec<GithubAsset>,
++}
++
++#[derive(Deserialize)]
++struct GithubAsset {
++    name: String,
++    size: Option<u64>,
++    digest: Option<String>,
++    browser_download_url: String,
++}
++
++async fn fetch_latest_release(
++    state: &NativeState,
++    config: &CoreUpdateConfig,
++) -> Result<ReleaseMetadata, UpdateFailure> {
++    let mut headers = http::HeaderMap::new();
++    headers.insert(
++        http::header::USER_AGENT,
++        format!("honk-core/{}", crate::VERSION)
++            .parse()
++            .expect("valid header"),
++    );
++    headers.insert(
++        http::header::ACCEPT,
++        "application/vnd.github+json".parse().expect("valid header"),
++    );
++
++    let api_url = Url::parse(&config.api_latest_url)
++        .map_err(|e| UpdateFailure::new("invalid_url", e.to_string()))?;
++    let api_reply = fetch_with_fallback(
++        state,
++        &api_url,
++        &headers,
++        Instant::now() + CHECK_TIMEOUT,
++        MAX_API_JSON_BYTES,
++        true,
++        false,
++    )
++    .await;
++
++    match api_reply {
++        Ok(reply) if reply.status == StatusCode::OK => {
++            let release: GithubRelease = serde_json::from_slice(&reply.body)
++                .map_err(|e| UpdateFailure::new("invalid_response", e.to_string()))?;
++            if release.draft || release.tag_name.trim().is_empty() {
++                return Err(UpdateFailure::new("no_release_found", "no published release"));
++            }
++            let asset = release
++                .assets
++                .iter()
++                .find(|a| a.name == config.asset_name)
++                .ok_or_else(|| {
++                    UpdateFailure::new(
++                        "asset_missing",
++                        format!("release {} lacks asset {}", release.tag_name, config.asset_name),
++                    )
++                })?;
++            let checksum_url = release
++                .assets
++                .iter()
++                .find(|a| a.name == CHECKSUM_FILE_NAME)
++                .map(|a| a.browser_download_url.clone())
++                .or_else(|| {
++                    Some(format!(
++                        "{}/{}/{}",
++                        config.download_base_url.trim_end_matches('/'),
++                        release.tag_name,
++                        CHECKSUM_FILE_NAME
++                    ))
++                });
++            let mut sha256 = asset
++                .digest
++                .as_deref()
++                .and_then(|d| d.strip_prefix("sha256:"))
++                .filter(|hex| is_valid_sha256_hex(hex))
++                .map(str::to_ascii_lowercase);
++            if sha256.is_none()
++                && let Some(ref sum_url) = checksum_url
++                && let Ok(parsed_sum) =
++                    fetch_sha256_from_sums(state, sum_url, config.asset_name).await
++            {
++                sha256 = Some(parsed_sum);
++            }
++            let _ = release.prerelease;
++            return Ok(ReleaseMetadata {
++                source: "github_api",
++                tag_name: release.tag_name,
++                release_url: release.html_url,
++                published_at: release.published_at,
++                notes: release.body,
++                asset_url: asset.browser_download_url.clone(),
++                checksum_url,
++                asset_size: asset.size,
++                asset_sha256: sha256,
++            });
++        }
++        Ok(reply)
++            if matches!(
++                reply.status,
++                StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS
++            ) =>
++        {
++            tracing::info!(
++                status = reply.status.as_u16(),
++                "GitHub API rate-limited; falling back to releases/latest redirect"
++            );
++        }
++        Ok(reply) if reply.status == StatusCode::NOT_FOUND => {
++            return Err(UpdateFailure::new(
++                "no_release_found",
++                "GitHub release endpoint returned 404",
++            ));
++        }
++        Ok(reply) => {
++            return Err(UpdateFailure::new(
++                download_route::status_stage(reply.status),
++                format!("HTTP {}", reply.status),
++            ));
++        }
++        Err(err) => return Err(err),
++    }
++
++    fetch_latest_via_web_redirect(state, config).await
++}
++
++async fn fetch_latest_via_web_redirect(
++    state: &NativeState,
++    config: &CoreUpdateConfig,
++) -> Result<ReleaseMetadata, UpdateFailure> {
++    let mut headers = http::HeaderMap::new();
++    headers.insert(
++        http::header::USER_AGENT,
++        format!("honk-core/{}", crate::VERSION)
++            .parse()
++            .expect("valid header"),
++    );
++    let web_url = Url::parse(&config.web_latest_url)
++        .map_err(|e| UpdateFailure::new("invalid_url", e.to_string()))?;
++    let reply = fetch_with_fallback(
++        state,
++        &web_url,
++        &headers,
++        Instant::now() + CHECK_TIMEOUT,
++        64 * 1024,
++        false,
++        true,
++    )
++    .await?;
++
++    if !marked_http::followed_redirect(reply.status) {
++        return Err(UpdateFailure::new(
++            "http_status_rejected",
++            format!("expected redirect from releases/latest, got {}", reply.status),
++        ));
++    }
++    let location = reply
++        .location
++        .as_ref()
++        .and_then(|v| v.to_str().ok())
++        .ok_or_else(|| UpdateFailure::new("no_release_found", "redirect without Location"))?;
++    let next = web_url
++        .join(location)
++        .map_err(|e| UpdateFailure::new("invalid_response", e.to_string()))?;
++    let tag_name = extract_tag_from_release_url(next.as_str()).ok_or_else(|| {
++        UpdateFailure::new(
++            "no_release_found",
++            format!("no release tag in redirect target {}", next),
++        )
++    })?;
++    let base = config.download_base_url.trim_end_matches('/');
++    let checksum_url = format!("{base}/{tag_name}/{CHECKSUM_FILE_NAME}");
++    let sha256 = fetch_sha256_from_sums(state, &checksum_url, config.asset_name)
++        .await
++        .ok();
++    Ok(ReleaseMetadata {
++        source: "github_web",
++        tag_name: tag_name.clone(),
++        release_url: Some(next.into()),
++        published_at: None,
++        notes: None,
++        asset_url: format!("{base}/{tag_name}/{}", config.asset_name),
++        checksum_url: Some(checksum_url),
++        asset_size: None,
++        asset_sha256: sha256,
++    })
++}
++
++fn extract_tag_from_release_url(url: &str) -> Option<String> {
++    let (_, after) = url.split_once("/releases/tag/")?;
++    let tag = after.split(['?', '#']).next()?.trim_matches('/');
++    (!tag.is_empty()).then(|| tag.to_owned())
++}
++
++async fn resolve_expected_sha256(
++    state: &NativeState,
++    config: &CoreUpdateConfig,
++    metadata: &ReleaseMetadata,
++) -> Result<String, UpdateFailure> {
++    let from_sums = match metadata.checksum_url.as_deref() {
++        Some(url) => match fetch_sha256_from_sums(state, url, config.asset_name).await {
++            Ok(hex) => Some(hex),
++            Err(err) if metadata.asset_sha256.is_some() => {
++                tracing::debug!(error = ?err, "SHA256SUMS.txt fetch failed; using API digest");
++                None
++            }
++            Err(err) => return Err(err),
++        },
++        None => None,
++    };
++
++    match (from_sums, metadata.asset_sha256.as_deref()) {
++        (Some(sum), Some(api)) => {
++            if !sum.eq_ignore_ascii_case(api) {
++                return Err(UpdateFailure::new(
++                    "checksum_mismatch",
++                    "SHA256SUMS.txt disagrees with release asset digest",
++                ));
++            }
++            Ok(sum)
++        }
++        (Some(sum), None) => Ok(sum),
++        (None, Some(api)) => Ok(api.to_ascii_lowercase()),
++        (None, None) => Err(UpdateFailure::new(
++            "checksum_unavailable",
++            "release provides neither SHA256SUMS.txt nor asset digest",
++        )),
++    }
++}
++
++async fn fetch_sha256_from_sums(
++    state: &NativeState,
++    url: &str,
++    asset_name: &str,
++) -> Result<String, UpdateFailure> {
++    let parsed = Url::parse(url).map_err(|e| UpdateFailure::new("invalid_url", e.to_string()))?;
++    let mut headers = http::HeaderMap::new();
++    headers.insert(
++        http::header::USER_AGENT,
++        format!("honk-core/{}", crate::VERSION)
++            .parse()
++            .expect("valid header"),
++    );
++    let reply = fetch_with_fallback(
++        state,
++        &parsed,
++        &headers,
++        Instant::now() + CHECKSUM_TIMEOUT,
++        MAX_CHECKSUM_BYTES,
++        true,
++        false,
++    )
++    .await?;
++    if reply.status != StatusCode::OK {
++        return Err(UpdateFailure::new(
++            "checksum_unavailable",
++            format!("checksum file returned HTTP {}", reply.status),
++        ));
++    }
++    let text = std::str::from_utf8(&reply.body)
++        .map_err(|_| UpdateFailure::new("checksum_unavailable", "checksum file is not UTF-8"))?;
++    parse_sha256sums_for_asset(text, asset_name).ok_or_else(|| {
++        UpdateFailure::new(
++            "checksum_unavailable",
++            format!("no SHA-256 entry for {asset_name}"),
++        )
++    })
++}
++
++async fn download_release_asset(
++    state: &NativeState,
++    url: &str,
++) -> Result<Arc<[u8]>, UpdateFailure> {
++    let parsed = Url::parse(url).map_err(|e| UpdateFailure::new("invalid_url", e.to_string()))?;
++    let mut headers = http::HeaderMap::new();
++    headers.insert(
++        http::header::USER_AGENT,
++        format!("honk-core/{}", crate::VERSION)
++            .parse()
++            .expect("valid header"),
++    );
++    let started = Instant::now();
++    let deadline = Deadline {
++        headers: started + DOWNLOAD_IDLE_TIMEOUT,
++        idle: Some((DOWNLOAD_IDLE_TIMEOUT, started + DOWNLOAD_TOTAL_TIMEOUT)),
++    };
++    let reply = fetch_with_fallback(
++        state,
++        &parsed,
++        &headers,
++        deadline,
++        MAX_CORE_BINARY_BYTES,
++        true,
++        false,
++    )
++    .await?;
++    if reply.status != StatusCode::OK {
++        return Err(UpdateFailure::new(
++            download_route::status_stage(reply.status),
++            format!("download returned HTTP {}", reply.status),
++        ));
++    }
++    Ok(reply.body)
++}
++
++async fn fetch_with_fallback(
++    state: &NativeState,
++    initial_url: &Url,
++    base_headers: &http::HeaderMap,
++    deadline: impl Into<Deadline>,
++    max_bytes: usize,
++    follow_redirects: bool,
++    allow_error_status_body: bool,
++) -> Result<Reply, UpdateFailure> {
++    let deadline = deadline.into();
++    let outbounds = Outbounds {
++        router: &state.traffic_router,
++        config: &state.config,
++        group_manager: &state.group_manager,
++        proxy_registry: &state.proxy_registry,
++        runtime_registry: &state.runtime_registry,
++    };
++    let mut url = initial_url.clone();
++    let mut headers = base_headers.clone();
++    let mut continuation: Option<ScoreContinuation> = None;
++
++    let mut redirect_count = 0usize;
++    loop {
++        let req = download_route::Request {
++            url: &url,
++            headers: &headers,
++            wants_body: if allow_error_status_body {
++                |status, headers| {
++                    !(marked_http::followed_redirect(status)
++                        && headers.contains_key(http::header::LOCATION))
++                }
++            } else {
++                |status, headers| {
++                    status.is_success()
++                        && !(marked_http::followed_redirect(status)
++                            && headers.contains_key(http::header::LOCATION))
++                }
++            },
++            deadline,
++            max_bytes,
++            bootstrap: None,
++        };
++        let reply = match outbounds
++            .fetch(
++                Detour::Routing,
++                "core_update.download",
++                "core update",
++                &req,
++                &mut continuation,
++            )
++            .await
++        {
++            Ok((reply, _, _)) => reply,
++            Err(Failed::Route(_)) | Err(Failed::Stage(_, Some(_))) => {
++                // Group has no usable node or proxied dial failed; try direct once.
++                download_route::fetch_direct(&req)
++                    .await
++                    .map_err(|stage| UpdateFailure::new(stage, format!("fetch failed at {stage}")))?
++            }
++            Err(Failed::Stage(stage, None)) => {
++                return Err(UpdateFailure::new(stage, format!("fetch failed at {stage}")));
++            }
++        };
++
++        if follow_redirects
++            && marked_http::followed_redirect(reply.status)
++            && let Some(location) = reply.location.as_ref().and_then(|v| v.to_str().ok())
++        {
++            if redirect_count >= MAX_REDIRECTS {
++                return Err(UpdateFailure::new(
++                    "too_many_redirects",
++                    "exceeded redirect limit",
++                ));
++            }
++            redirect_count += 1;
++            let next = url
++                .join(location)
++                .map_err(|e| UpdateFailure::new("invalid_redirect", e.to_string()))?;
++            if !matches!(next.scheme(), "https" | "http") {
++                return Err(UpdateFailure::new(
++                    "invalid_redirect",
++                    "unsupported redirect scheme",
++                ));
++            }
++            if next.origin() != url.origin() {
++                headers.remove(http::header::AUTHORIZATION);
++                headers.remove(http::header::COOKIE);
++            }
++            url = next;
++            continue;
++        }
++        return Ok(reply);
++    }
++}
++
++fn is_valid_sha256_hex(hex: &str) -> bool {
++    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
++}
++
++fn sha256_hex(bytes: &[u8]) -> String {
++    let digest = Sha256::digest(bytes);
++    let mut hex = String::with_capacity(64);
++    for byte in digest {
++        use std::fmt::Write as _;
++        let _ = write!(hex, "{byte:02x}");
++    }
++    hex
++}
++
++pub(crate) fn parse_sha256sums_for_asset(text: &str, asset_name: &str) -> Option<String> {
++    for line in text.lines() {
++        let trimmed = line.trim();
++        if trimmed.is_empty() || trimmed.starts_with('#') {
++            continue;
++        }
++        let mut parts = trimmed.splitn(2, char::is_whitespace);
++        let Some(hex) = parts.next() else { continue };
++        let Some(rest) = parts.next() else { continue };
++        if !is_valid_sha256_hex(hex) {
++            continue;
++        }
++        let candidate = rest.trim_start().trim_start_matches('*').trim();
++        let file_name = Path::new(candidate)
++            .file_name()
++            .and_then(|n| n.to_str())
++            .unwrap_or(candidate);
++        if candidate == asset_name || file_name == asset_name {
++            return Some(hex.to_ascii_lowercase());
++        }
++    }
++    None
++}
++
++#[derive(Debug, PartialEq, Eq)]
++struct ParsedVersion {
++    core: [u64; 3],
++    prerelease: Vec<String>,
++    is_post_tag_dev: bool,
++}
++
++fn parse_version(raw: &str) -> Option<ParsedVersion> {
++    let trimmed = raw.trim();
++    let trimmed = trimmed
++        .strip_prefix('v')
++        .or_else(|| trimmed.strip_prefix('V'))
++        .unwrap_or(trimmed);
++    let no_build = trimmed.split('+').next().unwrap_or(trimmed);
++    let (core_str, suffix) = match no_build.split_once('-') {
++        Some((core, rest)) => (core, Some(rest)),
++        None => (no_build, None),
++    };
++    let mut nums = core_str.split('.');
++    let major = nums.next()?.parse::<u64>().ok()?;
++    let minor = nums.next().unwrap_or("0").parse::<u64>().ok()?;
++    let patch = nums.next().unwrap_or("0").parse::<u64>().ok()?;
++    if nums.next().is_some() {
++        return None;
++    }
++
++    let mut is_post_tag_dev = false;
++    let mut prerelease = Vec::new();
++    if let Some(rest) = suffix {
++        if is_git_describe_suffix(rest) {
++            is_post_tag_dev = true;
++        } else if !rest.is_empty() {
++            prerelease = rest.split('.').map(str::to_string).collect();
++        }
++    }
++    Some(ParsedVersion {
++        core: [major, minor, patch],
++        prerelease,
++        is_post_tag_dev,
++    })
++}
++
++fn is_git_describe_suffix(suffix: &str) -> bool {
++    let mut parts = suffix.split('-');
++    let Some(commits) = parts.next() else { return false };
++    let Some(hash_part) = parts.next() else { return false };
++    let third = parts.next();
++    if let Some(extra) = third
++        && extra != "dirty"
++    {
++        return false;
++    }
++    if parts.next().is_some() {
++        return false;
++    }
++    !commits.is_empty()
++        && commits.bytes().all(|b| b.is_ascii_digit())
++        && hash_part
++            .strip_prefix('g')
++            .is_some_and(|hex| hex.len() >= 4 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
++}
++
++fn compare_prerelease(a: &[String], b: &[String]) -> std::cmp::Ordering {
++    use std::cmp::Ordering;
++    match (a.is_empty(), b.is_empty()) {
++        (true, true) => Ordering::Equal,
++        (true, false) => Ordering::Greater,
++        (false, true) => Ordering::Less,
++        (false, false) => {
++            for (pa, pb) in a.iter().zip(b.iter()) {
++                let ord = match (pa.parse::<u64>(), pb.parse::<u64>()) {
++                    (Ok(na), Ok(nb)) => na.cmp(&nb),
++                    (Ok(_), Err(_)) => Ordering::Less,
++                    (Err(_), Ok(_)) => Ordering::Greater,
++                    (Err(_), Err(_)) => pa.cmp(pb),
++                };
++                if ord != Ordering::Equal {
++                    return ord;
++                }
++            }
++            a.len().cmp(&b.len())
++        }
++    }
++}
++
++pub(crate) fn version_is_newer(current: &str, latest: &str) -> bool {
++    if current.trim() == latest.trim() {
++        return false;
++    }
++    let (Some(cur), Some(lat)) = (parse_version(current), parse_version(latest)) else {
++        return false;
++    };
++    if lat.core != cur.core {
++        return lat.core > cur.core;
++    }
++    if cur.is_post_tag_dev && lat.prerelease.is_empty() && !lat.is_post_tag_dev {
++        // Post-tag git describe build (e.g. v1.0.5-3-gabc) already includes tag v1.0.5.
++        return false;
++    }
++    compare_prerelease(&lat.prerelease, &cur.prerelease) == std::cmp::Ordering::Greater
++}
++
++fn validate_elf_binary(
++    bytes: &[u8],
++    expected_machine: Option<u16>,
++) -> Result<(), UpdateFailure> {
++    if bytes.len() < 64
++        || &bytes[0..4] != ELF_MAGIC
++        || bytes[4] != ELF_CLASS_64
++        || bytes[5] != ELF_DATA_LSB
++    {
++        return Err(UpdateFailure::new(
++            "invalid_binary",
++            "downloaded file is not a valid 64-bit little-endian ELF executable",
++        ));
++    }
++    if let Some(expected) = expected_machine {
++        let machine = u16::from_le_bytes([bytes[18], bytes[19]]);
++        if machine != expected {
++            return Err(UpdateFailure::new(
++                "invalid_binary",
++                format!("unexpected ELF machine architecture: 0x{machine:04x}"),
++            ));
++        }
++    }
++    Ok(())
++}
++
++fn resolve_current_executable_path() -> Option<PathBuf> {
++    let exe = std::env::current_exe().ok()?;
++    let text = exe.to_string_lossy();
++    let cleaned = text
++        .strip_suffix(" (deleted)")
++        .map(PathBuf::from)
++        .unwrap_or(exe);
++    cleaned.is_absolute().then_some(cleaned)
++}
++
++fn dir_is_writable(dir: &Path) -> bool {
++    use std::ffi::CString;
++    use std::os::unix::ffi::OsStrExt as _;
++    let Ok(cstr) = CString::new(dir.as_os_str().as_bytes()) else {
++        return false;
++    };
++    // SAFETY: NUL-terminated path passed to POSIX access(2).
++    unsafe { libc::access(cstr.as_ptr(), libc::W_OK | libc::X_OK) == 0 }
++}
++
++fn stage_path_for(exe_path: &Path) -> Result<PathBuf, ApiError> {
++    let parent = exe_path.parent().ok_or_else(|| {
++        UpdateFailure::new("install_failed", "executable has no parent directory").into_api_error()
++    })?;
++    let name = exe_path
++        .file_name()
++        .and_then(|n| n.to_str())
++        .unwrap_or("honk");
++    Ok(parent.join(format!(".{name}.update.{}", std::process::id())))
++}
++
++fn write_staged_executable(staged: &Path, bytes: &[u8]) -> Result<(), UpdateFailure> {
++    use std::os::unix::fs::OpenOptionsExt as _;
++    let mut file = OpenOptions::new()
++        .write(true)
++        .create(true)
++        .truncate(true)
++        .mode(0o755)
++        .open(staged)
++        .map_err(|error| {
++            UpdateFailure::new(
++                "install_failed",
++                format!("create staged binary {} failed: {error}", staged.display()),
++            )
++        })?;
++    file.write_all(bytes).map_err(|error| {
++        UpdateFailure::new(
++            "install_failed",
++            format!("write staged binary failed: {error}"),
++        )
++    })?;
++    file.sync_all().map_err(|error| {
++        UpdateFailure::new(
++            "install_failed",
++            format!("fsync staged binary failed: {error}"),
++        )
++    })?;
++    Ok(())
++}
++
++fn verify_staged_binary(staged: &Path) -> Result<(), UpdateFailure> {
++    let output = std::process::Command::new(staged)
++        .arg("--version")
++        .output()
++        .map_err(|error| {
++            UpdateFailure::new(
++                "self_check_failed",
++                format!("staged --version exec failed: {error}"),
++            )
++        })?;
++    if !output.status.success() {
++        return Err(UpdateFailure::new(
++            "self_check_failed",
++            format!("staged --version exited with {}", output.status),
++        ));
++    }
++    Ok(())
++}
++
++fn preserve_owner_if_root(existing: &Path, staged: &Path) {
++    use std::os::unix::fs::MetadataExt as _;
++    // SAFETY: geteuid has no preconditions.
++    if unsafe { libc::geteuid() } != 0 {
++        return;
++    }
++    let Ok(meta) = std::fs::metadata(existing) else {
++        return;
++    };
++    let Ok(cstr) = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(
++        staged.as_os_str(),
++    )) else {
++        return;
++    };
++    // SAFETY: NUL-terminated path passed to chown(2).
++    unsafe {
++        libc::chown(cstr.as_ptr(), meta.uid(), meta.gid());
++    }
++}
++
++fn sync_parent_dir(exe_path: &Path) {
++    if let Some(parent) = exe_path.parent()
++        && let Ok(dir) = std::fs::File::open(parent)
++    {
++        let _ = dir.sync_all();
++    }
++}
++
++fn open_max_fd_limit() -> libc::c_int {
++    let mut rlim = libc::rlimit {
++        rlim_cur: 0,
++        rlim_max: 0,
++    };
++    // SAFETY: rlim points to valid rlimit storage.
++    let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) };
++    if rc == 0 && rlim.rlim_cur > 0 {
++        rlim.rlim_cur.min(65536) as libc::c_int
++    } else {
++        4096
++    }
++}
++
++fn resolve_run_dir(exe_path: &Path) -> Option<PathBuf> {
++    if let Some(env_run) = std::env::var_os("HONK_RUN_DIR").filter(|v| !v.is_empty()) {
++        return Some(PathBuf::from(env_run));
++    }
++    exe_path
++        .parent()
++        .and_then(Path::parent)
++        .map(|box_dir| box_dir.join("run"))
++        .filter(|run| run.is_dir())
++}
++
++fn restart_self(exe_path: &Path) -> anyhow::Result<()> {
++    let in_systemd = std::env::var_os("INVOCATION_ID").is_some_and(|v| !v.is_empty())
++        && std::env::var_os("HONK_RUN_DIR").is_none_or(|v| v.is_empty());
++    if in_systemd {
++        tracing::info!("core updated; sending SIGTERM for systemd restart");
++        // SAFETY: sending SIGTERM to self triggers clean shutdown.
++        unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
++        return Ok(());
++    }
++
++    let args: Vec<std::ffi::OsString> = crate::startup_args()
++        .map(|slice| slice.to_vec())
++        .unwrap_or_else(|| std::env::args_os().skip(1).collect());
++    let run_dir = resolve_run_dir(exe_path);
++    let log_name = format!(
++        "{}.log",
++        exe_path
++            .file_name()
++            .and_then(|n| n.to_str())
++            .unwrap_or("honk")
++    );
++    let log_stdio = run_dir
++        .as_ref()
++        .map(|dir| dir.join(&log_name))
++        .filter(|path| path.is_file())
++        .and_then(|path| OpenOptions::new().create(true).append(true).open(path).ok());
++
++    let mut cmd = std::process::Command::new(exe_path);
++    cmd.args(&args).stdin(std::process::Stdio::null());
++    if let Some(log_file) = log_stdio {
++        let stderr_file = log_file.try_clone()?;
++        cmd.stdout(std::process::Stdio::from(log_file))
++            .stderr(std::process::Stdio::from(stderr_file));
++    } else {
++        cmd.stdout(std::process::Stdio::null())
++            .stderr(std::process::Stdio::null());
++    }
++
++    let max_fd = open_max_fd_limit();
++    // SAFETY: pre_exec calls only async-signal-safe syscalls (setsid, syscall(close_range), close).
++    unsafe {
++        use std::os::unix::process::CommandExt as _;
++        cmd.pre_exec(move || {
++            let _ = libc::setsid();
++            #[cfg(target_os = "linux")]
++            let closed = libc::syscall(libc::SYS_close_range, 3usize, libc::c_uint::MAX as usize, 0usize);
++            #[cfg(not(target_os = "linux"))]
++            let closed = -1;
++            if closed != 0 {
++                for fd in 3..max_fd {
++                    libc::close(fd);
++                }
++            }
++            Ok(())
++        });
++    }
++
++    let child = cmd.spawn()?;
++    if let Some(dir) = run_dir {
++        let box_pid = dir.join("box.pid");
++        if box_pid.is_file() {
++            let tmp_pid = dir.join(".box.pid.update.tmp");
++            if std::fs::write(&tmp_pid, child.id().to_string()).is_ok() {
++                let _ = std::fs::rename(&tmp_pid, &box_pid);
++            }
++        }
++    }
++    tracing::info!(
++        child_pid = child.id(),
++        path = %exe_path.display(),
++        "spawned updated honk-core successor; draining current instance"
++    );
++    // SAFETY: sending SIGTERM to self triggers clean shutdown and lock release.
++    unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/crates/honk-core/src/native_api/core_update/tests.rs b/crates/honk-core/src/native_api/core_update/tests.rs
+new file mode 100644
+index 0000000..3f8698f
+--- /dev/null
++++ b/crates/honk-core/src/native_api/core_update/tests.rs
+@@ -0,0 +1,435 @@
++use std::net::SocketAddr;
++use std::sync::Arc;
++
++use axum::body::Body;
++use axum::http::{Method, Request, StatusCode};
++use serde_json::{Value, json};
++use tokio::io::{AsyncReadExt, AsyncWriteExt};
++use tokio::net::TcpListener;
++use tower::ServiceExt as _;
++
++use super::*;
++use crate::control::ControlPlane;
++use crate::ebpf::mock::MockEbpfBackend;
++
++#[test]
++fn version_comparison_handles_semver_prereleases_and_git_describe() {
++    assert!(version_is_newer("v1.0.5", "v1.0.6"));
++    assert!(version_is_newer("1.0.5", "v1.0.10"));
++    assert!(version_is_newer("v1.0.6-rc.1", "v1.0.6"));
++    assert!(version_is_newer("v1.0.6-alpha.1", "v1.0.6-beta.1"));
++    assert!(version_is_newer("v1.0.5-3-gabcdef", "v1.0.6"));
++
++    assert!(!version_is_newer("v1.0.6", "v1.0.6"));
++    assert!(!version_is_newer("v1.0.6", "v1.0.5"));
++    assert!(!version_is_newer("v1.0.6", "v1.0.6-rc.1"));
++    assert!(!version_is_newer("v1.0.5-3-gabcdef", "v1.0.5"));
++    assert!(!version_is_newer("v1.0.5-3-gabcdef-dirty", "v1.0.5"));
++    assert!(!version_is_newer("v1.0.5", "not-a-version"));
++}
++
++#[test]
++fn sha256sums_parser_handles_standard_binary_and_path_entries() {
++    let digest = "25b98ff911a1f686e9316be70cd27fea397ad570a245b3b514f8576669130bd5";
++    let body = format!(
++        "# comment\n\
++         880f17141e87192dbed165a871335a848e99ffe29e01e7c40d93c7d6525277c1  other.tar.gz\n\
++         {} *dist/honk-android-arm64\n",
++        digest.to_ascii_uppercase()
++    );
++    assert_eq!(
++        parse_sha256sums_for_asset(&body, "honk-android-arm64").as_deref(),
++        Some(digest)
++    );
++    assert_eq!(parse_sha256sums_for_asset(&body, "missing"), None);
++    assert_eq!(
++        parse_sha256sums_for_asset("short  honk-android-arm64\n", "honk-android-arm64"),
++        None
++    );
++}
++
++#[test]
++fn elf_validator_checks_magic_class_endianness_and_machine() {
++    let mut elf = vec![0u8; 64];
++    elf[0..4].copy_from_slice(ELF_MAGIC);
++    elf[4] = ELF_CLASS_64;
++    elf[5] = ELF_DATA_LSB;
++    elf[18..20].copy_from_slice(&EM_AARCH64.to_le_bytes());
++
++    assert!(validate_elf_binary(&elf, Some(EM_AARCH64)).is_ok());
++    assert!(validate_elf_binary(&elf, None).is_ok());
++
++    let mut x86_elf = elf.clone();
++    x86_elf[18..20].copy_from_slice(&0x003eu16.to_le_bytes());
++    assert!(validate_elf_binary(&x86_elf, Some(EM_AARCH64)).is_err());
++
++    let mut elf32 = elf.clone();
++    elf32[4] = 1;
++    assert!(validate_elf_binary(&elf32, None).is_err());
++    assert!(validate_elf_binary(b"not an elf", None).is_err());
++}
++
++#[test]
++fn extracts_release_tag_from_github_redirect_url() {
++    assert_eq!(
++        extract_tag_from_release_url(
++            "https://github.com/Wcoom/honk-android/releases/tag/v1.0.6"
++        )
++        .as_deref(),
++        Some("v1.0.6")
++    );
++    assert_eq!(
++        extract_tag_from_release_url(
++            "https://github.com/Wcoom/honk-android/releases/tag/v1.0.6/?foo=1#top"
++        )
++        .as_deref(),
++        Some("v1.0.6")
++    );
++    assert_eq!(
++        extract_tag_from_release_url("https://github.com/Wcoom/honk-android/releases"),
++        None
++    );
++}
++
++fn minimal_valid_arm64_elf(marker: &[u8]) -> Vec<u8> {
++    let mut bytes = vec![0u8; 64 + marker.len()];
++    bytes[0..4].copy_from_slice(ELF_MAGIC);
++    bytes[4] = ELF_CLASS_64;
++    bytes[5] = ELF_DATA_LSB;
++    bytes[18..20].copy_from_slice(&EM_AARCH64.to_le_bytes());
++    bytes[64..].copy_from_slice(marker);
++    bytes
++}
++
++async fn spawn_mock_http_server<F>(handler: F) -> (SocketAddr, tokio::task::JoinHandle<()>)
++where
++    F: Fn(&str) -> (u16, Vec<(String, String)>, Vec<u8>) + Send + Sync + 'static,
++{
++    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
++    let addr = listener.local_addr().unwrap();
++    let handler = Arc::new(handler);
++    let handle = tokio::spawn(async move {
++        while let Ok((mut stream, _)) = listener.accept().await {
++            let handler = Arc::clone(&handler);
++            tokio::spawn(async move {
++                let mut buf = [0u8; 4096];
++                let n = stream.read(&mut buf).await.unwrap_or(0);
++                let req = String::from_utf8_lossy(&buf[..n]);
++                let target = req
++                    .lines()
++                    .next()
++                    .and_then(|line| line.split_whitespace().nth(1))
++                    .unwrap_or("/");
++                let (status, headers, body) = handler(target);
++                let reason = match status {
++                    200 => "OK",
++                    302 => "Found",
++                    403 => "Forbidden",
++                    404 => "Not Found",
++                    _ => "Status",
++                };
++                let mut head = format!(
++                    "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n",
++                    body.len()
++                );
++                for (k, v) in headers {
++                    head.push_str(&format!("{k}: {v}\r\n"));
++                }
++                head.push_str("\r\n");
++                let _ = stream.write_all(head.as_bytes()).await;
++                let _ = stream.write_all(&body).await;
++                let _ = stream.shutdown().await;
++            });
++        }
++    });
++    (addr, handle)
++}
++
++async fn test_state_with_update_config(
++    config: CoreUpdateConfig,
++    secret: &str,
++) -> (ControlPlane, Arc<NativeState>, tempfile::TempDir) {
++    let mut cfg = honk_config::Config::default();
++    cfg.experimental.native_api.enabled = true;
++    cfg.experimental.native_api.secret = secret.to_owned();
++    cfg.experimental.native_api.allow_anonymous_loopback = secret.is_empty();
++    let dir = tempfile::tempdir().unwrap();
++    cfg.global.data_dir = dir.path().to_string_lossy().into_owned();
++
++    let router = crate::routing::Router::from_config(&cfg.routing).unwrap();
++    let proxy_registry = Arc::new(crate::proxy::ProxyRegistry::default());
++    let dns_router = Arc::new(crate::dns::routing::DnsRouter::new(&cfg.dns.routing).unwrap());
++    let dns_upstream_pool = Arc::new(
++        crate::dns::upstream_pool::UpstreamPool::new(&cfg.dns.upstream, Arc::clone(&dns_router))
++            .unwrap(),
++    );
++    let dns_cache = Arc::new(tokio::sync::Mutex::new(crate::dns::cache::DnsCache::new(64)));
++    let dns_forwarder = Arc::new(crate::dns::forwarder::DnsForwarder::new(
++        dns_upstream_pool.clone(),
++        dns_cache,
++        dns_router,
++    ));
++    let mut control = ControlPlane::new_with_upstream_pool(
++        cfg,
++        Box::new(MockEbpfBackend::new()),
++        router,
++        proxy_registry,
++        dns_forwarder,
++        dns_upstream_pool,
++    )
++    .unwrap();
++    let state = Arc::new(
++        NativeState::with_core_update_for_test(
++            &mut control,
++            "127.0.0.1:9527".parse().unwrap(),
++            CoreUpdateService::with_config(config),
++        )
++        .await
++        .unwrap(),
++    );
++    (control, state, dir)
++}
++
++#[tokio::test]
++async fn get_refresh_queries_api_and_caches_result() {
++    let binary = minimal_valid_arm64_elf(b"honk-v99");
++    let digest = sha256_hex(&binary);
++    let digest_clone = digest.clone();
++    let (addr, server) = spawn_mock_http_server(move |path| match path {
++        "/releases/latest" => {
++            let body = json!({
++                "tag_name": "v99.0.0",
++                "html_url": "https://example.invalid/releases/tag/v99.0.0",
++                "published_at": "2026-11-24T01:00:00Z",
++                "body": "Release highlights",
++                "assets": [{
++                    "name": "honk-android-arm64",
++                    "size": binary.len(),
++                    "digest": format!("sha256:{digest_clone}"),
++                    "browser_download_url": "http://127.0.0.1:1/unused"
++                }]
++            })
++            .to_string();
++            (
++                200,
++                vec![("Content-Type".into(), "application/json".into())],
++                body.into_bytes(),
++            )
++        }
++        "/download/v99.0.0/SHA256SUMS.txt" => (404, vec![], b"missing".to_vec()),
++        _ => (404, vec![], b"not found".to_vec()),
++    })
++    .await;
++
++    let target_dir = tempfile::tempdir().unwrap();
++    let target_bin = target_dir.path().join("honk");
++    std::fs::write(&target_bin, b"old-binary").unwrap();
++
++    let (_control, state, _data_dir) = test_state_with_update_config(
++        CoreUpdateConfig {
++            api_latest_url: format!("http://{addr}/releases/latest"),
++            web_latest_url: format!("http://{addr}/web/latest"),
++            download_base_url: format!("http://{addr}/download"),
++            expected_elf_machine: Some(EM_AARCH64),
++            verify_exec: false,
++            skip_restart: true,
++            target_path_override: Some(target_bin),
++            ..CoreUpdateConfig::default()
++        },
++        "secret-token",
++    )
++    .await;
++
++    let app = crate::native_api::router(Arc::clone(&state));
++    let unrefreshed = app
++        .clone()
++        .oneshot(
++            Request::builder()
++                .method(Method::GET)
++                .uri("/api/v1/x-honk/core/update")
++                .header("Host", "127.0.0.1:9527")
++                .header("Authorization", "Bearer secret-token")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(unrefreshed.status(), StatusCode::OK);
++    let body: Value = serde_json::from_slice(
++        &axum::body::to_bytes(unrefreshed.into_body(), 16384)
++            .await
++            .unwrap(),
++    )
++    .unwrap();
++    assert_eq!(body["current_version"], crate::VERSION);
++    assert_eq!(body["can_apply"], true);
++    assert_eq!(body["latest_version"], Value::Null);
++    assert_eq!(body["has_update"], false);
++
++    let refreshed = app
++        .clone()
++        .oneshot(
++            Request::builder()
++                .method(Method::GET)
++                .uri("/api/v1/x-honk/core/update?refresh=1")
++                .header("Host", "127.0.0.1:9527")
++                .header("Authorization", "Bearer secret-token")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(refreshed.status(), StatusCode::OK);
++    let body: Value = serde_json::from_slice(
++        &axum::body::to_bytes(refreshed.into_body(), 16384)
++            .await
++            .unwrap(),
++    )
++    .unwrap();
++    assert_eq!(body["latest_version"], "v99.0.0");
++    assert_eq!(body["has_update"], true);
++    assert_eq!(body["source"], "github_api");
++    assert_eq!(body["asset_sha256"], digest);
++
++    server.abort();
++}
++
++#[tokio::test]
++async fn apply_falls_back_to_web_redirect_verifies_sha256_and_replaces_binary() {
++    let new_binary = minimal_valid_arm64_elf(b"new-v99-payload");
++    let digest = sha256_hex(&new_binary);
++    let sums = format!("{digest}  honk-android-arm64\n");
++    let (addr, server) = spawn_mock_http_server(move |path| match path {
++        "/api/latest" => (403, vec![], b"rate limit exceeded".to_vec()),
++        "/web/latest" => (
++            302,
++            vec![(
++                "Location".into(),
++                "/Wcoom/honk-android/releases/tag/v99.1.0".into(),
++            )],
++            vec![],
++        ),
++        "/download/v99.1.0/SHA256SUMS.txt" => (200, vec![], sums.as_bytes().to_vec()),
++        "/download/v99.1.0/honk-android-arm64" => (
++            302,
++            vec![("Location".into(), "/cdn/honk-v99.bin".into())],
++            vec![],
++        ),
++        "/cdn/honk-v99.bin" => (200, vec![], new_binary.clone()),
++        _ => (404, vec![], b"not found".to_vec()),
++    })
++    .await;
++
++    let target_dir = tempfile::tempdir().unwrap();
++    let target_bin = target_dir.path().join("honk");
++    std::fs::write(&target_bin, b"old-honk").unwrap();
++
++    let (_control, state, _data_dir) = test_state_with_update_config(
++        CoreUpdateConfig {
++            api_latest_url: format!("http://{addr}/api/latest"),
++            web_latest_url: format!("http://{addr}/web/latest"),
++            download_base_url: format!("http://{addr}/download"),
++            expected_elf_machine: Some(EM_AARCH64),
++            verify_exec: false,
++            skip_restart: true,
++            target_path_override: Some(target_bin.clone()),
++            ..CoreUpdateConfig::default()
++        },
++        "",
++    )
++    .await;
++
++    let app = crate::native_api::router(Arc::clone(&state));
++    let response = app
++        .oneshot(
++            Request::builder()
++                .method(Method::POST)
++                .uri("/api/v1/x-honk/core/update")
++                .header("Host", "127.0.0.1:9527")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(response.status(), StatusCode::OK);
++    let body: Value = serde_json::from_slice(
++        &axum::body::to_bytes(response.into_body(), 16384)
++            .await
++            .unwrap(),
++    )
++    .unwrap();
++    assert_eq!(body["status"], "updated");
++    assert_eq!(body["installed_version"], "v99.1.0");
++    assert_eq!(body["sha256"], digest);
++    assert_eq!(
++        sha256_hex(&std::fs::read(&target_bin).unwrap()),
++        digest
++    );
++
++    server.abort();
++}
++
++#[tokio::test]
++async fn apply_rejects_checksum_mismatch_without_touching_binary() {
++    let new_binary = minimal_valid_arm64_elf(b"corrupted-payload");
++    let wrong_digest = "0".repeat(64);
++    let sums = format!("{wrong_digest}  honk-android-arm64\n");
++    let (addr, server) = spawn_mock_http_server(move |path| match path {
++        "/api/latest" => (403, vec![], b"rate limit".to_vec()),
++        "/web/latest" => (
++            302,
++            vec![(
++                "Location".into(),
++                "/Wcoom/honk-android/releases/tag/v99.2.0".into(),
++            )],
++            vec![],
++        ),
++        "/download/v99.2.0/SHA256SUMS.txt" => (200, vec![], sums.as_bytes().to_vec()),
++        "/download/v99.2.0/honk-android-arm64" => (200, vec![], new_binary.clone()),
++        _ => (404, vec![], vec![]),
++    })
++    .await;
++
++    let target_dir = tempfile::tempdir().unwrap();
++    let target_bin = target_dir.path().join("honk");
++    std::fs::write(&target_bin, b"intact-original").unwrap();
++
++    let (_control, state, _data_dir) = test_state_with_update_config(
++        CoreUpdateConfig {
++            api_latest_url: format!("http://{addr}/api/latest"),
++            web_latest_url: format!("http://{addr}/web/latest"),
++            download_base_url: format!("http://{addr}/download"),
++            expected_elf_machine: Some(EM_AARCH64),
++            verify_exec: false,
++            skip_restart: true,
++            target_path_override: Some(target_bin.clone()),
++            ..CoreUpdateConfig::default()
++        },
++        "",
++    )
++    .await;
++
++    let app = crate::native_api::router(Arc::clone(&state));
++    let response = app
++        .oneshot(
++            Request::builder()
++                .method(Method::POST)
++                .uri("/api/v1/x-honk/core/update")
++                .header("Host", "127.0.0.1:9527")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
++    let body: Value = serde_json::from_slice(
++        &axum::body::to_bytes(response.into_body(), 16384)
++            .await
++            .unwrap(),
++    )
++    .unwrap();
++    assert_eq!(body["error"]["details"]["stage"], "checksum_mismatch");
++    assert_eq!(std::fs::read(&target_bin).unwrap(), b"intact-original");
++
++    server.abort();
++}
+diff --git a/crates/honk-core/src/native_api/handlers.rs b/crates/honk-core/src/native_api/handlers.rs
+index 38f2181..9636b07 100644
+--- a/crates/honk-core/src/native_api/handlers.rs
++++ b/crates/honk-core/src/native_api/handlers.rs
+@@ -9,9 +9,9 @@ use axum::routing::{MethodRouter, delete, get, post, put};
+ use axum::{Json, Router};
+ 
+ use super::{
+-    ApiError, ErrorCode, NativeState, catalog, config, connections, datapath, dns, error, events,
+-    flows, geodata, groups, logs, management, parse_query, probes, providers, routing, security,
+-    settings, telemetry, types,
++    ApiError, ErrorCode, NativeState, catalog, config, connections, core_update, datapath, dns,
++    error, events, flows, geodata, groups, logs, management, parse_query, probes, providers,
++    routing, security, settings, telemetry, types,
+ };
+ use types::RequestId;
+ 
+@@ -215,6 +215,22 @@ pub(super) fn routes() -> Router<Arc<NativeState>> {
+             "/api/v1/x-honk/runtime/mode",
+             resource(get(unsupported).put(unsupported), &["GET", "PUT"]),
+         )
++        .route(
++            "/api/v1/x-honk/core/update",
++            resource(
++                get(
++                    |State(state): App, Extension(id): Id, uri: Uri| async move {
++                        respond(core_update::get(&state, &uri, &id).await, id)
++                    },
++                )
++                .post(
++                    |State(state): App, Extension(id): Id, request: Request| async move {
++                        respond(core_update::apply(&state, request, &id).await, id)
++                    },
++                ),
++                &["GET", "POST"],
++            ),
++        )
+         .route(
+             "/api/v1/datapath",
+             resource(
 diff --git a/crates/honk-core/src/native_api/settings.rs b/crates/honk-core/src/native_api/settings.rs
 index 1dddb6a..f323fea 100644
 --- a/crates/honk-core/src/native_api/settings.rs
@@ -2268,6 +4409,248 @@ index 7ee2138..f42e986 100644
  fn store_error(error: StoreError) -> anyhow::Error {
      anyhow!("configuration db: {error}")
  }
+diff --git a/crates/honk-core/src/native_api/telemetry.rs b/crates/honk-core/src/native_api/telemetry.rs
+index c6d1cde..c6a176f 100644
+--- a/crates/honk-core/src/native_api/telemetry.rs
++++ b/crates/honk-core/src/native_api/telemetry.rs
+@@ -443,6 +443,64 @@ fn cgroup_directory(membership: &str, mountinfo: &str) -> Option<PathBuf> {
+         .map(|(_, path)| path)
+ }
+ 
++/// Threshold above which cgroup v1 `memory.limit_in_bytes` represents no limit (kernel `PAGE_COUNTER_MAX`).
++const CGROUP_V1_UNLIMITED_THRESHOLD: u64 = 1_u64 << 60;
++
++fn cgroup_v1_memory_directory(membership: &str, mountinfo: &str) -> Option<PathBuf> {
++    let mut members = membership.lines().filter_map(|line| {
++        let mut parts = line.splitn(3, ':');
++        let id = parts.next()?;
++        let controllers = parts.next()?;
++        let member = parts.next()?;
++        (id != "0" && controllers.split(',').any(|c| c == "memory")).then_some(Path::new(member))
++    });
++    let member = members.next()?;
++    if members.next().is_some() || !safe_absolute(member) || member == Path::new("/") {
++        return None;
++    }
++    mountinfo
++        .lines()
++        .filter_map(|line| {
++            let (left, right) = line.split_once(" - ")?;
++            let mut right_fields = right.split_whitespace();
++            if right_fields.next()? != "cgroup" {
++                return None;
++            }
++            let has_memory = right_fields
++                .skip(1)
++                .chain(left.split_whitespace().nth(5))
++                .any(|opts| opts.split(',').any(|item| item == "memory"));
++            if !has_memory {
++                return None;
++            }
++            let mut fields = left.split_whitespace();
++            let root = mount_path(fields.nth(3)?)?;
++            let mount = mount_path(fields.next()?)?;
++            let relative = member.strip_prefix(&root).ok()?;
++            Some((root.components().count(), mount.join(relative)))
++        })
++        .max_by_key(|(depth, _)| *depth)
++        .map(|(_, path)| path)
++}
++
++fn cgroup_v1_events(failcnt: Option<&str>, oom_control: Option<&str>) -> [Option<u64>; 3] {
++    let high = failcnt.and_then(unsigned);
++    let parsed = oom_control.map(cgroup_events).unwrap_or([None; 3]);
++    let oom = oom_control.and_then(|text| {
++        let mut matching = text.lines().filter_map(|line| {
++            let mut words = line.split_whitespace();
++            if words.next()? != "under_oom" {
++                return None;
++            }
++            let value = words.next().and_then(unsigned);
++            Some(if words.next().is_none() { value } else { None })
++        });
++        let val = matching.next().flatten();
++        if matching.next().is_some() { None } else { val }
++    });
++    [high, oom, parsed[2]]
++}
++
+ fn cgroup_events(contents: &str) -> [Option<u64>; 3] {
+     let mut result = [None; 3];
+     for (index, name) in ["high", "oom", "oom_kill"].into_iter().enumerate() {
+@@ -544,32 +602,55 @@ async fn read_memory(proc_self: &Path) -> MemoryReading {
+         cgroup: None,
+         ebpf: ebpf.ok().flatten(),
+     };
+-    let Some(directory) = membership
+-        .as_deref()
+-        .zip(mounts.as_deref())
+-        .and_then(|(membership, mounts)| cgroup_directory(membership, mounts))
++    let (Some(membership_text), Some(mounts_text)) = (membership.as_deref(), mounts.as_deref())
+     else {
+         return reading;
+     };
+-    let (current, limit, events, scope) = tokio::join!(
+-        bounded_read(directory.join("memory.current"), 128),
+-        bounded_read(directory.join("memory.max"), 128),
+-        bounded_read(directory.join("memory.events"), 16 * 1024),
+-        cgroup_scope(&directory),
+-    );
+-    let current = current.as_deref().and_then(unsigned);
+-    let limit_value = limit.as_deref().and_then(unsigned);
+-    let limit_readable =
+-        limit_value.is_some() || limit.as_deref().is_some_and(|value| value.trim() == "max");
+-    let events = events.as_deref().map(cgroup_events).unwrap_or([None; 3]);
+-    if current.is_some() || limit_readable || events.iter().any(Option::is_some) {
+-        reading.cgroup = Some(CgroupReading {
+-            scope,
+-            current,
+-            limit: limit_value,
+-            limit_readable,
+-            events,
+-        });
++    if let Some(directory) = cgroup_directory(membership_text, mounts_text) {
++        let (current, limit, events, scope) = tokio::join!(
++            bounded_read(directory.join("memory.current"), 128),
++            bounded_read(directory.join("memory.max"), 128),
++            bounded_read(directory.join("memory.events"), 16 * 1024),
++            cgroup_scope(&directory),
++        );
++        let current = current.as_deref().and_then(unsigned);
++        let limit_value = limit.as_deref().and_then(unsigned);
++        let limit_readable =
++            limit_value.is_some() || limit.as_deref().is_some_and(|value| value.trim() == "max");
++        let events = events.as_deref().map(cgroup_events).unwrap_or([None; 3]);
++        if current.is_some() || limit_readable || events.iter().any(Option::is_some) {
++            reading.cgroup = Some(CgroupReading {
++                scope,
++                current,
++                limit: limit_value,
++                limit_readable,
++                events,
++            });
++            return reading;
++        }
++    }
++    if let Some(directory) = cgroup_v1_memory_directory(membership_text, mounts_text) {
++        let (current, limit, failcnt, oom_control, scope) = tokio::join!(
++            bounded_read(directory.join("memory.usage_in_bytes"), 128),
++            bounded_read(directory.join("memory.limit_in_bytes"), 128),
++            bounded_read(directory.join("memory.failcnt"), 128),
++            bounded_read(directory.join("memory.oom_control"), 16 * 1024),
++            cgroup_scope(&directory),
++        );
++        let current = current.as_deref().and_then(unsigned);
++        let raw_limit = limit.as_deref().and_then(unsigned);
++        let limit_readable = raw_limit.is_some();
++        let limit_value = raw_limit.filter(|&value| value < CGROUP_V1_UNLIMITED_THRESHOLD);
++        let events = cgroup_v1_events(failcnt.as_deref(), oom_control.as_deref());
++        if current.is_some() || limit_readable || events.iter().any(Option::is_some) {
++            reading.cgroup = Some(CgroupReading {
++                scope,
++                current,
++                limit: limit_value,
++                limit_readable,
++                events,
++            });
++        }
+     }
+     reading
+ }
+diff --git a/crates/honk-core/src/native_api/telemetry/tests.rs b/crates/honk-core/src/native_api/telemetry/tests.rs
+index 001dda8..4a1e05e 100644
+--- a/crates/honk-core/src/native_api/telemetry/tests.rs
++++ b/crates/honk-core/src/native_api/telemetry/tests.rs
+@@ -376,3 +376,69 @@ async fn ebpf_bytes_sum_memlock_of_own_bpf_fds_only() {
+     }
+     assert_eq!(ebpf_bytes(proc_self), None);
+ }
++
++#[tokio::test]
++async fn memory_falls_back_to_cgroup_v1_when_cgroup2_lacks_memory() {
++    let fixture = tempfile::tempdir().unwrap();
++    let proc_self = fixture.path().join("proc");
++    let cg2_root = fixture.path().join("cg2");
++    let memcg_root = fixture.path().join("memcg");
++    let cgroup = memcg_root.join("honk");
++    std::fs::create_dir(&proc_self).unwrap();
++    std::fs::create_dir_all(&cg2_root).unwrap();
++    std::fs::create_dir_all(&cgroup).unwrap();
++    std::fs::write(proc_self.join("status"), "Name:\thonk\nVmRSS:\t8192 kB\n").unwrap();
++    std::fs::write(proc_self.join("cgroup"), "2:memory:/honk\n0::/\n").unwrap();
++    std::fs::write(
++        proc_self.join("mountinfo"),
++        format!(
++            "1 0 0:1 / {} rw - cgroup2 none rw\n2 0 0:2 / {} rw,nosuid - cgroup cgroup rw,memory\n",
++            cg2_root.display(),
++            memcg_root.display()
++        ),
++    )
++    .unwrap();
++    std::fs::write(cgroup.join("memory.usage_in_bytes"), "12582912\n").unwrap();
++    std::fs::write(cgroup.join("memory.limit_in_bytes"), "9223372036854771712\n").unwrap();
++    std::fs::write(cgroup.join("memory.failcnt"), "1\n").unwrap();
++    std::fs::write(
++        cgroup.join("memory.oom_control"),
++        "oom_kill_disable 0\nunder_oom 0\noom_kill 2\n",
++    )
++    .unwrap();
++    std::fs::write(
++        cgroup.join("cgroup.procs"),
++        format!("{}\n", std::process::id()),
++    )
++    .unwrap();
++
++    let reading = read_memory(&proc_self).await;
++    let group = reading.cgroup.as_ref().expect("v1 memcg reading");
++    assert_eq!(group.scope, "service");
++    assert_eq!(group.current, Some(12582912));
++    assert_eq!(group.limit, None);
++    assert!(group.limit_readable);
++    assert_eq!(group.events, [Some(1), Some(0), Some(2)]);
++    assert_eq!(
++        reading.metrics().collect::<Vec<_>>(),
++        [
++            "process.rss_bytes",
++            "cgroup.current_bytes",
++            "cgroup.limit_bytes",
++            "cgroup.events.high",
++            "cgroup.events.oom",
++            "cgroup.events.oom_kill"
++        ]
++    );
++
++    // Numeric limit below threshold is exposed directly.
++    std::fs::write(cgroup.join("memory.limit_in_bytes"), "268435456\n").unwrap();
++    assert_eq!(
++        read_memory(&proc_self).await.cgroup.unwrap().limit,
++        Some(268435456)
++    );
++
++    // Root memcg `/` is not treated as service memory.
++    std::fs::write(proc_self.join("cgroup"), "2:memory:/\n0::/\n").unwrap();
++    assert!(read_memory(&proc_self).await.cgroup.is_none());
++}
+diff --git a/crates/honk-core/src/native_api/types.rs b/crates/honk-core/src/native_api/types.rs
+index 4b242ed..46f6499 100644
+--- a/crates/honk-core/src/native_api/types.rs
++++ b/crates/honk-core/src/native_api/types.rs
+@@ -445,6 +445,7 @@ pub(super) fn discovery(auth: AuthDiscovery, admitted: bool) -> Value {
+                 "config_export": "/api/v1/x-honk/config/export",
+                 "config_import": "/api/v1/x-honk/config/import",
+                 "config_revisions": "/api/v1/x-honk/config/revisions",
++                "core_update": "/api/v1/x-honk/core/update",
+             },
+         },
+         "auth": {
+@@ -498,6 +499,7 @@ pub(super) async fn capabilities(state: &super::NativeState) -> Value {
+                 "config_export": {"available":config.sources.available()},
+                 "config_import": config.import_capability(),
+                 "config_revisions": config.revisions_capability(),
++                "core_update": state.core_update.capability(state.settings.admin_authorized()),
+                 "runtime_mode": {"available":false},
+             },
+             "config_validate": {"available":config.running(),"modes":["syntax","full"],"max_bytes":crate::configuration::MAX_SOURCE_BYTES,"max_sources":crate::configuration::MAX_SOURCES},
 diff --git a/crates/honk-core/src/netlink.rs b/crates/honk-core/src/netlink.rs
 index cae0955..b36a979 100644
 --- a/crates/honk-core/src/netlink.rs
@@ -2618,6 +5001,26 @@ index cae0955..b36a979 100644
  }
  
  #[cfg(test)]
+diff --git a/crates/honk-core/tests/native_api_test/security.rs b/crates/honk-core/tests/native_api_test/security.rs
+index cc441af..5e741aa 100644
+--- a/crates/honk-core/tests/native_api_test/security.rs
++++ b/crates/honk-core/tests/native_api_test/security.rs
+@@ -100,6 +100,7 @@ async fn discovery_withholds_detail_from_callers_without_a_credential() {
+             "config_export": "/api/v1/x-honk/config/export",
+             "config_import": "/api/v1/x-honk/config/import",
+             "config_revisions": "/api/v1/x-honk/config/revisions",
++            "core_update": "/api/v1/x-honk/core/update",
+         })
+     );
+     assert!(full["links"].get("config_export").is_none());
+@@ -110,6 +111,7 @@ async fn discovery_withholds_detail_from_callers_without_a_credential() {
+         "config_export",
+         "config_import",
+         "config_revisions",
++        "core_update",
+         "runtime_mode",
+     ] {
+         assert!(resources.get(key).is_none(), "{key}");
 diff --git a/crates/honk-ebpf-common/src/conn.rs b/crates/honk-ebpf-common/src/conn.rs
 index 2bfd333..d6598ea 100644
 --- a/crates/honk-ebpf-common/src/conn.rs

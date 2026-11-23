@@ -6,6 +6,7 @@ pub(crate) mod catalog;
 pub(crate) mod config;
 mod config_write;
 mod connections;
+mod core_update;
 mod datapath;
 pub(crate) mod dns;
 pub(crate) mod events;
@@ -64,6 +65,7 @@ pub struct NativeState {
     pub(crate) auth: Option<Arc<auth::Auth>>,
     /// Stored geodata sources and the update schedule; absent without a state db.
     pub(crate) geodata: Option<Arc<geodata::Sources>>,
+    pub(crate) core_update: Arc<core_update::CoreUpdateService>,
     ui: Option<ui::Ui>,
     instance_id: String,
     started_at: SystemTime,
@@ -107,6 +109,43 @@ impl NativeState {
         listen: SocketAddr,
         started_at: SystemTime,
         started: Instant,
+    ) -> anyhow::Result<Self> {
+        Self::with_observation_and_updater(
+            control,
+            observation,
+            listen,
+            started_at,
+            started,
+            core_update::CoreUpdateService::default(),
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn with_core_update_for_test(
+        control: &mut ControlPlane,
+        listen: SocketAddr,
+        core_update: core_update::CoreUpdateService,
+    ) -> anyhow::Result<Self> {
+        let observation = observation::NativeObservation::attach(control).await;
+        Self::with_observation_and_updater(
+            control,
+            observation,
+            listen,
+            SystemTime::now(),
+            Instant::now(),
+            core_update,
+        )
+        .await
+    }
+
+    async fn with_observation_and_updater(
+        control: &mut ControlPlane,
+        observation: Arc<observation::NativeObservation>,
+        listen: SocketAddr,
+        started_at: SystemTime,
+        started: Instant,
+        core_update: core_update::CoreUpdateService,
     ) -> anyhow::Result<Self> {
         let config = control.config_handle();
         let (settings, geodata_file, clash_secret, data_dir) = {
@@ -177,6 +216,7 @@ impl NativeState {
             security: security::Security::new(&settings, listen),
             auth,
             geodata,
+            core_update: Arc::new(core_update),
             ui: ui::load(&settings.ui).await?,
             settings,
             instance_id: observation.core.instance_id.clone(),

@@ -1,0 +1,133 @@
+import {useT} from '../../i18n';
+import {useGroups, useGroupControl} from '../../store';
+import {useMode} from '../../features/shared/useMode';
+import {ModeSwitch, ModeApply} from '../../features/activity/widgets';
+import {selectMember} from '../../features/shared/selectMember';
+import {Button, ChoiceMenu, Empty, ErrorMessage, Kv, Link, Segmented, WidestLabel} from '../../ui/ui';
+import {WidgetRow} from '../../ui/WidgetPanel';
+import {href} from '../route';
+import type {Widget} from './layout';
+import {Reading} from './Reading';
+
+// In the panel the choice fills the width and Apply takes its own row below it, on every host.
+export function ModeWidget({targetOnly, fill = false}: {targetOnly: boolean; fill?: boolean}) {
+  const t = useT();
+  const m = useMode();
+  return (
+    <>
+      <ErrorMessage error={m.error} onRetry={m.retry} />
+      {!targetOnly && <ModeSwitch model={m} fill={fill} />}
+      {(targetOnly || m.mode === 'global') && (
+        <WidgetRow label={t('act.global')}>
+          <span className={targetOnly ? 'rp-cluster rp-global-controls' : 'rp-cluster'}>
+            <ChoiceMenu
+              quiet
+              label={t('act.global')}
+              value={m.target}
+              onChange={m.pickTarget}
+              isDisabled={m.busy || !m.writable}
+              items={m.targets}
+              searchLabel={t('ui.filterOutbounds')}
+            >
+              <WidestLabel labels={m.targets.map(target => target.label)}>{m.targetText}</WidestLabel>
+            </ChoiceMenu>
+            {targetOnly && <ModeApply model={m} />}
+          </span>
+        </WidgetRow>
+      )}
+      {m.incomplete && <span className="rp-label">{t('act.globalMissing')}</span>}
+    </>
+  );
+}
+// Works without setup: the first manual group until the card picks another; with none, one jump to create a group.
+export const cardGroup = <G extends {id: string; policy: {kind: string}}>(groups: readonly G[] | undefined, chosen: string | undefined) =>
+  groups?.find(group => group.id === chosen) ?? groups?.find(group => group.policy.kind === 'selector');
+export function GroupWidget({item, onChange}: {item: Widget; onChange?: (item: Widget) => void}) {
+  const t = useT();
+  const groups = useGroups();
+  const selected = cardGroup(groups.data, item.group);
+  return (
+    <Reading state={groups}>
+      {selected ? (
+        <>
+          <ChoiceMenu
+            quiet
+            label={t('ui.group')}
+            value={selected.id}
+            items={(groups.data ?? []).map(group => ({id: group.id, label: group.name}))}
+            onChange={group => onChange?.({...item, group})}
+            searchLabel={t('ui.filterGroups')}
+          >
+            {selected.name}
+          </ChoiceMenu>
+          <GroupControl id={selected.id} refresh={groups.refetch} />
+        </>
+      ) : (
+        <Empty>
+          {t('widgets.noManualGroup')}
+          <Link appearance="button" small href={href('policies', {new: '1'})}>
+            {t('group.newGroup')}
+          </Link>
+        </Empty>
+      )}
+    </Reading>
+  );
+}
+function GroupControl({id, refresh}: {id: string; refresh: () => unknown}) {
+  const t = useT();
+  const control = useGroupControl(id, refresh, () => {});
+  const g = control.data;
+  const network = control.network;
+  const selection = g?.runtime.selection;
+  const selected =
+    network === 'both' ? (selection?.tcp?.member_id === selection?.udp?.member_id ? selection?.tcp?.member_id : '') : selection?.[network]?.member_id;
+  const canSelect = !!g && (g.capabilities.can_select || g.capabilities.can_override);
+  const overridden = network === 'both' ? [selection?.tcp, selection?.udp].some(s => s?.source === 'override') : selection?.[network]?.source === 'override';
+  const name = (member: string | undefined) => g?.members.find(m => m.id === member)?.name ?? '—';
+  return (
+    <Reading state={control}>
+      <ErrorMessage error={control.actionError} />
+      <Segmented
+        label={t('widgets.network')}
+        value={network}
+        onChange={value => control.setNetwork(value as typeof network)}
+        isDisabled={!!control.busy}
+        items={[
+          ['both', t('policy.both')],
+          ['tcp', 'TCP'],
+          ['udp', 'UDP']
+        ]}
+      />
+      {/* With both networks on different members, the member row has no single value, so each network shows its own. */}
+      {selected === '' && (
+        <Kv
+          compact
+          row
+          items={[
+            ['TCP', name(selection?.tcp?.member_id)],
+            ['UDP', name(selection?.udp?.member_id)]
+          ]}
+        />
+      )}
+      <WidgetRow label={t('widgets.member')}>
+        <ChoiceMenu
+          quiet
+          searchLabel={t('ui.filterMembers')}
+          label={t('widgets.member')}
+          value={selected ?? ''}
+          isDisabled={!!control.busy || !canSelect}
+          items={(g?.members ?? []).map(m => ({id: m.id, label: m.name}))}
+          onChange={member => selectMember(control.select, member, selected, g?.name, name, t)}
+        >
+          {name(selected)}
+        </ChoiceMenu>
+      </WidgetRow>
+      {g?.capabilities.can_override && overridden && (
+        <Button small isPending={control.busy === 'selection'} onPress={() => void control.clearOverride()}>
+          {t('policy.releaseOverride')}
+        </Button>
+      )}
+      {!canSelect && <span className="rp-label">{t('widgets.readOnly')}</span>}
+    </Reading>
+  );
+}

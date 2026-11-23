@@ -443,6 +443,64 @@ fn cgroup_directory(membership: &str, mountinfo: &str) -> Option<PathBuf> {
         .map(|(_, path)| path)
 }
 
+/// Threshold above which cgroup v1 `memory.limit_in_bytes` represents no limit (kernel `PAGE_COUNTER_MAX`).
+const CGROUP_V1_UNLIMITED_THRESHOLD: u64 = 1_u64 << 60;
+
+fn cgroup_v1_memory_directory(membership: &str, mountinfo: &str) -> Option<PathBuf> {
+    let mut members = membership.lines().filter_map(|line| {
+        let mut parts = line.splitn(3, ':');
+        let id = parts.next()?;
+        let controllers = parts.next()?;
+        let member = parts.next()?;
+        (id != "0" && controllers.split(',').any(|c| c == "memory")).then_some(Path::new(member))
+    });
+    let member = members.next()?;
+    if members.next().is_some() || !safe_absolute(member) || member == Path::new("/") {
+        return None;
+    }
+    mountinfo
+        .lines()
+        .filter_map(|line| {
+            let (left, right) = line.split_once(" - ")?;
+            let mut right_fields = right.split_whitespace();
+            if right_fields.next()? != "cgroup" {
+                return None;
+            }
+            let has_memory = right_fields
+                .skip(1)
+                .chain(left.split_whitespace().nth(5))
+                .any(|opts| opts.split(',').any(|item| item == "memory"));
+            if !has_memory {
+                return None;
+            }
+            let mut fields = left.split_whitespace();
+            let root = mount_path(fields.nth(3)?)?;
+            let mount = mount_path(fields.next()?)?;
+            let relative = member.strip_prefix(&root).ok()?;
+            Some((root.components().count(), mount.join(relative)))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, path)| path)
+}
+
+fn cgroup_v1_events(failcnt: Option<&str>, oom_control: Option<&str>) -> [Option<u64>; 3] {
+    let high = failcnt.and_then(unsigned);
+    let parsed = oom_control.map(cgroup_events).unwrap_or([None; 3]);
+    let oom = oom_control.and_then(|text| {
+        let mut matching = text.lines().filter_map(|line| {
+            let mut words = line.split_whitespace();
+            if words.next()? != "under_oom" {
+                return None;
+            }
+            let value = words.next().and_then(unsigned);
+            Some(if words.next().is_none() { value } else { None })
+        });
+        let val = matching.next().flatten();
+        if matching.next().is_some() { None } else { val }
+    });
+    [high, oom, parsed[2]]
+}
+
 fn cgroup_events(contents: &str) -> [Option<u64>; 3] {
     let mut result = [None; 3];
     for (index, name) in ["high", "oom", "oom_kill"].into_iter().enumerate() {
@@ -544,32 +602,55 @@ async fn read_memory(proc_self: &Path) -> MemoryReading {
         cgroup: None,
         ebpf: ebpf.ok().flatten(),
     };
-    let Some(directory) = membership
-        .as_deref()
-        .zip(mounts.as_deref())
-        .and_then(|(membership, mounts)| cgroup_directory(membership, mounts))
+    let (Some(membership_text), Some(mounts_text)) = (membership.as_deref(), mounts.as_deref())
     else {
         return reading;
     };
-    let (current, limit, events, scope) = tokio::join!(
-        bounded_read(directory.join("memory.current"), 128),
-        bounded_read(directory.join("memory.max"), 128),
-        bounded_read(directory.join("memory.events"), 16 * 1024),
-        cgroup_scope(&directory),
-    );
-    let current = current.as_deref().and_then(unsigned);
-    let limit_value = limit.as_deref().and_then(unsigned);
-    let limit_readable =
-        limit_value.is_some() || limit.as_deref().is_some_and(|value| value.trim() == "max");
-    let events = events.as_deref().map(cgroup_events).unwrap_or([None; 3]);
-    if current.is_some() || limit_readable || events.iter().any(Option::is_some) {
-        reading.cgroup = Some(CgroupReading {
-            scope,
-            current,
-            limit: limit_value,
-            limit_readable,
-            events,
-        });
+    if let Some(directory) = cgroup_directory(membership_text, mounts_text) {
+        let (current, limit, events, scope) = tokio::join!(
+            bounded_read(directory.join("memory.current"), 128),
+            bounded_read(directory.join("memory.max"), 128),
+            bounded_read(directory.join("memory.events"), 16 * 1024),
+            cgroup_scope(&directory),
+        );
+        let current = current.as_deref().and_then(unsigned);
+        let limit_value = limit.as_deref().and_then(unsigned);
+        let limit_readable =
+            limit_value.is_some() || limit.as_deref().is_some_and(|value| value.trim() == "max");
+        let events = events.as_deref().map(cgroup_events).unwrap_or([None; 3]);
+        if current.is_some() || limit_readable || events.iter().any(Option::is_some) {
+            reading.cgroup = Some(CgroupReading {
+                scope,
+                current,
+                limit: limit_value,
+                limit_readable,
+                events,
+            });
+            return reading;
+        }
+    }
+    if let Some(directory) = cgroup_v1_memory_directory(membership_text, mounts_text) {
+        let (current, limit, failcnt, oom_control, scope) = tokio::join!(
+            bounded_read(directory.join("memory.usage_in_bytes"), 128),
+            bounded_read(directory.join("memory.limit_in_bytes"), 128),
+            bounded_read(directory.join("memory.failcnt"), 128),
+            bounded_read(directory.join("memory.oom_control"), 16 * 1024),
+            cgroup_scope(&directory),
+        );
+        let current = current.as_deref().and_then(unsigned);
+        let raw_limit = limit.as_deref().and_then(unsigned);
+        let limit_readable = raw_limit.is_some();
+        let limit_value = raw_limit.filter(|&value| value < CGROUP_V1_UNLIMITED_THRESHOLD);
+        let events = cgroup_v1_events(failcnt.as_deref(), oom_control.as_deref());
+        if current.is_some() || limit_readable || events.iter().any(Option::is_some) {
+            reading.cgroup = Some(CgroupReading {
+                scope,
+                current,
+                limit: limit_value,
+                limit_readable,
+                events,
+            });
+        }
     }
     reading
 }

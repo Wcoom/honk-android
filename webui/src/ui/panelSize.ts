@@ -1,0 +1,107 @@
+export type PanelSize = {width: number; height: number};
+// Where the panel sits in its frame (the room between the top bar and the dock): x from the inline end, y from the
+// frame's bottom, or from its top when `top` is set. A panel in the upper half keeps its top edge, so expanding or
+// resizing it grows downwards, where the room is; one in the lower half keeps its bottom edge and grows upwards.
+export type PanelOffset = {x: number; y: number; top?: true};
+const limits = {width: [200, 640], height: [200, 960], offset: [0, 8192]} as const;
+const clamp = (value: number, [min, max]: readonly [number, number]) => Math.round(Math.min(max, Math.max(min, value)));
+// A stored panel size within its limits. The viewport bound is CSS's, so a smaller window shrinks the panel without
+// rewriting the reader's size, and a larger one restores it.
+export const clampPanelSize = (size: PanelSize): PanelSize => ({width: clamp(size.width, limits.width), height: clamp(size.height, limits.height)});
+// A stored offset is only kept non-negative; the frame keeps the panel inside the viewport, so a window that grows back
+// returns the panel to where the reader left it.
+export const clampPanelOffset = ({x, y, top}: PanelOffset): PanelOffset => ({x: clamp(x, limits.offset), y: clamp(y, limits.offset), ...(top && {top})});
+// The offset as drawn in a frame of `room`: the panel stays inside it, so a stored offset beyond a smaller window
+// neither hides the panel nor lags the pointer.
+export const fitPanelOffset = ({x, y, top}: PanelOffset, room: PanelSize, panel: PanelSize): PanelOffset => ({
+  x: Math.max(0, Math.min(x, room.width - Math.min(panel.width, room.width))),
+  y: Math.max(0, Math.min(y, room.height - Math.min(panel.height, room.height))),
+  ...(top && {top})
+});
+// The same place measured from the edge nearer the panel's centre, so the panel grows towards the room it has.
+export function anchorPanelOffset({x, y, top}: PanelOffset, room: number, height: number): PanelOffset {
+  const above = top ? y : room - height - y;
+  return above + height / 2 < room / 2 ? {x, y: Math.max(0, Math.round(above)), top: true} : {x, y: Math.max(0, Math.round(room - height - above))};
+}
+export const minPanelSize: PanelSize = {width: limits.width[0], height: limits.height[0]};
+// The width of a panel the reader has not sized, wider than the least the resize allows.
+export const defaultPanelWidth = 280;
+// The height limit of a panel the reader has not sized, the stylesheet's fallback for --rp-panel-height.
+export const defaultPanelHeight = 480;
+// A resize handle's edge: the side or corner it moves, in logical directions. The opposite side stays where it is.
+export type PanelEdge = {inline?: 'start' | 'end'; block?: 'start' | 'end'};
+// One resize step from a handle: `toEnd` is the pointer's movement towards the inline end, `down` its movement down.
+// The offset is measured from the inline end and from the anchored block edge, so a handle on those sides moves the
+// offset with it, and the offset never goes below zero. The panel stays inside `room`, the frame fitPanelOffset keeps a
+// moved panel in, so no handle pushes a side out of the viewport, and grows no taller than its content (`tallest`).
+// `moved` is how far the pointer has gone vertically since the gesture began, whatever its direction: a step that does
+// not move vertically changes nothing about the height once the gesture has.
+export function resizePanel(
+  base: {size: PanelSize; offset: PanelOffset},
+  edge: PanelEdge,
+  toEnd: number,
+  down: number,
+  room?: PanelSize,
+  tallest: number = limits.height[1],
+  moved: number = Math.abs(down)
+) {
+  const axis = (
+    side: 'start' | 'end' | undefined,
+    home: 'start' | 'end',
+    length: number,
+    at: number,
+    delta: number,
+    range: readonly [number, number],
+    bound: number
+  ) => {
+    if (!side) return [length, at];
+    const next = clamp(length + (side === 'end' ? delta : -delta), range);
+    if (side !== home) return [Math.max(Math.min(length, range[0]), Math.min(next, bound - at)), at];
+    const fitted = Math.min(next, length + at);
+    return [fitted, at - (fitted - length)];
+  };
+  const [width, x] = axis(edge.inline, 'end', base.size.width, base.offset.x, toEnd, limits.width, room?.width ?? Infinity);
+  const [height, y] = axis(
+    edge.block,
+    base.offset.top ? 'start' : 'end',
+    base.size.height,
+    base.offset.y,
+    down,
+    [limits.height[0], Math.max(limits.height[0], Math.min(limits.height[1], tallest))],
+    room?.height ?? Infinity
+  );
+  // A drag that moves no vertical edge only sets the width. It leaves the height to the content, up to what the frame
+  // allows, because a height frozen at the wider layout would cut off the taller content of a narrower one. A handle on
+  // a vertical edge, or one that has moved vertically, keeps the height it sets.
+  return {
+    size: {width, height: edge.block && (!edge.inline || moved) ? height : limits.height[1]},
+    offset: {x, y, ...(base.offset.top && {top: base.offset.top})}
+  };
+}
+// A panel hidden at an edge goes past the screen edge nearest to it and leaves a handle there. Equal gaps go to the
+// first of right, left, bottom and top.
+export type ScreenEdge = 'right' | 'left' | 'bottom' | 'top';
+export type PanelBox = {left: number; top: number; width: number; height: number};
+export function nearestEdge(box: PanelBox, view: PanelSize): ScreenEdge {
+  const gaps: [ScreenEdge, number][] = [
+    ['right', view.width - box.left - box.width],
+    ['left', box.left],
+    ['bottom', view.height - box.top - box.height],
+    ['top', box.top]
+  ];
+  return gaps.reduce((nearest, gap) => (gap[1] < nearest[1] ? gap : nearest))[0];
+}
+// The handle's start along `edge`, `length` long, centred on the panel and kept inside the viewport, and the shift that
+// moves the panel just past that edge.
+export function edgePlacement(box: PanelBox, view: PanelSize, edge: ScreenEdge, length: number) {
+  const side = edge === 'left' || edge === 'right';
+  const [start, size, room] = side ? [box.top, box.height, view.height] : [box.left, box.width, view.width];
+  const at = Math.round(Math.max(0, Math.min(room - length, start + (size - length) / 2)));
+  const shift = {
+    right: {x: view.width - box.left, y: 0},
+    left: {x: -(box.left + box.width), y: 0},
+    bottom: {x: 0, y: view.height - box.top},
+    top: {x: 0, y: -(box.top + box.height)}
+  }[edge];
+  return {at, shift};
+}

@@ -82,6 +82,10 @@ impl RealEbpfBackend {
         {
             result.hooks = DatapathCheck::Absent;
         }
+        if result.programs == DatapathCheck::Unknown {
+            result.checked_at = std::time::SystemTime::now();
+            return result;
+        }
         let tracked = owned.len() + usize::from(self.dae0_ingress_link.is_some());
         let dae0 = self
             .dae0_ingress_link

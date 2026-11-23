@@ -1,0 +1,22 @@
+import {defineConfig} from 'vitest/config';
+import {startupTextPlugin} from './tools/startup-text.mjs';
+
+export default defineConfig({
+  plugins: [startupTextPlugin()],
+  test: {
+    environment: 'node',
+    // The control-size guard and the blur test read the stylesheets with ?raw, which Vitest otherwise serves empty.
+    css: {include: [/src\/ui\/styles\/(?:palettes\/)?[^/]+\.css/]},
+    include: ['src/**/*.test.{ts,tsx}', 'mock/**/*.test.ts', 'tools/*.test.mjs'],
+    setupFiles: ['src/i18n/setup.test-env.ts'],
+    // gc() for the API client tests that collect garbage.
+    execArgv: ['--expose-gc'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'lcov'],
+      include: ['src/**'],
+      exclude: ['src/api/types.ts', 'mock/**'],
+      thresholds: {lines: 15, statements: 15}
+    }
+  }
+});

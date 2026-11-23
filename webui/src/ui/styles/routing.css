@@ -1,0 +1,143 @@
+.rp-topology {
+  min-width: 0;
+  overflow: hidden;
+}
+/* The routing tree: tiles placed on computed rows, the connectors drawn from the same numbers. */
+.rp-tree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-2);
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.rp-tree-hint {
+  display: none;
+  color: var(--rp-subtle);
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+}
+@media (max-width: 599.98px) {
+  .rp-tree-hint {
+    display: block;
+  }
+}
+.rp-tree-captions {
+  position: relative;
+  height: 16px;
+}
+.rp-tree-captions > .rp-label {
+  position: absolute;
+  top: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.rp-tree-canvas {
+  position: relative;
+}
+.rp-tree-links {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  fill: none;
+  stroke: var(--rp-muted);
+  stroke-linecap: round;
+}
+.rp-tree-links path {
+  opacity: 0.55;
+  transition: opacity var(--rp-duration) var(--rp-ease);
+}
+.rp-tree-links path[data-kind='direct'] {
+  stroke: var(--rp-positive);
+}
+.rp-tree-links path[data-kind='block'] {
+  stroke: var(--rp-negative);
+}
+.rp-tree-links path[data-kind='group'] {
+  stroke: var(--rp-iris);
+}
+.rp-tree-links path[data-kind='node'] {
+  stroke: var(--rp-accent);
+}
+.rp-tree-links path[data-state='active'] {
+  opacity: 1;
+}
+.rp-tree-links path[data-state='dim'] {
+  opacity: 0.1;
+}
+.rp-tree-tile {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  height: 36px;
+  padding: 0 var(--rp-space-2h);
+  border-radius: var(--rp-r-md);
+  border: 2px solid transparent;
+  background: var(--rp-overlay);
+  color: var(--rp-text);
+  font: inherit;
+  font-size: var(--rp-text-sm);
+  line-height: 16px;
+  text-align: start;
+  cursor: pointer;
+}
+.rp-tree-tile.dim {
+  opacity: 0.35;
+}
+.rp-tree-tile[data-hovered] {
+  background: var(--rp-hl-med);
+}
+.rp-tree-tile[data-selected] {
+  border-color: var(--rp-accent);
+  background: var(--rp-selected);
+}
+.rp-tree-tile[data-focus-visible] {
+  border-color: transparent;
+  outline: var(--rp-focus-width) solid var(--rp-focus-color);
+  outline-offset: calc(-1 * var(--rp-focus-width));
+}
+.rp-tree-tile .l {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rp-tree-tile[data-stage='rule'] .l {
+  font-family: var(--rp-font-mono);
+  font-size: var(--rp-text-xs);
+  font-variant-ligatures: none;
+}
+.rp-tree-tile .s {
+  margin-inline-start: var(--rp-space-2);
+  font-size: var(--rp-text-xs);
+  color: var(--rp-subtle);
+}
+.rp-tree-tile .s.ok {
+  color: var(--rp-positive-text);
+}
+.rp-tree-tile .s.warn {
+  color: var(--rp-notice-text);
+}
+.rp-tree-tile .s.err {
+  color: var(--rp-negative-text);
+}
+.rp-tree-tile .c {
+  flex: none;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--rp-subtle);
+}
+/* A record's rule wraps in its cell, its badge on the next line when the expression leaves no room. */
+.rp-cell-wrap > .rp-rule {
+  flex-wrap: wrap;
+  row-gap: var(--rp-space-1);
+}
+.rp-cell-wrap > .rp-rule > .rp-truncate {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

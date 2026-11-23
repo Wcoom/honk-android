@@ -1,0 +1,247 @@
+import {describe, expect, it} from 'vitest';
+import {
+  donutAngles,
+  linearPosition,
+  sampleTicks,
+  placeLabels,
+  clockLabels,
+  valueAxis,
+  seriesStats,
+  nearestIndex,
+  heatTone,
+  logDomain,
+  logPosition,
+  logTicks,
+  lineSpan,
+  percentile,
+  swarm,
+  symlogAxis,
+  symlogPosition,
+  timeBuckets,
+  visibleRows,
+  mountedRanges,
+  waffleCells
+} from './layout';
+
+describe('chart layout', () => {
+  it('takes nearest-rank percentiles on odd and even counts', () => {
+    expect(percentile([], 50)).toBeNull();
+    expect(percentile([5], 95)).toBe(5);
+    expect(percentile([1, 2, 3, 4], 50)).toBe(2);
+    expect(percentile([1, 2, 3, 4, 5], 50)).toBe(3);
+    expect(
+      percentile(
+        [...Array(100).keys()].map(n => n + 1),
+        95
+      )
+    ).toBe(95);
+  });
+
+  it('spans whole decades on a log axis and places values inside it', () => {
+    expect(logDomain([3, 420])).toEqual([1, 1000]);
+    expect(logDomain([10])).toEqual([10, 100]);
+    expect(logDomain([0, 0.2])).toEqual([1, 10]);
+    expect(logTicks([1, 100])).toEqual([1, 2, 5, 10, 20, 50, 100]);
+    expect(logTicks([1, 100000])).toEqual([1, 10, 100, 1000, 10000, 100000]);
+    expect(logPosition(10, [1, 100])).toBeCloseTo(0.5);
+    expect(logPosition(1000, [1, 100])).toBe(1);
+  });
+
+  it('packs a swarm so no two drawn dots overlap, and counts the dots with no room instead of piling them', () => {
+    const xs = [...Array(60)].map((_, i) => 100 + (i % 7));
+    const {ys, hidden} = swarm(xs, 3, 40);
+    const drawn = xs.map((x, i) => ({x, y: ys[i]})).filter((dot): dot is {x: number; y: number} => dot.y !== null);
+    for (const dot of drawn) expect(Math.abs(dot.y)).toBeLessThanOrEqual(37);
+    for (let a = 0; a < drawn.length; a++)
+      for (let b = a + 1; b < drawn.length; b++) expect(Math.hypot(drawn[a].x - drawn[b].x, drawn[a].y - drawn[b].y)).toBeGreaterThanOrEqual(6 - 1e-6);
+    expect(drawn.length + hidden.reduce((sum, group) => sum + group.count, 0)).toBe(60);
+    const same = swarm(Array(20).fill(100), 4, 20);
+    expect(same.ys.filter(y => y !== null)).toHaveLength(5);
+    expect(same.hidden).toEqual([{x: 100, count: 15}]);
+    expect(swarm([10, 50, 90], 3, 20)).toEqual({ys: [0, 0, 0], hidden: []});
+    expect(swarm([...Array(10).fill(100), ...Array(10).fill(110), ...Array(10).fill(140)], 4, 12).hidden.map(group => group.x)).toEqual([100, 140]);
+  });
+
+  it('fills a waffle with cells that add up and never hides a non-zero share', () => {
+    expect(waffleCells([1, 1, 1])).toEqual([34, 33, 33]);
+    expect(waffleCells([999, 1])).toEqual([99, 1]);
+    expect(waffleCells([0, 0])).toEqual([0, 0]);
+    expect(waffleCells([70, 20, 7, 3]).reduce((a, b) => a + b)).toBe(100);
+  });
+
+  it('keeps every donut slice at a non-negative angle when too many slices need the minimum', () => {
+    for (const values of [
+      [1000, ...Array<number>(60).fill(1)],
+      [1000, ...Array<number>(99).fill(1)]
+    ]) {
+      const angles = donutAngles(values);
+      for (const angle of angles) expect(angle).toBeGreaterThanOrEqual(0);
+      expect(angles.reduce((a, b) => a + b)).toBeCloseTo(360);
+    }
+  });
+
+  it('steps heatmap tones from empty to busiest', () => {
+    expect(heatTone(0, 10)).toBe(0);
+    expect(heatTone(1, 100)).toBe(1);
+    expect(heatTone(10, 10)).toBe(5);
+    expect(heatTone(6, 10)).toBe(3);
+  });
+
+  it('chooses round time buckets with at most the columns asked for', () => {
+    const since = Date.UTC(2026, 8, 23, 10, 0, 7);
+    const buckets = timeBuckets(since, since + 60 * 60 * 1000, 24);
+    expect(buckets.length).toBeLessThanOrEqual(25);
+    expect(buckets[1] - buckets[0]).toBe(300000);
+    expect(buckets[0] % 300000).toBe(0);
+    // A year of records still fits the columns asked for.
+    expect(timeBuckets(Date.UTC(2026, 0, 1), Date.UTC(2027, 0, 1), 24).length).toBeLessThanOrEqual(24);
+    expect(timeBuckets(Date.UTC(2026, 0, 1), Date.UTC(2026, 0, 8), 24).length).toBeLessThanOrEqual(24);
+  });
+
+  it('places zero at the origin of a symmetric log axis ending on a thousandfold', () => {
+    expect(symlogAxis(0)).toEqual({end: 1000, ticks: [0, 1000]});
+    expect(symlogAxis(1.1e9)).toEqual({end: 2.2e9, ticks: [0, 1e3, 1e6, 1e9]});
+    expect(symlogPosition(0, 1e12)).toBe(0);
+    expect(symlogPosition(1e12, 1e12)).toBe(1);
+    expect(symlogPosition(1e6, 1e12)).toBeCloseTo(0.5, 2);
+    expect(symlogPosition(-5, 1e12)).toBe(0);
+  });
+});
+
+describe('linearPosition', () => {
+  it('interpolates without clipping, centring a constant domain', () => {
+    expect(linearPosition(15, [10, 20], [20, 120])).toBe(70);
+    expect(linearPosition(30, [10, 20], [20, 120])).toBe(220);
+    expect(linearPosition(7, [7, 7], [20, 120])).toBe(70);
+  });
+});
+describe('valueAxis', () => {
+  it('starts at zero and tops out at a round number whose half its label prints exactly', () => {
+    expect(valueAxis([3800, 1200], 'zero')).toEqual({domain: [0, 4000], ticks: [0, 2000, 4000]});
+    expect(valueAxis([340], 'zero')).toEqual({domain: [0, 400], ticks: [0, 200, 400]});
+    expect(valueAxis([1400], 'zero').ticks).toEqual([0, 750, 1500]);
+    expect(valueAxis([], 'zero').ticks).toEqual([0, 1, 2].map(n => n * 0.6));
+  });
+  it('fits a narrow range above zero in whole label steps, with a step at the middle', () => {
+    // 50 to 52 MB prints whole megabytes, so a half-megabyte step would show 52.5 MB as 53 MB.
+    expect(valueAxis([50e6, 52e6], 'auto')).toEqual({domain: [49e6, 53e6], ticks: [49e6, 51e6, 53e6]});
+  });
+});
+it('finds a series peak, where it falls and its average, skipping gaps', () => {
+  expect(seriesStats([1, null, 5, 3])).toEqual({peak: 5, at: 2, average: 3});
+  expect(seriesStats([null, null])).toBeNull();
+});
+it('places labels most wanted first, inside the edge, dropping one that would crowd another', () => {
+  // A 16px label at the top hangs from it; the middle one at 22 would crowd it in a 45px plot and gives way.
+  expect(
+    placeLabels(
+      [
+        {index: 2, position: 0, size: 16},
+        {index: 1, position: 22, size: 16}
+      ],
+      0,
+      45,
+      4
+    )
+  ).toEqual([{index: 2, position: 8}]);
+  expect(
+    placeLabels(
+      [
+        {index: 2, position: 0, size: 16},
+        {index: 1, position: 40, size: 16}
+      ],
+      0,
+      80,
+      4
+    )
+  ).toEqual([
+    {index: 2, position: 8},
+    {index: 1, position: 40}
+  ]);
+  expect(placeLabels([{index: 0, position: 10, size: Number.NaN}], 0, 80, 4)).toEqual([]);
+});
+describe('clockLabels', () => {
+  const tick = (position: number) => ({position, width: 40});
+  it('keeps round times and an end only where it clears its neighbour', () => {
+    // The plot runs 0 to 400: round times at 60, 160, 260 and 380; the last end at 400 would crowd 380.
+    expect(clockLabels([tick(0), tick(60), tick(160), tick(260), tick(380), tick(400)], 0, 400, 16, 24)).toEqual([
+      {index: 1, position: 60},
+      {index: 2, position: 160},
+      {index: 3, position: 260},
+      {index: 4, position: 380}
+    ]);
+    expect(clockLabels([tick(0), tick(150), tick(250), tick(400)], 0, 400, 16, 24)).toEqual([
+      {index: 0, position: 20},
+      {index: 1, position: 150},
+      {index: 2, position: 250},
+      {index: 3, position: 380}
+    ]);
+  });
+  it('thins crowded round times to every second one', () => {
+    const labels = clockLabels([tick(0), tick(100), tick(140), tick(180), tick(220), tick(400)], 0, 400, 16, 24);
+    expect(labels.filter(label => label.index > 0 && label.index < 5).map(label => label.index)).toEqual([1, 3]);
+  });
+});
+it('selects the nearest sample, keeping the earlier sample at a midpoint', () => {
+  expect(nearestIndex([0, 10, 20], 5)).toBe(0);
+  expect(nearestIndex([0, 10, 20], 16)).toBe(2);
+});
+
+// A node's range line, from its least to its greatest latency, held inside the axis.
+it.each([
+  {name: 'inside the axis', range: [40, 60], max: 100, line: {start: 40, width: 20}},
+  {name: 'with both ends on one value', range: [50, 50], max: 100, line: {start: 50, width: 0}},
+  {name: 'with its top past the axis end', range: [100, 300], max: 200, line: {start: 50, width: 50}},
+  {name: 'wholly past the axis end', range: [250, 400], max: 200, line: {start: 100, width: 0}}
+] as Array<{name: string; range: [number, number]; max: number; line: {start: number; width: number}}>)('places a line $name', ({range, max, line}) => {
+  expect(lineSpan(range, max)).toEqual(line);
+});
+
+// A long expanded group mounts the rows that meet the viewport plus the overscan, never past either end of the list,
+// and at least its nearest row while it is off screen.
+it.each([
+  {name: 'a list starting below the viewport', count: 3000, top: 2000, end: 1},
+  {name: 'a list starting in the viewport', count: 3000, top: 300, start: 0, end: 32},
+  {name: 'a list scrolled into its middle', count: 3000, top: -28000, start: 990, end: 1043},
+  {name: 'a list scrolled to its end', count: 3000, top: -83500, start: 2972, end: 3000},
+  {name: 'a list scrolled past', count: 3000, top: -90000, start: 2999, end: 3000},
+  {name: 'a short list', count: 12, top: 0, start: 0, end: 12},
+  {name: 'an empty list', count: 0, top: 0, start: 0, end: 0}
+])('mounts the visible rows of $name', ({count, top, start = 0, end}) => {
+  expect(visibleRows(count, top, 28, 900, 10)).toEqual({start, end});
+});
+
+// The focused row stays mounted outside the window, merged with it where they touch.
+it.each([
+  {name: 'no focus', focused: -1, ranges: [{start: 40, end: 80}]},
+  {name: 'a focus inside the window', focused: 50, ranges: [{start: 40, end: 80}]},
+  {
+    name: 'a focus above the window',
+    focused: 3,
+    ranges: [
+      {start: 3, end: 4},
+      {start: 40, end: 80}
+    ]
+  },
+  {
+    name: 'a focus below the window',
+    focused: 900,
+    ranges: [
+      {start: 40, end: 80},
+      {start: 900, end: 901}
+    ]
+  },
+  {name: 'a focus just above the window', focused: 39, ranges: [{start: 39, end: 80}]},
+  {name: 'a focus just below the window', focused: 80, ranges: [{start: 40, end: 81}]}
+])('mounts the rows of a window with $name', ({focused, ranges}) => {
+  expect(mountedRanges({start: 40, end: 80}, focused)).toEqual(ranges);
+});
+
+it('moves sampled tick labels inside the plot and thins them by their moved boxes', () => {
+  // Labels 40px wide at 0, 50, 100 and 200 in a 200px plot: the ends move in by half a label.
+  expect(sampleTicks([0, 50, 100, 200], [40, 40, 40, 40], 8, 200)).toEqual([
+    {index: 0, position: 20},
+    {index: 2, position: 100},
+    {index: 3, position: 180}
+  ]);
+});

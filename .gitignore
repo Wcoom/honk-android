@@ -2,5 +2,10 @@ src/target/
 src/crates/honk-ebpf/target/
 boxproxy/target/
 boxproxy/boxctl/target/
+webui/node_modules/
+webui/apps/lite/node_modules/
+webui/dist/
+webui/apps/lite/dist/
+webui/release/
 *.apk
 *.tar.gz

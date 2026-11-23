@@ -1,0 +1,243 @@
+/* A page's tab bar is the segmented control at S2's M size: segmented.css draws its track, slider and items at M, and
+   this file gives the tabs their height and lets the bar scroll. */
+/* The panels share one grid row, so a kept panel hidden behind the shown one keeps its width and its top. */
+.rp-tabs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--rp-space-4);
+  min-width: 0;
+}
+.rp-tabbar {
+  /* A grid item: justify-self keeps the bar as wide as its tabs instead of the row. */
+  justify-self: start;
+  /* More tabs than a phone is wide scroll within the bar, not the page; the slider scrolls with them. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+/* While the bar scrolls, the end with more tabs fades out (useScrollStrip sets data-fade), over half a tab's width so
+   the cut label reads as more tabs rather than as a clipped one. */
+.rp-tabbar[data-fade] {
+  --fade-start: 0px;
+  --fade-end: 0px;
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent 100%);
+}
+.rp-tabbar[data-fade]:dir(rtl) {
+  mask-image: linear-gradient(to left, transparent 0, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent 100%);
+}
+.rp-tabbar[data-fade~='start'] {
+  --fade-start: 48px;
+}
+.rp-tabbar[data-fade~='end'] {
+  --fade-end: 48px;
+}
+/* A tab row with controls at its end (Tabs' actions): they wrap under the tabs when the row is too narrow. */
+.rp-tabhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rp-space-2) var(--rp-space-4);
+  min-width: 0;
+}
+.rp-tabhead > .rp-tabbar {
+  min-width: 0;
+}
+.rp-tablist {
+  display: inline-flex;
+  gap: var(--rp-space-1);
+  max-width: 100%;
+}
+/* A tab is not a kit Button, so it lays out its label itself. */
+.rp-tab {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+}
+/* M's height, as every segmented control's; segmented.css gives the bar and its tabs the track, inset and corner. */
+.rp-tabbar .rp-tablist {
+  /* A tab's height before any tab renders: React Aria commits the list empty and fills it on a second pass, and a
+     panel laid out against the empty bar (a table sizing itself to the window) would move and resize a frame later. */
+  min-height: var(--rp-control);
+}
+.rp-tab {
+  min-height: var(--rp-control);
+}
+/* Laid out, not display: none: a table or chart in a hidden panel keeps measuring the width it shows again, so the
+   first frame back is already at it, even after a resize while hidden. React Aria marks the panel inert, which keeps
+   it out of the focus order and the accessibility tree. */
+.rp-tabpanel:not([data-shown]) {
+  visibility: hidden;
+  height: 0;
+  overflow: hidden;
+}
+/* A virtualised table there keeps its width but renders no rows, as it did at display: none, so a stream of rows
+   costs nothing while hidden; the inline height is the one it shows again. */
+.rp-tabpanel:not([data-shown]) .rp-table {
+  height: 0 !important;
+}
+.rp-tabpanel {
+  grid-row: 2;
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-4);
+  min-width: 0;
+  outline: none;
+}
+.rp-tabpanel:focus-visible {
+  outline: var(--rp-focus-width) solid var(--rp-focus-color);
+  outline-offset: var(--rp-focus-offset);
+}
+
+/* ---- Detail panel: list on the left, a 360px panel on the right from 1200px; a drawer below that. ---- */
+.rp-with-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--rp-space-4);
+  align-items: start;
+}
+@media (min-width: 1200px) {
+  .rp-with-panel[data-open] {
+    grid-template-columns: minmax(0, 1fr) 360px;
+  }
+}
+.rp-panel {
+  scrollbar-gutter: stable;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+.rp-drawer-underlay {
+  justify-content: flex-end;
+  align-items: stretch;
+  padding-top: 0;
+}
+.rp-modal.rp-drawer {
+  width: min(480px, 100vw);
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  border-start-start-radius: var(--rp-r-xl);
+  border-end-start-radius: var(--rp-r-xl);
+}
+.rp-modal.rp-drawer.rp-drawer-fit {
+  display: flex;
+  flex-direction: column;
+  align-self: flex-start;
+  height: auto;
+  max-height: 100%;
+  border-end-end-radius: var(--rp-r-xl);
+}
+.rp-drawer-fit > .rp-dialog {
+  min-height: 0;
+}
+.rp-underlay[data-entering] .rp-modal.rp-drawer {
+  animation: rp-drawer-in var(--rp-duration-modal-in) var(--rp-ease) both;
+}
+.rp-underlay.still[data-entering],
+.rp-underlay.still[data-entering] .rp-modal.rp-drawer {
+  animation: none;
+}
+@keyframes rp-drawer-in {
+  from {
+    translate: calc(24px * var(--rp-dir)) 0;
+    opacity: 0;
+  }
+}
+
+.rp-page-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--rp-space-1);
+  border-block-end: 1px solid var(--rp-line);
+}
+/* The current page keeps the quiet button's corners; its underline is drawn apart, so hovering it fills the same
+   rounded shape as its neighbours. */
+.rp-page-links [aria-current='page'] {
+  position: relative;
+}
+.rp-page-links [aria-current='page']::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  block-size: 2px;
+  border-radius: var(--rp-r-pill);
+  background: var(--rp-text);
+}
+@media (forced-colors: active) {
+  .rp-page-links [aria-current='page']::after {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+}
+.rp-disclosure[data-variant='nav'] {
+  margin: 0;
+}
+.rp-disclosure[data-variant='nav'] > h3 {
+  display: flex;
+  margin: 0;
+  font: inherit;
+}
+/* S2 docs navigation: full-height section triggers and spaced links. */
+.rp-disclosure[data-variant='nav'] .rp-disclosure-trigger,
+.rp-side-dock > .rp-widget-header {
+  display: inline-flex;
+  align-items: center;
+  inline-size: 100%;
+  min-block-size: 0;
+  block-size: var(--rp-control);
+  font: inherit;
+  font-size: var(--rp-text-md);
+  line-height: var(--rp-line-caption);
+  font-weight: 400;
+  color: var(--rp-subtle);
+  letter-spacing: inherit;
+  padding: 0;
+  padding-inline-start: var(--rp-space-3);
+  /* The links' gap below, so a section's header and its links keep one row pitch. */
+  margin-block-end: var(--rp-space-1h);
+  border: 0;
+  border-radius: var(--rp-r-md);
+  background: transparent;
+  cursor: pointer;
+  gap: var(--rp-space-1);
+  justify-content: flex-start;
+}
+/* S2's side navigation draws its chevron with the 10px UI chevron, about 10px long with a 1.75px stroke. The 20-unit
+   workflow chevron reaches that at 16px once its outline is stroked by 0.7 units; the glyph keeps its former centre. */
+.rp-disclosure[data-variant='nav'] .rp-disclosure-trigger > svg {
+  order: 1;
+  inline-size: var(--rp-space-4);
+  block-size: var(--rp-space-4);
+  margin-inline-start: auto;
+  margin-inline-end: calc(var(--rp-space-2) - (var(--rp-space-4) - var(--rp-space-2h)) / 2);
+}
+.rp-disclosure[data-variant='nav'] .rp-disclosure-trigger > svg > path,
+.rp-side-dock .rp-widget-collapse > svg > path {
+  stroke: currentColor;
+  stroke-width: 0.7;
+  stroke-linejoin: round;
+}
+/* The docked header's undock icon is drawn in 1.5-unit lines, the chevron's outline width: the same 0.7 units more
+   give it the chevron's weight. */
+.rp-side-dock .rp-widget-undock > svg {
+  stroke-width: calc(1.5 + 0.7);
+}
+.rp-disclosure[data-variant='nav'] .rp-disclosure-panel,
+.rp-disclosure[data-variant='nav'] .rp-disclosure-content {
+  gap: var(--rp-space-1h);
+  padding: 0;
+}
+
+.rp-side:has(.rp-disclosure:not([data-expanded]) [aria-current='page']) .rp-nav-slider {
+  visibility: hidden;
+}
+.rp-disclosure[data-variant='nav'] .rp-disclosure-trigger[data-pressed] {
+  background-color: var(--rp-hl-high);
+}

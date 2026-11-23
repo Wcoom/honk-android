@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-Hant" dir="ltr" data-warm="pending">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http: https: ws: wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self'">
+<title>doona</title>
+<meta name="description" content="Static web UI for the daeuniverse native API.">
+<link rel="icon" href="/logo.svg">
+<link rel="manifest" href="./manifest.webmanifest">
+<!-- Default Rose Pine Dawn (light) and Moon (dark) colours: src/ui/styles/palettes/rose-pine.css. -->
+<meta name="theme-color" content="#faf4ed" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#232136" media="(prefers-color-scheme: dark)">
+<!-- doona draws its own light and dark themes; Dark Reader would otherwise judge the page before the theme loads and recolour it. -->
+<meta name="darkreader-lock">
+<link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="doona">
+</head>
+<body><div id="root"></div><div class="rp-popover-band" aria-hidden="true"></div><script type="module" src="/src/main.tsx"></script></body>
+</html>

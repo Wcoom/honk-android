@@ -101,7 +101,12 @@ impl ProgramLoader {
     }
 
     pub(super) fn try_object(&self) -> Option<parking_lot::MutexGuard<'_, Ebpf>> {
-        self.object.try_lock()
+        // Concurrent telemetry/status polls can collide briefly while another reader enumerates
+        // loaded program IDs; wait up to 5ms before falling back to Unknown instead of spuriously
+        // reporting missing hook IDs under normal API concurrency, while still not blocking behind
+        // long BPF verifier loads.
+        self.object
+            .try_lock_for(std::time::Duration::from_millis(5))
     }
 
     #[cfg(test)]

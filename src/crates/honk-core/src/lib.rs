@@ -82,6 +82,18 @@ pub const REVISION: &str = env!("HONK_REVISION");
 /// The target triple this binary was built for.
 pub const TARGET: &str = env!("HONK_TARGET");
 
+static STARTUP_ARGS: std::sync::OnceLock<Vec<std::ffi::OsString>> = std::sync::OnceLock::new();
+
+/// Records CLI arguments passed at process entry so a self-update restart can re-exec cleanly.
+pub fn record_startup_args(args: Vec<std::ffi::OsString>) {
+    let _ = STARTUP_ARGS.set(args);
+}
+
+#[cfg(feature = "native-api")]
+pub(crate) fn startup_args() -> Option<&'static [std::ffi::OsString]> {
+    STARTUP_ARGS.get().map(Vec::as_slice)
+}
+
 use clap::Parser;
 use honk_config::Config;
 use honk_config::diagnostic::{
@@ -456,6 +468,172 @@ fn ensure_android_ca_certs_env() {
             }
         }
     }
+}
+
+/// [honk-android] 当进程处于根 cgroup（Android 常见）时，自动开启 memory 子树控制并迁入独立叶子 cgroup，
+/// 避免与其余系统/代理进程混用根 cgroup 导致 Native API 内存遥测全部缺失。
+#[cfg(target_os = "linux")]
+fn ensure_dedicated_cgroup() {
+    match ensure_dedicated_cgroup_in(std::path::Path::new("/proc/self"), std::process::id()) {
+        Ok(Some(path)) => tracing::debug!(cgroup = %path.display(), "migrated honk to dedicated cgroup"),
+        Ok(None) => {}
+        Err(error) => tracing::debug!(%error, "dedicated cgroup setup skipped"),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_dedicated_cgroup() {}
+
+#[cfg(target_os = "linux")]
+fn unescape_proc_mount_path(value: &str) -> Option<PathBuf> {
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut iter = value.as_bytes().iter().copied();
+    while let Some(byte) = iter.next() {
+        if byte == b'\\' {
+            let decoded = match [iter.next()?, iter.next()?, iter.next()?] {
+                [b'0', b'4', b'0'] => b' ',
+                [b'0', b'1', b'1'] => b'\t',
+                [b'0', b'1', b'2'] => b'\n',
+                [b'1', b'3', b'4'] => b'\\',
+                _ => return None,
+            };
+            bytes.push(decoded);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    use std::os::unix::ffi::OsStringExt as _;
+    Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+}
+
+#[cfg(target_os = "linux")]
+fn find_root_mount_in_mountinfo(mountinfo: &str, fstype: &str, required_option: Option<&str>) -> Option<PathBuf> {
+    mountinfo.lines().find_map(|line| {
+        let (left, right) = line.split_once(" - ")?;
+        let mut right_fields = right.split_whitespace();
+        if right_fields.next()? != fstype {
+            return None;
+        }
+        if let Some(opt) = required_option {
+            let has_opt = right_fields
+                .skip(1)
+                .chain(left.split_whitespace().nth(5))
+                .any(|opts| opts.split(',').any(|item| item == opt));
+            if !has_opt {
+                return None;
+            }
+        }
+        let mut left_fields = left.split_whitespace();
+        let root = unescape_proc_mount_path(left_fields.nth(3)?)?;
+        let mount = unescape_proc_mount_path(left_fields.next()?)?;
+        (root == std::path::Path::new("/")).then_some(mount)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn cgroup_dir_is_available_for_self(dir: &std::path::Path, pid: u32) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            return false;
+        }
+    }
+    let Ok(procs) = std::fs::read_to_string(dir.join("cgroup.procs")) else {
+        return true;
+    };
+    let pid_text = pid.to_string();
+    procs
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .all(|line| line == pid_text)
+}
+
+#[cfg(target_os = "linux")]
+fn prune_empty_honk_sibling_cgroups(root: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with("honk-") || !entry.file_type().is_ok_and(|k| k.is_dir()) {
+            continue;
+        }
+        let dir = entry.path();
+        if std::fs::read_to_string(dir.join("cgroup.procs"))
+            .is_ok_and(|procs| procs.trim().is_empty())
+        {
+            let _ = std::fs::remove_dir(&dir);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn assign_leaf_cgroup(mount: &std::path::Path, pid: u32) -> anyhow::Result<PathBuf> {
+    prune_empty_honk_sibling_cgroups(mount);
+    let primary = mount.join("honk");
+    let target = if !primary.exists() {
+        std::fs::create_dir(&primary)?;
+        primary
+    } else if cgroup_dir_is_available_for_self(&primary, pid) {
+        primary
+    } else {
+        let fallback = mount.join(format!("honk-{pid}"));
+        if !fallback.exists() {
+            std::fs::create_dir(&fallback)?;
+        }
+        fallback
+    };
+    std::fs::write(target.join("cgroup.procs"), format!("{pid}\n"))?;
+    Ok(target)
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_dedicated_cgroup_in(
+    proc_self: &std::path::Path,
+    pid: u32,
+) -> anyhow::Result<Option<PathBuf>> {
+    let membership = std::fs::read_to_string(proc_self.join("cgroup"))?;
+    let mountinfo = std::fs::read_to_string(proc_self.join("mountinfo"))?;
+
+    let v2_member = membership.lines().find_map(|line| line.strip_prefix("0::"));
+    if let Some(member) = v2_member {
+        if member.trim() != "/" {
+            return Ok(None);
+        }
+        if let Some(mount) = find_root_mount_in_mountinfo(&mountinfo, "cgroup2", None) {
+            let controllers = std::fs::read_to_string(mount.join("cgroup.controllers"))
+                .unwrap_or_default();
+            if controllers.split_whitespace().any(|c| c == "memory") {
+                let subtree = std::fs::read_to_string(mount.join("cgroup.subtree_control"))
+                    .unwrap_or_default();
+                if !subtree.split_whitespace().any(|c| c == "memory") {
+                    std::fs::write(mount.join("cgroup.subtree_control"), "+memory\n")?;
+                }
+                return assign_leaf_cgroup(&mount, pid).map(Some);
+            }
+        }
+    }
+
+    let v1_memory_root = membership.lines().any(|line| {
+        let mut parts = line.splitn(3, ':');
+        let Some(id) = parts.next() else { return false };
+        let Some(controllers) = parts.next() else { return false };
+        let Some(member) = parts.next() else { return false };
+        id != "0"
+            && controllers.split(',').any(|c| c == "memory")
+            && member.trim() == "/"
+    });
+    if v1_memory_root
+        && let Some(mount) = find_root_mount_in_mountinfo(&mountinfo, "cgroup", Some("memory"))
+    {
+        return assign_leaf_cgroup(&mount, pid).map(Some);
+    }
+
+    Ok(None)
 }
 
 fn publish_instance_pid(file: &mut std::fs::File) -> anyhow::Result<()> {
@@ -849,6 +1027,9 @@ pub async fn run(mut cli: Cli) -> anyhow::Result<()> {
     let host_tproxy = cli.host_tproxy;
     // Everything else in `run` drops before it.
     let _instance_lock = instance_lock(mock_mode)?;
+    if !mock_mode {
+        ensure_dedicated_cgroup();
+    }
     #[cfg(feature = "native-api")]
     let mut database = None;
     let startup = (|| -> anyhow::Result<_> {
@@ -2098,5 +2279,91 @@ mod startup_lifecycle_tests {
         let rendered = error.to_string();
         assert!(rendered.contains("node ID duplicates another node"));
         assert!(!rendered.contains("configuration validation failed"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dedicated_cgroup_migrates_from_root_cgroup2_and_avoids_occupied_primary() {
+        let dir = tempfile::tempdir().unwrap();
+        let proc_self = dir.path().join("proc_self");
+        let cg2 = dir.path().join("cgroup2 mount");
+        std::fs::create_dir_all(&proc_self).unwrap();
+        std::fs::create_dir_all(&cg2).unwrap();
+        std::fs::write(proc_self.join("cgroup"), "0::/\n").unwrap();
+        let escaped = cg2.display().to_string().replace(' ', "\\040");
+        std::fs::write(
+            proc_self.join("mountinfo"),
+            format!("21 1 0:21 / {escaped} rw,nosuid - cgroup2 none rw\n"),
+        )
+        .unwrap();
+        std::fs::write(cg2.join("cgroup.controllers"), "cpu memory\n").unwrap();
+        std::fs::write(cg2.join("cgroup.subtree_control"), "cpu\n").unwrap();
+
+        let target = super::ensure_dedicated_cgroup_in(&proc_self, 4242)
+            .unwrap()
+            .expect("migrates from root cgroup2");
+        assert_eq!(target, cg2.join("honk"));
+        assert_eq!(
+            std::fs::read_to_string(cg2.join("cgroup.subtree_control")).unwrap(),
+            "+memory\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(cg2.join("honk/cgroup.procs")).unwrap(),
+            "4242\n"
+        );
+
+        // When /honk is occupied by another PID, isolate self into /honk-<pid>.
+        std::fs::write(cg2.join("honk/cgroup.procs"), "99999\n").unwrap();
+        std::fs::write(cg2.join("cgroup.subtree_control"), "cpu memory\n").unwrap();
+        let non_cgroup_sibling = cg2.join("honk-other");
+        std::fs::create_dir_all(&non_cgroup_sibling).unwrap();
+        let isolated = super::ensure_dedicated_cgroup_in(&proc_self, 4242)
+            .unwrap()
+            .expect("uses per-pid cgroup when primary occupied");
+        assert_eq!(isolated, cg2.join("honk-4242"));
+        assert!(
+            non_cgroup_sibling.exists(),
+            "directory without empty cgroup.procs must not be pruned"
+        );
+        assert_eq!(
+            std::fs::read_to_string(cg2.join("honk-4242/cgroup.procs")).unwrap(),
+            "4242\n"
+        );
+
+        // Existing systemd/service cgroup is left untouched.
+        std::fs::write(proc_self.join("cgroup"), "0::/system.slice/honk.service\n").unwrap();
+        assert_eq!(super::ensure_dedicated_cgroup_in(&proc_self, 4242).unwrap(), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dedicated_cgroup_falls_back_to_v1_memory_mount_when_v2_lacks_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let proc_self = dir.path().join("proc_self");
+        let cg2 = dir.path().join("cg2");
+        let memcg = dir.path().join("memcg");
+        std::fs::create_dir_all(&proc_self).unwrap();
+        std::fs::create_dir_all(&cg2).unwrap();
+        std::fs::create_dir_all(&memcg).unwrap();
+        std::fs::write(proc_self.join("cgroup"), "2:memory:/\n0::/\n").unwrap();
+        std::fs::write(
+            proc_self.join("mountinfo"),
+            format!(
+                "21 1 0:21 / {} rw - cgroup2 none rw\n22 1 0:22 / {} rw,nosuid - cgroup cgroup rw,memory\n",
+                cg2.display(),
+                memcg.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(cg2.join("cgroup.controllers"), "freezer\n").unwrap();
+
+        let target = super::ensure_dedicated_cgroup_in(&proc_self, 5150)
+            .unwrap()
+            .expect("falls back to cgroup v1 memory mount");
+        assert_eq!(target, memcg.join("honk"));
+        assert_eq!(
+            std::fs::read_to_string(memcg.join("honk/cgroup.procs")).unwrap(),
+            "5150\n"
+        );
     }
 }

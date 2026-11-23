@@ -1,0 +1,396 @@
+.rp-il {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rp-space-1h);
+  min-width: 0;
+}
+.ic {
+  display: inline-flex;
+  margin-inline-end: var(--rp-space-1h);
+}
+.rp-il .ic {
+  margin-inline-end: 0;
+}
+.rp-light {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+.rp-light > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  /* The text, not the dot, gives the light its baseline: a dot has none, so it would lend its bottom edge and set
+     the light lower than the text beside it. */
+  align-self: baseline;
+}
+/* The status dot, shared by a light and a toned latency. */
+.rp-light::before,
+.ms:is(.ok, .warn, .err)::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--dot, var(--rp-muted));
+  flex-shrink: 0;
+}
+.rp-light.sm {
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+}
+.rp-light.sm::before,
+.ms:is(.ok, .warn, .err)::before {
+  width: 8px;
+  height: 8px;
+}
+.rp-light.ok {
+  --dot: var(--rp-positive);
+}
+.rp-light.warn {
+  --dot: var(--rp-notice);
+}
+.rp-light.err {
+  --dot: var(--rp-negative);
+}
+.rp-light.info {
+  /* Info shares the positive dot with ok; the text beside it tells them apart. */
+  --dot: var(--rp-positive);
+}
+.rp-light.neutral {
+  --dot: var(--rp-subtle);
+}
+.rp-light.muted {
+  color: var(--rp-subtle);
+}
+.rp-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-1);
+  min-width: 0;
+  flex: 1;
+}
+.rp-bar .top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rp-space-3);
+  font-size: var(--rp-text-md);
+  line-height: var(--rp-line-body);
+}
+.rp-bar .top .l {
+  min-width: 0;
+  overflow: visible;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Compensated padding gives text links a ring gutter without moving the label or its neighbours. */
+.rp-bar .top .l > :is(.rp-link, .rp-truncate),
+.rp-donut .r .n > .rp-link,
+.rp-capability .rp-light > span > .rp-link {
+  display: block;
+  width: max-content;
+  max-width: calc(100% + 2 * var(--rp-space-half));
+  min-height: 0;
+  padding: var(--rp-space-half);
+  margin: calc(-1 * var(--rp-space-half));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Capability names keep their original wrapping; the shared legend rule must not ellipsize them. */
+.rp-capability .rp-light > span > .rp-link {
+  white-space: normal;
+}
+.rp-bar .top .v {
+  color: var(--rp-subtle);
+  flex-shrink: 0;
+  font-size: var(--rp-text-xs);
+}
+.rp-bar .track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--rp-hl-med);
+  overflow: hidden;
+}
+/* S2 Meter, size M: a 6px track; a long label wraps beside the value, which keeps one line at the inline end. */
+.rp-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-1);
+  min-width: 0;
+  font-size: var(--rp-text-md);
+  line-height: var(--rp-line-body);
+}
+.rp-meter .top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--rp-space-3);
+}
+.rp-meter .l {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+}
+.rp-meter .v {
+  margin-inline-start: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.rp-meter .track,
+.rp-kv-meter .track {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--rp-hl-high);
+  overflow: hidden;
+}
+.rp-meter .fill,
+.rp-kv-meter .fill {
+  display: block;
+  height: 100%;
+  background: var(--meter, var(--rp-accent));
+}
+/* S2 Meter, size S: the small field label (12px, subdued) and a 4px track. */
+.rp-meter[data-size='S'] {
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+}
+.rp-meter[data-size='S'] .l {
+  color: var(--rp-subtle);
+}
+.rp-meter[data-size='S'] .track,
+.rp-kv-meter .track {
+  height: 4px;
+  border-radius: 2px;
+}
+/* A fact's meter (Kv): the S track under the fact's value, 4px below it as in Meter. */
+.rp-kv-meter .track {
+  margin-block-start: var(--rp-space-1);
+}
+.rp-meter.warn,
+.rp-kv-meter.warn {
+  --meter: var(--rp-notice);
+}
+.rp-meter.err,
+.rp-kv-meter.err {
+  --meter: var(--rp-negative);
+}
+
+.rp-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-2);
+}
+/* Rows of a label and a text: the labels share one column, so every text starts at the same edge and wraps under
+   itself however wide its row's label is. */
+.rp-list-labeled {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: start;
+  column-gap: var(--rp-space-3);
+}
+.rp-list-labeled > .rp-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  /* The label sits on a wrapped summary's first line, not between its lines. */
+  align-items: first baseline;
+}
+.rp-capabilities {
+  display: grid;
+  /* Keeps two columns in the card's narrowest desktop width; longer labels wrap. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 148px), 1fr));
+  gap: var(--rp-space-1) var(--rp-space-3);
+  flex: 1 1 auto;
+  align-content: start;
+}
+.rp-capability {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rp-space-2);
+  min-width: 0;
+  min-height: 40px;
+}
+/* Features that are off, one row per cause after S2's list rows: the result and the features it covers, then one
+   action at the end, which keeps its width while the text wraps. */
+.rp-limits {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rp-limit {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-4);
+  padding-block: var(--rp-space-3);
+}
+.rp-limit:first-child {
+  padding-top: 0;
+}
+.rp-limit:last-child {
+  padding-bottom: 0;
+}
+.rp-limit + .rp-limit {
+  border-top: 1px solid var(--rp-hl-med);
+}
+.rp-limit-text {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: var(--rp-space-half);
+  min-width: 0;
+}
+.rp-limit > .rp-link,
+.rp-limit > .rp-btn {
+  flex: none;
+}
+.rp-limit-help {
+  margin: 0;
+}
+.rp-limit-snippet {
+  align-self: stretch;
+  margin: 0;
+  padding: var(--rp-space-2) var(--rp-space-3);
+  overflow-x: auto;
+  border-radius: var(--rp-r-md);
+  background: var(--rp-overlay);
+}
+.rp-legend {
+  display: flex;
+  gap: var(--rp-space-4);
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+  color: var(--rp-subtle);
+}
+/* An entry, the swatch, the name and the live value, never breaks; a legend too wide for its line wraps between entries,
+   each line from the legend's start. */
+.rp-legend .it {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  white-space: nowrap;
+}
+/* An area chart under its legend (AreaChart's legend), which only dashboard cards draw, takes one legend line, the gap
+   and its chart height at least, and grows with its card's row. A legend wrapped onto more lines takes its room from
+   the plot, which keeps its height less two legend lines, so a long series name in one language never makes the card or
+   its row taller. A dashboard card sets its legend in body lines (dashboard.css), wrapping one --rp-space-4 apart. */
+/* An area chart's height is the chart token's, times its card's height step (dashboard.css); a Skeleton bar standing
+   in for it takes the same. */
+:is(.rp-area-figure, .rp-area-plot, .rp-skeleton-bar.chart) {
+  --area-height: calc(var(--rp-chart-h) * var(--rp-chart-scale, 1));
+}
+:is(.rp-area-figure, .rp-area-plot)[data-stacked],
+.rp-skeleton-bar.chart-stacked {
+  --area-height: calc(var(--rp-chart-stacked-h) * var(--rp-chart-scale, 1));
+}
+.rp-skeleton-bar:is(.chart, .chart-stacked),
+.rp-area-plot {
+  block-size: var(--area-height);
+}
+.rp-area-plot {
+  position: relative;
+  inline-size: 100%;
+}
+/* Under a legend (.rp-area-figure) the plot gives a wrapped legend's lines their room and takes the rest of the card's
+   height, from the card, never from the plot it last drew, so it can shrink again. */
+.rp-area-plot[data-fill] {
+  flex: 1 0 auto;
+  block-size: auto;
+  min-block-size: var(--area-min, var(--area-height));
+  contain: size;
+}
+.rp-area-figure {
+  --area-min: calc(var(--area-height) - 2 * (var(--rp-line-body) + var(--rp-space-4)));
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  gap: var(--rp-space-3);
+  min-block-size: calc(var(--rp-line-body) + var(--rp-space-3) + var(--area-height));
+}
+.rp-legend .sw {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--rp-r-xs);
+  background: var(--rp-c1);
+}
+.rp-legend b {
+  color: var(--rp-text);
+}
+.rp-donut {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--rp-space-4);
+  flex-wrap: wrap;
+}
+.rp-donut .box {
+  position: relative;
+  width: var(--rp-ring, 112px);
+  height: var(--rp-ring, 112px);
+  flex-shrink: 0;
+  container-type: inline-size;
+}
+.rp-donut .center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* A ring shrunk below its size shrinks the total with it, so the total stays inside the hole. */
+  font-size: min(var(--rp-text-2xl), 20cqi);
+  line-height: 28px;
+  font-weight: 700;
+  pointer-events: none;
+}
+/* The tip comes before the total in the box; without this the total's glyphs paint through it. */
+.rp-donut .rp-charttip-bounded {
+  z-index: 1;
+}
+.rp-donut .lst {
+  flex: 1 1 calc(160px + 2 * var(--rp-space-1h));
+  min-width: 0;
+  /* Past a readable width a legend's values drift away from their names. */
+  max-width: min(calc(100% + 2 * var(--rp-space-1h)), 360px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-1);
+  /* Six rows; a longer legend scrolls rather than growing the card. */
+  max-height: calc(164px + 2 * var(--rp-space-1h));
+  padding: var(--rp-space-1h);
+  margin: calc(-1 * var(--rp-space-1h));
+  overflow-y: auto;
+}
+.rp-donut .r {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  min-height: 24px;
+  font-size: var(--rp-text-md);
+  line-height: var(--rp-line-body);
+  color: var(--rp-subtle);
+}
+.rp-donut .r .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.rp-donut .r .n {
+  flex: 1;
+  min-width: 0;
+  overflow: visible;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--rp-text);
+}
+.rp-donut .r .p {
+  width: 36px;
+  text-align: end;
+  font-size: var(--rp-text-xs);
+}

@@ -1,0 +1,635 @@
+.rp-shell {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+/* With the side nav, the top bar and the sidebar are fixed to the viewport and the first row holds the bar's place.
+   Sticky boxes in the document scroller move with the scroll offset: Chrome draws them on a fractional device pixel
+   whenever that offset is one, at 125% or 150% zoom, and their icons step a pixel up and down while the page scrolls. */
+@media (min-width: 1024px) {
+  .rp-shell {
+    grid-template-columns: var(--rp-sidebar-width) minmax(0, 1fr);
+    grid-template-rows: var(--rp-topbar) 1fr;
+  }
+}
+/* The top bar's height; toasts placed at the top start below it. */
+:root {
+  --rp-topbar: 64px;
+}
+.rp-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--rp-space-6);
+  padding: 0 var(--rp-space-6);
+  min-height: var(--rp-topbar);
+  background: var(--rp-base);
+}
+/* A landscape phone is too short for the top bar to stay pinned above the hub's own page switcher and tabs: pinned,
+   they would fill the whole height before any page content shows. It scrolls away with the page instead; portrait
+   phones have the height to keep it. */
+@media (max-width: 1023.98px) and (max-height: 500px) {
+  .rp-top {
+    position: static;
+  }
+}
+@media (min-width: 1024px) {
+  .rp-top {
+    position: fixed;
+    inset-inline: 0;
+    max-width: 1600px;
+    margin-inline: auto;
+    grid-template-columns: calc(var(--rp-sidebar-width) - var(--rp-space-6)) minmax(0, 1fr) auto;
+  }
+}
+.rp-brand {
+  grid-column: 1;
+  justify-self: start;
+  display: flex;
+  align-items: center;
+  height: var(--rp-control);
+  gap: var(--rp-space-3);
+  /* The hover pill hugs the duck and the name, not the whole column. */
+  padding-block: 0;
+  padding-inline: var(--rp-space-2);
+  border: 0;
+  border-radius: var(--rp-r-lg);
+  background: none;
+  font: inherit;
+  font-size: var(--rp-text-xl);
+  font-weight: 800;
+  color: var(--rp-text);
+  text-decoration: none;
+  cursor: pointer;
+}
+/* The about box. The duck hops on a tap; after five it honks, and from then on the name cycles its colours. */
+.rp-about {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--rp-space-4);
+  text-align: center;
+}
+/* A phone stacks the links full width, so none is left alone on a second row, and spaces the sections evenly. */
+@media (max-width: 599.98px) {
+  .rp-about > p {
+    margin: 0;
+  }
+  .rp-about-links {
+    align-self: stretch;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--rp-space-2);
+  }
+  .rp-about-links > .rp-link {
+    align-self: stretch;
+    justify-content: center;
+  }
+}
+.rp-about-duck {
+  position: relative;
+  border: 0;
+  background: none;
+  padding: var(--rp-space-2);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.rp-about-duck:focus-visible {
+  outline: 2px solid var(--rp-accent);
+}
+.rp-about-duck img {
+  display: block;
+  width: 96px;
+  height: 96px;
+}
+/* The painting sits over the drawing and fades in when the duck is tapped past its honk. */
+.rp-about-duck .night {
+  position: absolute;
+  inset: 8px;
+  width: 96px;
+  height: 96px;
+  border-radius: var(--rp-r-lg);
+  object-fit: cover;
+  opacity: 0;
+  scale: 0.9;
+  transition:
+    opacity var(--rp-duration-slow) var(--rp-ease),
+    scale var(--rp-duration-slow) var(--rp-ease-out);
+  pointer-events: none;
+}
+.rp-about-duck.painted .night {
+  opacity: 1;
+  scale: 1;
+}
+.rp-about-duck img.hop {
+  animation: rp-hop var(--rp-duration-hop) var(--rp-ease-out);
+}
+@keyframes rp-hop {
+  30% {
+    translate: 0 -14px;
+    rotate: -8deg;
+  }
+  60% {
+    translate: 0 0;
+    rotate: 4deg;
+  }
+}
+.rp-about-bubble {
+  position: absolute;
+  top: -4px;
+  inset-inline-end: -28px;
+  padding: var(--rp-space-1) var(--rp-space-2h);
+  border-radius: var(--rp-r-pill);
+  background: var(--rp-accent);
+  color: var(--rp-on-accent);
+  font-weight: 700;
+  animation: rp-pop var(--rp-duration-pop) var(--rp-ease-out);
+}
+@keyframes rp-pop {
+  from {
+    scale: 0.4;
+    opacity: 0;
+  }
+}
+/* The facts stack one under another; a build string wraps only at its spaces. */
+.rp-about .rp-kv {
+  grid-template-columns: 1fr;
+  gap: var(--rp-space-2h);
+}
+.rp-about .rp-kv .v {
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+.rp-about-name {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--rp-space-1);
+  font-size: var(--rp-text-4xl);
+  font-weight: 800;
+}
+.rp-about.honked .rp-brand-text > span:first-child {
+  animation: rp-hue var(--rp-duration-hue) linear infinite;
+}
+@keyframes rp-hue {
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+.rp-brand img {
+  width: 28px;
+  height: 28px;
+}
+/* The name and its version share one baseline; only the name takes the gradient. */
+.rp-brand-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--rp-space-1h);
+}
+.rp-brand-version {
+  font-size: var(--rp-text-2xs);
+  line-height: var(--rp-line-caption);
+  font-weight: 500;
+  color: var(--rp-subtle);
+  white-space: nowrap;
+}
+/* The honked name is longer than the column: it stays on one line and the version yields before the name does. */
+.rp-brand .rp-brand-text {
+  min-width: 0;
+  white-space: nowrap;
+}
+.rp-brand .rp-brand-text > span:first-child {
+  flex: none;
+}
+.rp-brand .rp-brand-version {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rp-search-wrap {
+  grid-column: 2;
+  display: none;
+  justify-content: center;
+}
+@media (min-width: 1024px) {
+  .rp-search-wrap {
+    display: flex;
+  }
+}
+.rp-search {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  width: 100%;
+  max-width: 500px;
+  height: var(--rp-control);
+  padding-block: 0;
+  padding-inline: var(--rp-space-3);
+  border: 1px solid var(--rp-hl-high);
+  border-radius: var(--rp-r-pill);
+  background: var(--rp-surface);
+  color: var(--rp-subtle);
+  cursor: text;
+  text-align: start;
+}
+.rp-search[data-hovered],
+.rp-search[data-focus-visible] {
+  border-color: var(--rp-muted);
+}
+.rp-search .grow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.rp-kbd {
+  font-size: var(--rp-text-2xs);
+  line-height: var(--rp-line-caption);
+  padding: var(--rp-space-half) var(--rp-space-2);
+  border: 1px solid var(--rp-hl-high);
+  border-radius: var(--rp-r-pill);
+  color: var(--rp-subtle);
+}
+.rp-actions {
+  grid-column: 3;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--rp-space-1);
+}
+.rp-search-compact {
+  display: inline-flex;
+}
+@media (min-width: 1024px) {
+  .rp-search-compact {
+    display: none;
+  }
+}
+.rp-vrule,
+.rp-hrule {
+  width: 2px;
+  height: 32px;
+  margin: 0 var(--rp-space-1);
+  background: var(--rp-hl-med);
+  border: 0;
+  border-radius: 1px;
+}
+.rp-hrule {
+  width: auto;
+  height: 2px;
+  margin: 0;
+}
+/* Below 400px the brand, the compact search and the five actions no longer fit with the wide gutter: the bar
+   would push the whole page sideways. The gutter and the gaps narrow. */
+@media (max-width: 399.98px) {
+  .rp-top {
+    padding: 0 var(--rp-space-3);
+    column-gap: var(--rp-space-2);
+  }
+  .rp-brand {
+    gap: var(--rp-space-2);
+  }
+  .rp-main {
+    padding-inline: var(--rp-space-4);
+  }
+}
+/* Narrower still: the wordmark leaves the view, leaving the duck and the actions; it still names the button. With it,
+   the widget toggle adds one control and gap to the bar's minimum width; below 1024px reload is in the overflow menu.
+   The sign-in card has the room and keeps its name. */
+@media (max-width: 420px) {
+  .rp-brand-text:not(.rp-login-brand > *) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+.rp-side {
+  /* The scrollbar fills the outer padding, and the content stays the top bar's inline gap clear of it. */
+  --rp-sidebar-inset-end: calc(var(--rp-scrollbar) + var(--rp-space-6));
+  --rp-sidebar-content-width: calc(var(--rp-sidebar-width) - var(--rp-sidebar-padding) - var(--rp-sidebar-inset-end) - var(--rp-space-3) - var(--rp-space-2));
+  display: none;
+  flex-direction: column;
+  padding-block: var(--rp-space-4);
+  padding-inline: var(--rp-sidebar-padding);
+  overflow: auto;
+}
+@media (min-width: 1024px) {
+  .rp-side {
+    display: flex;
+    position: fixed;
+    top: var(--rp-topbar);
+    bottom: 0;
+    inset-inline-start: max(0px, (100% - 1600px) / 2);
+    width: var(--rp-sidebar-width);
+  }
+}
+.rp-group {
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+  color: var(--rp-subtle);
+  margin: 0 0 var(--rp-space-1);
+}
+.rp-side > div + div,
+.rp-side-links > div + div {
+  margin-top: var(--rp-space-4);
+}
+.rp-side-links .rp-nav-slider {
+  inset-inline-start: var(--rp-sidebar-padding);
+}
+.rp-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  height: var(--rp-control);
+  padding: 0 var(--rp-space-3);
+  border-radius: var(--rp-r-md);
+  color: var(--rp-subtle);
+  text-decoration: none;
+  position: relative;
+}
+/* A page the backend has no capability for stays listed, dimmed; opening it says so. */
+.rp-nav[data-unavailable] {
+  color: var(--rp-muted);
+}
+.rp-nav[data-unavailable] > svg {
+  opacity: 0.6;
+}
+.rp-nav[data-hovered] {
+  background: var(--rp-fill);
+  color: var(--rp-text);
+}
+
+.rp-nav-slider {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--rp-group, var(--rp-accent));
+  transition:
+    translate var(--rp-duration-panel) var(--rp-ease-out),
+    height var(--rp-duration-panel) var(--rp-ease-out),
+    background-color var(--rp-duration-panel) var(--rp-ease);
+  pointer-events: none;
+  clip-path: inset(8px 0);
+}
+.rp-version {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  max-width: 100%;
+  white-space: nowrap;
+  height: 32px;
+  padding: 0 var(--rp-space-2);
+  border-radius: var(--rp-r-md);
+  color: var(--rp-subtle);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--rp-text-sm);
+  line-height: var(--rp-line-body);
+  text-decoration: none;
+}
+.rp-version[data-hovered] {
+  background: var(--rp-fill);
+}
+/* A long build version ends in an ellipsis; the popover it opens shows it whole. */
+.rp-version-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The facts as a hover card's: a label column and a value column, each value wrapping in its own cell. */
+.rp-popover-body .rp-kv.row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--rp-space-1) var(--rp-space-4);
+}
+.rp-popover-body .rp-kv.row > div {
+  display: contents;
+}
+/* The actions sit below the facts as buttons at the end edge, the main one last, as a dialog's footer. */
+.rp-backend-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--rp-space-2);
+  margin-block-start: var(--rp-space-2);
+}
+.rp-main {
+  margin-inline-end: 0;
+  padding: var(--rp-space-8) var(--rp-space-10) calc(var(--rp-space-12) + var(--rp-dock));
+  background: var(--rp-surface);
+  border-radius: var(--rp-r-xl) var(--rp-r-xl) 0 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-6);
+}
+@media (min-width: 1024px) {
+  .rp-main {
+    /* Pinned to the content column, so the startup screen without a side nav lands where the page will. */
+    grid-area: 2 / 2;
+    margin-inline-end: var(--rp-space-4);
+  }
+}
+.rp-content {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-6);
+  min-width: 0;
+  /* Fill the column even while a page's chunk is still loading: without this the content collapses to the
+     heading and springs back to full height a tenth of a second later. */
+  flex: 1;
+}
+.rp-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-4);
+}
+/* ---- Hubs below the side navigation's breakpoint: the open hub's pages above the content, and the hubs in a
+   bottom bar after the Material 3 navigation bar. The page, the action bar and the toasts keep --rp-dock clear. ---- */
+:root {
+  --rp-dock: 0px;
+}
+/* Where popovers may sit without the sidebar (usePopoverBoundary): the viewport between the top bar and the bottom bar. */
+.rp-popover-band {
+  position: absolute;
+  inset: var(--rp-topbar) 0 var(--rp-dock);
+  visibility: hidden;
+}
+@media (max-width: 1023.98px) {
+  :root {
+    --rp-dock: calc(64px + env(safe-area-inset-bottom));
+  }
+}
+/* The top bar scrolls away on a landscape phone (.rp-top above), so the band starts at the top. */
+@media (max-width: 1023.98px) and (max-height: 500px) {
+  .rp-popover-band {
+    top: 0;
+  }
+}
+.rp-hubbar {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 3;
+  display: flex;
+  padding: 0 var(--rp-space-2) env(safe-area-inset-bottom);
+  background: var(--rp-base);
+}
+@media (min-width: 1024px) {
+  .rp-hubnav,
+  .rp-hubbar {
+    display: none;
+  }
+}
+.rp-hubbar > a {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--rp-space-1);
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+  font-weight: 500;
+  color: var(--rp-subtle);
+  text-decoration: none;
+  white-space: nowrap;
+  outline: none;
+}
+.rp-hubbar-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 32px;
+  border-radius: var(--rp-r-pill);
+  transition:
+    background-color var(--rp-duration) var(--rp-ease),
+    transform var(--rp-duration) var(--rp-ease);
+}
+.rp-hubbar > [data-hovered] .rp-hubbar-pill {
+  background: var(--rp-fill);
+}
+/* The press shows on the pill, in the selected pill's shape; the selected one keeps its fill (motion.css sinks both). */
+.rp-hubbar > [data-pressed] .rp-hubbar-pill {
+  background: var(--rp-hl-med);
+}
+.rp-hubbar > [aria-current='page'] {
+  color: var(--rp-text);
+  font-weight: 600;
+}
+.rp-hubbar > [aria-current='page'] .rp-hubbar-pill {
+  background: var(--rp-selected);
+  color: var(--rp-accent);
+}
+.rp-hubbar > [data-focus-visible] .rp-hubbar-pill {
+  outline: 2px solid var(--rp-accent);
+  outline-offset: 2px;
+}
+.rp-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--rp-space-3);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.rp-hint {
+  color: var(--rp-subtle);
+  font-size: var(--rp-text-sm);
+  line-height: var(--rp-line-body);
+}
+.rp-h1 {
+  font-size: var(--rp-text-5xl);
+  font-weight: 800;
+  margin: 0;
+  line-height: 36px;
+  color: var(--rp-text);
+}
+/* Held rules: a count on the apply button. Positioned over the icon, so no width changes. */
+.rp-held {
+  position: relative;
+}
+.rp-held-count {
+  position: absolute;
+  top: 0;
+  inset-inline-end: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--rp-space-1);
+  border-radius: var(--rp-r-pill);
+  background: var(--rp-accent);
+  color: var(--rp-on-accent);
+  font-size: var(--rp-text-2xs);
+  line-height: var(--rp-line-caption);
+  font-weight: 600;
+}
+
+/* The links scroll up to the sidebar's edge, so the overlay scrollbar sits at the divider. */
+.rp-side-links {
+  position: relative;
+  flex: 1 1 auto;
+  min-block-size: 0;
+  max-block-size: 100%;
+  overflow: auto;
+  transition: max-block-size var(--rp-duration-panel) var(--rp-ease-out);
+  margin-inline: calc(0px - var(--rp-sidebar-padding));
+  padding-inline: var(--rp-sidebar-padding) var(--rp-space-6);
+  scrollbar-gutter: stable;
+}
+/* While a pointer drags the floating panel's header, the links (still scrolling) give the lower half of the sidebar
+   to the dock slot, drawn as the editor's drop targets are: dashed while open, solid under the pointer. */
+/* Links cut by the docked widgets fade at that edge, as the widget panel's list does. */
+.rp-side-links[data-more] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rp-space-4)), transparent);
+}
+.rp-side:has(.rp-dock-slot[data-dock-armed]) > .rp-side-links {
+  max-block-size: 50%;
+}
+.rp-dock-slot {
+  flex: 0 0 0;
+  display: grid;
+  place-items: center;
+  min-block-size: 0;
+  overflow: hidden;
+  visibility: hidden;
+  opacity: 0;
+  border-radius: var(--rp-r-lg);
+  outline: 2px dashed var(--rp-accent);
+  outline-offset: -2px;
+  color: var(--rp-subtle);
+  font-size: var(--rp-text-xs);
+  transition:
+    flex-grow var(--rp-duration-panel) var(--rp-ease-out),
+    opacity var(--rp-duration-panel) var(--rp-ease-out),
+    visibility var(--rp-duration-panel),
+    background-color var(--rp-duration) var(--rp-ease);
+}
+.rp-dock-slot[data-dock-armed] {
+  flex-grow: 1;
+  margin-block: var(--rp-space-2);
+  visibility: visible;
+  opacity: 1;
+}
+.rp-dock-slot[data-dock-target] {
+  outline-style: solid;
+  background: var(--rp-selected);
+  color: var(--rp-text);
+}

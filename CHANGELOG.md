@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.0.6 (2026-11-24)
+
+### 同步上游 `Zakkaus/doona` 主线至 `c7f29e3` 并接入内置 WebUI 自动构建管线
+- **合入 Doona 源码仓库 `webui/`（标准版 + Lite 版）**：
+  - 完整合并 [`Zakkaus/doona`](https://github.com/Zakkaus/doona) 主线截至 `c7f29e3` 的全部改动，并将 [`build.sh`](./build.sh) 接入自动编译与裁剪打包流程（同时保留 `FETCH_DOONA=1` 回退路径与 [`webui/tools/ci-changes.test.mjs`](./webui/tools/ci-changes.test.mjs) UTF-8 路径校验修复）。
+  - 上游核心 [`daeuniverse/honk`](https://github.com/daeuniverse/honk) 主线确认已对齐最新提交 `7cd8b13c`。
+
+### Android 独立叶子 cgroup 隔离与 Doona「内存」板块全 8 项指标完整适配
+- **消除「内存」面板 `—` 缺失项**：
+  - `crates/honk-core/src/lib.rs` 新增 `ensure_dedicated_cgroup()`，当 `honk-core` 在 Android 上处于根 cgroup 时自动开启子树控制并迁入独立叶子节点 `/sys/fs/cgroup/honk`；`boxproxy/boxctl/src/resource.rs` 同步新增 `ensure_honk_unbounded_cgroup()` 并为 `honk` 优先分配独立 `/honk` cgroup。
+  - `crates/honk-core/src/native_api/telemetry.rs` 在 `/api/v1/capabilities` 中补充声明 `cgroup.limit_bytes`（使 Doona 在未配置内存硬上限时明确渲染 **`未设上限`** 而非 `—`），与 `/api/v1/runtime/memory` 协同完整展示 Doona「系统状态 → 内存」卡片全部 8 项指标：**常驻内存**、**cgroup 已用**、**cgroup 上限**（`未设上限` 或具体配额）、**cgroup 范围**（`本服务`）、**超过高水位次数**、**OOM 次数**、**OOM 终止次数**、**eBPF 内核内存**。
+- **修复高并发观测下的 `hook_observation_incomplete` 假性降级**：
+  - `crates/honk-core/src/ebpf/real/programs.rs` 将 `ProgramLoader::try_object()` 从非阻塞 `try_lock()` 调整为 5ms 有限等待 `try_lock_for(5ms)`，并在 `observation.rs` 中对无法获取已加载程序 ID 的观测保持 `Unknown` 而非误报 `DatapathObservationError::Hooks`，消除 Doona 页面并发轮询时偶发的「数据路径降级」闪现。
+
+### WebUI 与 APK 双端新增 `honk` 核心检测更新与在线热替换重启
+- **Native API `/api/v1/x-honk/core/update`（`GET` 检查 / `POST` 执行更新）**：
+  - 新增 `crates/honk-core/src/native_api/core_update.rs` 及对应单元测试，直接对接 `Wcoom/honk-android` GitHub Releases（通过本机与代理出站链路回退请求 GitHub API 与 Releases HTML），下载 `honk-android-arm64` 与 `SHA256SUMS.txt` 并执行严格 SHA-256 校验、ARM64 ELF64 文件头与可执行试跑验证，随后原子替换可执行文件并分离拉起新进程重连原 `box.pid` 与自启环境。
+  - 同步接入 Doona 标准版 **设置 → 核心更新**（[`CoreUpdateCard.tsx`](./webui/src/features/settings/CoreUpdateCard.tsx)）、**系统状态**「检查核心更新」入口及 Lite 版 **关于** 面板（[`AboutPanel.tsx`](./webui/apps/lite/src/AboutPanel.tsx)）。
+- **`BoxProxy Honk` APK 内置核心更新支持**：
+  - 在 `BoxProxy Honk` **工具 → 更新核心** 中内置 `Honk` 更新源（`Wcoom/honk-android`，资产 `honk-android-arm64`，本地版本正则兼容 `honk(?:-core)?`），支持自动迁移旧配置、一键比对本地/远端版本及在线重装升级。
+
+### 升级共存客户端至官方 BoxProxy `v214` (`26.11.23.aa98568`)
+- 基于官方新版 BoxProxy **`v214` (`26.11.23.aa98568`)** 重新移植共存包名 **`com.boxproxy.honk`**（应用名 `BoxProxy Honk` / 磁贴 `Box Honk`），修复 `t50.a` 关于页致谢寄存器冲突、`cr0` / `xe0` 哈希分派缺失（恢复首页实时网速与原生「面板」页 Clash API 策略/规则/连接/流量图），完整保留独立开机自启脚本 `/data/adb/service.d/boxproxy-honk.sh` 与内置 Doona WebUI 入口。
+
 ## v1.0.5 (2026-11-23)
 
 ### 合并上游 `daeuniverse/honk` 主线至 `7cd8b13c`

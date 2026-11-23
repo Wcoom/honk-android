@@ -1,0 +1,434 @@
+/* Controls on react-aria-components */
+/* The kit Button after S2's ActionButton and Button. Every button takes ActionButton geometry: medium type, the control
+   corner and a 3/8 inset. A primary action (an accent or negative fill, or a labelled button in PrimaryActions) takes
+   Button's: a pill in bold type with half the height as its inset (below). Fills have no border and the outline is 2px.
+   The default is S2's secondary fill, `secondary` its secondary outline, `accent` and `negative` its accent and
+   negative fills. Hover and keyboard focus take one step up S2's gray scale (gray-100 to gray-200: the overlay to
+   highlight med here). S2 keeps that colour while pressed and only sinks the control (motion.css); here the press also
+   takes one more step, so a held press reads apart from hover. */
+.rp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  height: var(--rp-control);
+  /* The inline padding, which a quiet button ending a card's line gives back to keep its text on the edge. */
+  --rp-btn-inset: var(--rp-space-3);
+  padding: 0 var(--rp-btn-inset);
+  border-radius: var(--rp-r-md);
+  border: 0 solid transparent;
+  background: var(--rp-overlay);
+  color: var(--rp-text);
+  cursor: pointer;
+  /* A label is not text to select: in a link, a press that dragged over it highlighted it. */
+  -webkit-user-select: none;
+  user-select: none;
+  font: inherit;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.rp-btn:is([data-hovered], [data-focus-visible]) {
+  background: var(--rp-hl-med);
+}
+.rp-btn[data-pressed] {
+  background: var(--rp-hl-high);
+}
+.rp-btn.quiet {
+  background: transparent;
+}
+.rp-btn.quiet:is([data-hovered], [data-focus-visible]) {
+  background: var(--rp-hl-med);
+}
+/* S2's gray-300 border is the step above the hover fill: highlight med on the base and the surface. */
+.rp-btn.secondary {
+  background: transparent;
+  border-width: 2px;
+  border-color: var(--rp-hl-med);
+}
+.rp-btn.secondary:is([data-hovered], [data-focus-visible]) {
+  background: var(--rp-overlay);
+}
+.rp-btn.secondary[data-pressed] {
+  background: var(--rp-hl-med);
+}
+/* S2 sizes a button's leading icon to its line: 18px beside 14px type, 20px at L (below), 16px at S. A menu
+   trigger's chevron keeps 16px. */
+.rp-btn:not(.icon) > .rp-icon,
+.rp-btn.rp-help > .rp-icon,
+.rp-subitem > .ic > :is(svg, img) {
+  width: 16px;
+  height: 16px;
+}
+.rp-btn:not(.icon, .quiet, .rp-help, .sm) > .rp-icon:first-of-type:not(.rp-chev) {
+  width: 18px;
+  height: 18px;
+}
+.rp-btn.sm {
+  --rp-icon-size: 1lh;
+  --rp-btn-inset: var(--rp-space-2);
+  padding: 0 var(--rp-btn-inset);
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+}
+.rp-btn.icon {
+  width: var(--rp-control);
+  padding: 0;
+  justify-content: center;
+}
+.rp-btn[data-size='L'] {
+  height: var(--rp-control-lg);
+  --rp-btn-inset: var(--rp-lg-inset-field);
+  padding-inline: var(--rp-btn-inset);
+  font-size: var(--rp-lg-text);
+  line-height: var(--rp-line-body);
+  border-radius: var(--rp-lg-radius);
+}
+.rp-btn[data-size='L']:not(.icon, .quiet, .rp-help, .sm) > .rp-icon:first-of-type:not(.rp-chev) {
+  width: 20px;
+  height: 20px;
+}
+.rp-btn.icon[data-size='L'] {
+  width: var(--rp-control-lg);
+  padding: 0;
+}
+.rp-btn:is(.primary, .accent, .negative:not(.quiet)):not(.icon, .sm) {
+  padding-inline: var(--rp-inset-btn);
+  border-radius: var(--rp-r-pill);
+  font-weight: 700;
+}
+.rp-btn:is(.primary, .accent, .negative:not(.quiet)):not(.icon, .sm)[data-size='L'] {
+  padding-inline: var(--rp-lg-inset-btn);
+}
+.rp-btn.accent {
+  background: var(--rp-accent);
+  color: var(--rp-on-accent);
+}
+.rp-btn.accent:is([data-hovered], [data-focus-visible]) {
+  background: color-mix(in srgb, var(--rp-accent) 86%, var(--rp-ink-mix));
+}
+.rp-btn.accent[data-pressed] {
+  background: color-mix(in srgb, var(--rp-accent) 76%, var(--rp-ink-mix));
+}
+
+.rp-seg .rp-btn[data-hovered],
+.rp-tab[data-hovered] {
+  color: var(--rp-text);
+  transition-delay: 0ms;
+}
+/* The selected segment's slider is its fill; another segment takes the pressed fill on its own box. A page tab is drawn
+   as a segment (segmented.css). */
+.rp-seg .rp-btn[data-pressed]:not([data-selected]),
+.rp-tab[data-pressed]:not([data-selected]) {
+  background-color: var(--rp-hl-high);
+}
+.rp-seg .rp-btn[data-selected] {
+  /* The slider draws the selection; the label keeps the text colour, since accent or subtle text on the track
+     reads below 4.5:1 in some palettes. */
+  background: transparent;
+  border-color: transparent;
+}
+/* Section headers after S2: small and bold in the text colour, so they stand apart from the muted, regular-weight
+   item descriptions; each section after the first gets more room above. */
+.rp-sec-h {
+  font-size: var(--rp-text-xs);
+  font-weight: 700;
+  line-height: var(--rp-line-caption);
+  color: var(--rp-text);
+  padding-block: var(--rp-space-2) var(--rp-space-half);
+  padding-inline: var(--rp-space-8) var(--rp-space-2);
+}
+section:not(:first-child) > .rp-sec-h {
+  padding-block-start: var(--rp-space-4);
+}
+/* The rule before a menu's closing commands keeps clear of the rows on either side, so a focused row's ring does not
+   sit on it. */
+[role='menu'] > .rp-hrule {
+  margin-block: var(--rp-space-1);
+}
+.rp-popover [role='menu'],
+.rp-popover [role='listbox'],
+.rp-popover [role='dialog'] {
+  outline: none;
+}
+/* A slim overlay-like scrollbar so a long menu keeps its 8px inset on both sides. */
+.rp-popover::-webkit-scrollbar {
+  width: 6px;
+}
+.rp-popover::-webkit-scrollbar-thumb {
+  border-radius: var(--rp-r-xs);
+  background: var(--rp-hl-high);
+}
+.rp-popover::-webkit-scrollbar-track {
+  background: transparent;
+  margin: var(--rp-space-2) 0;
+}
+/* A scroller's slim scrollbar that shows only while the pointer or focus is in it (the sidebar's links, the widget
+   panel), so it adds nothing to a list at rest, and has no arrow buttons. Chromium and WebKit draw the styled
+   scrollbar only while the standard properties are left at auto; Firefox keeps the thin standard one, which has none.
+   The gutter stays, so showing the scrollbar moves nothing. */
+@supports not selector(::-webkit-scrollbar) {
+  .rp-overlay-scroll {
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color var(--rp-duration) var(--rp-ease);
+  }
+  .rp-overlay-scroll:focus-within {
+    scrollbar-color: var(--rp-hl-high) transparent;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    /* stylelint-disable-next-line selector-pseudo-class-disallowed-list -- guarded by the media query above */
+    .rp-overlay-scroll:hover {
+      scrollbar-color: var(--rp-hl-high) transparent;
+    }
+  }
+}
+@supports selector(::-webkit-scrollbar) {
+  .rp-overlay-scroll {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+}
+.rp-overlay-scroll::-webkit-scrollbar {
+  width: var(--rp-scrollbar);
+  height: var(--rp-scrollbar);
+}
+.rp-overlay-scroll::-webkit-scrollbar-button {
+  display: none;
+}
+.rp-overlay-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.rp-overlay-scroll::-webkit-scrollbar-thumb {
+  border-radius: var(--rp-r-xs);
+  background: transparent;
+}
+.rp-overlay-scroll:focus-within::-webkit-scrollbar-thumb {
+  background: var(--rp-hl-high);
+}
+@media (hover: hover) and (pointer: fine) {
+  /* stylelint-disable-next-line selector-pseudo-class-disallowed-list -- guarded by the media query above */
+  .rp-overlay-scroll:hover::-webkit-scrollbar-thumb {
+    background: var(--rp-hl-high);
+  }
+}
+/* Popover surface after S2: layer-2 background, radius 10, the three-layer elevated shadow, an outline only in dark. */
+.rp-popover {
+  background: var(--rp-surface);
+  border: 1px solid var(--rp-popover-border);
+  border-radius: var(--rp-r-lg);
+  padding: var(--rp-space-2);
+  overflow: hidden auto;
+  scrollbar-color: var(--rp-hl-high) transparent;
+  box-shadow: var(--rp-elevated);
+  min-width: 160px;
+  /* Sized by its content, not by the room left of its position: otherwise each placement changes the width, the
+     width moves the placement, and the popover settles over several frames of resize notifications. */
+  width: max-content;
+  max-width: calc(100vw - 24px);
+}
+/* Search stays above a long list; only the list consumes the available popover height. */
+.rp-list-popover:has(.rp-menu-scroll),
+.rp-list-popover:has(.rp-menu-scroll) :is(.rp-drill, section[role='dialog']) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.rp-list-popover .rp-menu-scroll {
+  min-height: 0;
+}
+.rp-list-popover :is(.rp-menu-search, .rp-drill-back) {
+  flex: none;
+}
+/* A dialog in a popover, after S2's: a title over its content, with a dialog's inset rather than a menu's. */
+.rp-popover-dialog {
+  inline-size: min(300px, calc(100vw - 24px));
+}
+.rp-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-3);
+  padding: var(--rp-space-2);
+  outline: none;
+}
+.rp-popover-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-half);
+}
+/* An untitled note in a popover: running text at the popover's own inset. */
+.rp-popover-note {
+  width: 320px;
+  max-width: calc(100vw - 48px);
+  line-height: 1.5;
+}
+.rp-popover-note p {
+  margin: 0 0 var(--rp-space-2);
+}
+/* A help button, after S2's ContextualHelp: an icon beside the label it explains, kept within the label's line. S2 fixes
+   its trigger at size XS, so it ignores the size of the control it sits beside. */
+.rp-btn.icon.rp-help[data-size] {
+  width: var(--rp-control-xs);
+  height: var(--rp-control-xs);
+}
+.rp-btn.rp-help {
+  margin-inline-start: var(--rp-space-half);
+  vertical-align: middle;
+  color: var(--rp-subtle);
+}
+/* A control or a title with its help button beside it. */
+.rp-help-row {
+  display: inline-flex;
+  align-items: center;
+  /* Bounded by its container, so a segmented control inside collapses to its picker instead of pushing the help out. */
+  min-width: 0;
+  max-width: 100%;
+}
+/* A field label keeps one line's height with its help button, so the field lines up with neighbours that have none. */
+:is(.rp-field, .rp-cluster) > .rp-help-row {
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+  height: 1lh;
+}
+.rp-help-row-fill {
+  display: flex;
+  min-width: 0;
+}
+.rp-help-row-fill > .rp-help-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rp-help-row-fill > .rp-help {
+  flex: none;
+}
+.rp-popover-body p {
+  margin: 0;
+  line-height: 20px;
+}
+.rp-popover-body h2:not(.rp-h3) {
+  margin: 0;
+  font-size: var(--rp-text-lg);
+  line-height: 24px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.rp-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--rp-space-2);
+  min-height: var(--rp-control);
+  padding: var(--rp-space-1) var(--rp-space-2);
+  border-radius: var(--rp-r-md);
+  cursor: default;
+  outline: none;
+  color: var(--rp-text);
+}
+.rp-item[data-focused],
+.rp-item[data-hovered] {
+  background: var(--rp-fill);
+}
+.rp-item[data-pressed] {
+  background: var(--rp-hl-med);
+}
+.rp-item[data-selected] {
+  font-weight: 600;
+}
+.rp-item .rp-check-mark {
+  width: 16px;
+  height: 16px;
+  visibility: hidden;
+  color: var(--rp-text);
+}
+.rp-item[data-selected] .rp-check-mark {
+  visibility: visible;
+}
+.rp-item.plain {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-inline-start: var(--rp-space-3);
+}
+/* Descriptions take a second row, as in S2 menu items. */
+.rp-item-text {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  row-gap: var(--rp-space-1);
+  min-width: 0;
+}
+.rp-item-text > [slot='label'] {
+  display: contents;
+}
+.rp-item-text:has(> .aside) {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  column-gap: var(--rp-space-3);
+}
+.rp-item-text > .desc {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rp-item.negative {
+  color: var(--rp-negative-text);
+}
+.rp-item .desc {
+  color: var(--rp-subtle);
+  font-size: var(--rp-text-xs);
+  /* Regular even when the selected item's label turns bold. */
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.rp-item .desc.reason {
+  font-size: var(--rp-text-sm);
+}
+.rp-subitem > .ic {
+  display: flex;
+  color: var(--rp-subtle);
+}
+.rp-subitem > .desc {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rp-space-1);
+  margin-inline-start: var(--rp-space-4);
+}
+/* The down chevron turned to point at the inline end or start; --rp-dir turns it the other way right to left. */
+.rp-chev-end.rp-icon,
+.rp-chev-start.rp-icon {
+  width: 16px;
+  height: 16px;
+  transform: rotate(calc(-90deg * var(--rp-dir)));
+}
+.rp-chev-start.rp-icon {
+  transform: rotate(calc(90deg * var(--rp-dir)));
+}
+.rp-drill {
+  outline: none;
+}
+.rp-drill-back {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  text-align: start;
+}
+.rp-drill-back[data-focus-visible] {
+  background: var(--rp-fill);
+}
+.rp-subitem[data-open] {
+  background: var(--rp-fill);
+}
+.rp-item .desc.ok {
+  color: var(--rp-positive-text);
+}
+.rp-item .desc.warn {
+  color: var(--rp-notice-text);
+}
+.rp-item .desc.err {
+  color: var(--rp-negative-text);
+}
+
+.rp-btn.quiet[data-toggle-selected] {
+  background: var(--rp-hl-high);
+  color: var(--rp-text);
+}

@@ -1,0 +1,340 @@
+import {test as browserTest} from '@playwright/test';
+import {expect, routes, test, settleFrames, box, loadingState, mockBackend} from './fixtures';
+import {createMockApi} from '../mock';
+
+test('Disclosure toggles with Enter and Space and keeps focus on its trigger', async ({page}) => {
+  await page.goto('/#/rules?tab=trace');
+  const disclosure = page.locator('main .rp-disclosure').first();
+  const trigger = disclosure.getByRole('button', {name: 'Advanced', exact: true});
+  const panel = disclosure.getByRole('group', {name: 'Advanced', exact: true, includeHidden: true});
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(panel).toBeHidden();
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(panel).toBeVisible();
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(panel).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('Tab');
+  expect(await panel.locator(':focus').count()).toBe(0);
+});
+
+test('connection test stays pending and suppresses repeated activation until discovery completes', async ({page}) => {
+  let requests = 0;
+  let release = () => {};
+  const hold = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  await page.route('**/pending-backend/api', async route => {
+    requests++;
+    await hold;
+    await route.fulfill({json: {name: 'daeuniverse/native', api_major: 1, base_path: '/api/v1', links: {}, auth: {mode: 'token', setup_required: false}}});
+  });
+  await page.goto('/#/settings');
+  await page.locator('[name=api]').fill(new URL(page.url()).origin + '/pending-backend');
+  const control = page.getByRole('button', {name: 'Test connection', exact: true});
+  const before = await control.boundingBox();
+  await control.click();
+  await expect(control).toHaveAttribute('data-pending');
+  await expect(control).toHaveAttribute('aria-disabled', 'true');
+  // As in S2, the progress circle waits a second before it replaces the label, and the button keeps its size.
+  const progress = control.locator('.rp-btn-progress [role=progressbar]');
+  const pendingSince = Date.now();
+  await expect(progress).toBeHidden();
+  await expect(progress).toBeVisible();
+  expect(Date.now() - pendingSince).toBeGreaterThanOrEqual(900);
+  const after = await control.boundingBox();
+  expect(after!.width).toBe(before!.width);
+  expect(after!.height).toBe(before!.height);
+  await control.evaluate(button => {
+    (button as HTMLButtonElement).click();
+    (button as HTMLButtonElement).click();
+  });
+  await expect.poll(() => requests).toBe(1);
+  release();
+  await expect(control).not.toHaveAttribute('data-pending');
+  await expect(page.locator('.rp-toast.positive')).toContainText('API v1');
+  expect(requests).toBe(1);
+});
+
+test('a truncated table cell exposes the full value on hover and keyboard focus', async ({page}) => {
+  const api = createMockApi();
+  const capabilities = await api.capabilities();
+  capabilities.resources.events.available = false;
+  const connections = await api.connections({detail: 'full', limit: 1000});
+  const full = 'a-very-long-destination-name-that-does-not-fit-in-the-table-column.example.test';
+  connections.tcp[0].domain = full;
+  const responses: Record<string, unknown> = {
+    '/capabilities': capabilities,
+    '/version': await api.version(),
+    '/connections': connections
+  };
+  await page.addInitScript(() => {
+    localStorage.setItem('doona-api', location.origin);
+    localStorage.setItem('doona-connections-view', JSON.stringify({hidden: [], sort: null, group: 'none'}));
+  });
+  await page.route('**/api/v1/**', route => route.fulfill({json: responses[new URL(route.request().url()).pathname.replace('/api/v1', '')]}));
+  await page.goto('/#/connections?tab=list');
+  const cell = page.getByRole('rowheader').getByText(full, {exact: true});
+  await expect(cell).toBeVisible();
+  expect(await cell.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+  await page.mouse.move(0, 0);
+  await cell.hover();
+  await expect(page.getByRole('tooltip')).toHaveText(full);
+  expect(await page.getByRole('tooltip').evaluate(el => [getComputedStyle(el).backgroundColor !== 'rgba(0, 0, 0, 0)', getComputedStyle(el).padding])).toEqual([
+    true,
+    '4px 8px'
+  ]);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('tooltip')).toBeHidden();
+  await page.mouse.move(0, 0);
+  // Keyboard users reach the text through grid navigation: the row, then its first cell.
+  await page.locator('.rp-table [role="row"][data-key]').first().focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(cell).toBeFocused();
+  await expect(page.getByRole('tooltip')).toHaveText(full);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('tooltip')).toBeHidden();
+  await expect(cell).not.toHaveAttribute('title');
+});
+
+for (const route of routes) {
+  browserTest(`${route} renders an inline error with an unreachable backend`, async ({page}) => {
+    const exceptions: string[] = [];
+    page.on('pageerror', error => exceptions.push(error.message));
+    await page.addInitScript(() => {
+      localStorage.setItem('doona-api', 'http://127.0.0.1:1');
+      localStorage.setItem('doona-lang', 'en');
+    });
+    await page.goto('/#/' + route);
+    await expect(page.locator('.rp-content .rp-alert').first()).toContainText('Could not load data');
+    await expect(page.locator('.rp-content h1')).toBeVisible();
+    await expect(page.locator(`.rp-content ${loadingState}`)).toHaveCount(0);
+    expect(exceptions).toEqual([]);
+  });
+}
+
+browserTest('API failures preserve request_id in the inline error', async ({page}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('doona-api', location.origin);
+    localStorage.setItem('doona-lang', 'en');
+  });
+  await page.route('**/api/v1/**', route =>
+    route.fulfill({status: 503, json: {request_id: 'interaction-request-503', error: {code: 'unavailable', message: 'Backend unavailable'}}})
+  );
+  await page.goto('/#/connections?tab=list');
+  await expect(page.locator('.rp-content .rp-alert').first()).toContainText('request_id: interaction-request-503');
+});
+
+test('shared controls distinguish a held press from hover without moving', async ({page}) => {
+  for (const [route, selector] of [
+    ['settings', '.rp-selectbtn:not([disabled])'],
+    ['settings', '.rp-btn.accent'],
+    ['overview', '.rp-btn:not(.quiet):not(.accent)'],
+    ['rules', '.rp-nav']
+  ]) {
+    await page.goto('/#/' + route);
+    const control = page.locator(selector).filter({visible: true}).first();
+    await expect(control).toBeEnabled();
+    await control.scrollIntoViewIfNeeded();
+    const bounds = await control.boundingBox();
+    await control.hover();
+    const hovered = await control.evaluate(el => getComputedStyle(el).backgroundColor);
+    await page.mouse.down();
+    await expect(control).toHaveAttribute('data-pressed');
+    expect(await control.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(hovered);
+    // The press scales the control about its centre; nothing around it moves.
+    const pressed = await box(control);
+    expect(pressed.x + pressed.width / 2).toBeCloseTo(bounds!.x + bounds!.width / 2, 0);
+    expect(pressed.y + pressed.height / 2).toBeCloseTo(bounds!.y + bounds!.height / 2, 0);
+    await page.mouse.move(0, 0);
+    await page.mouse.up();
+    await page.keyboard.press('Escape');
+  }
+});
+
+test('the backend indicator is a styled control, not a bare button', async ({page}) => {
+  await page.goto('/#/activity');
+  const indicator = page.locator('.rp-version');
+  await expect(indicator).toBeVisible();
+  await expect(indicator).toHaveCSS('cursor', 'pointer');
+  expect(await indicator.evaluate(el => getComputedStyle(el).display)).toBe('flex');
+  await expect(indicator.locator('.rp-light')).toBeVisible();
+  await indicator.click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+});
+
+test('editor completion preserves policy keys and quoted-brace context', async ({page}) => {
+  await page.goto('/#/config?tab=source');
+  const editor = page.locator('.cm-content[contenteditable="true"]');
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.insertText('group { proxy {\n  policy: min');
+  await page.keyboard.press('Control+Space');
+  await page.getByRole('option', {name: 'min_avg10', exact: true}).click();
+  await expect(editor).toContainText('policy: min_avg10');
+  await expect(editor).not.toContainText('policy: policy:');
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.insertText("global {\n  log_file: '/tmp/}'\n  log_l");
+  await page.keyboard.press('Control+Space');
+  await page.getByRole('option', {name: 'log_level', exact: true}).click();
+  await expect(editor).toContainText('log_level:');
+});
+
+// A relative time cell names the local time on hover; a cell that already shows the local time gives the exact timestamp.
+const localTime = /\d{1,2}\/\d{1,2}\/\d{2}, \d{2}:\d{2}:\d{2}$/;
+const isoTime = /^\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+for (const [route, column, tip] of [
+  ['connections?tab=list', 'Started', localTime],
+  ['flows?tab=records', 'Started', localTime],
+  ['dns?tab=log', 'Time', localTime],
+  ['events', 'Time', isoTime],
+  ['logs', 'Time', isoTime]
+] as const)
+  test(`the ${column.toLowerCase()} cells on ${route} show ${tip === localTime ? 'the local time' : 'the exact timestamp'} as a tooltip`, async ({page}) => {
+    await page.setViewportSize({width: 1600, height: 1000});
+    // Ungrouped, so the first row is a connection rather than a source.
+    await page.addInitScript(() => localStorage.setItem('doona-connections-view', JSON.stringify({hidden: [], sort: null, group: 'none'})));
+    await page.goto('/#/' + route);
+    const grid = page.locator('[role="grid"]:visible, [role="treegrid"]:visible').first();
+    const headers = grid.getByRole('columnheader');
+    await expect(headers.first()).toBeVisible();
+    const index = (await headers.allTextContents()).findIndex(text => text.trim() === column);
+    expect(index).toBeGreaterThanOrEqual(0);
+    const cell = grid.locator('[role="row"][data-key]').first().locator('[role="rowheader"], [role="gridcell"]').nth(index).locator('[data-tip]');
+    await expect(async () => {
+      await page.mouse.move(0, 0);
+      await cell.hover();
+      await expect(page.getByRole('tooltip')).toHaveText(tip, {timeout: 1500});
+    }).toPass();
+  });
+
+test('a kept tab panel is the same element after switching away and back', async ({page}) => {
+  await page.goto('/#/dns');
+  const cache = page.getByRole('tab', {name: 'Cache', exact: true});
+  await cache.click();
+  const panel = page.getByRole('tabpanel', {name: 'Cache'});
+  await expect(panel.getByRole('grid')).toBeVisible();
+  await panel.getByRole('grid').evaluate(grid => ((grid as HTMLElement & {kept?: boolean}).kept = true));
+  await page.getByRole('tab', {name: 'Statistics', exact: true}).click();
+  await expect(panel).toBeHidden();
+  await cache.click();
+  expect(await panel.getByRole('grid').evaluate(grid => (grid as HTMLElement & {kept?: boolean}).kept)).toBe(true);
+});
+
+test('a segmented marker inside a hidden tab panel keeps its place', async ({page}) => {
+  await page.goto('/#/nodes?tab=latency');
+  const by = page.getByRole('radiogroup', {name: 'Group by'});
+  await by.getByRole('radio', {name: 'Protocol'}).click();
+  await expect(by.locator('.rp-slider')).not.toHaveCSS('left', '0px');
+  const slider = (await by.locator('.rp-slider').elementHandle())!;
+  const left = await slider.evaluate(el => (el as HTMLElement).style.left);
+  await page.getByRole('tab').first().click();
+  await expect(by).toBeHidden();
+  // The resize observer reports the hidden size before the next frame; the frame after it shows what it did.
+  await settleFrames(page);
+  expect(await slider.evaluate(el => (el as HTMLElement).style.left)).toBe(left);
+});
+
+test('a tile whose value links to its source answers hover as a linked card', async ({page}) => {
+  await page.goto('/#/activity');
+  // The latency tile: it also holds a group menu, which must stay a control of its own.
+  const card = page.locator('.rp-card', {has: page.getByRole('button', {name: /^Groups: /})});
+  const link = card.locator('.rp-tile-val > .rp-link');
+  await expect(link).toBeVisible();
+  const rect = await box(card);
+  // The empty lower corner of the card, away from the value, still hovers the link.
+  await page.mouse.move(rect.x + rect.width - 12, rect.y + rect.height - 8);
+  await expect(link).toHaveAttribute('data-hovered', 'true');
+  const style = await link.evaluate(el => {
+    const s = getComputedStyle(el);
+    return {background: s.backgroundColor, line: s.textDecorationLine};
+  });
+  expect(style.background).toBe('rgba(0, 0, 0, 0)');
+  expect(style.line).toBe('none');
+  // The group menu in the same tile stays a control of its own above the cover.
+  await card.getByRole('button').first().click();
+  await expect(page).toHaveURL(/#\/activity/);
+});
+
+test('backend validation blocks empty and malformed URLs without a success toast', async ({page}) => {
+  await page.goto('/#/settings');
+  const field = page.locator('[name=api]');
+  const before = await page.evaluate(() => localStorage.getItem('doona-profiles'));
+  for (const value of ['', 'not a url']) {
+    await field.fill(value);
+    await expect(field).toHaveAttribute('aria-invalid', 'true');
+    await expect(field.locator('xpath=ancestor::form').locator('button[type=submit]')).toBeDisabled();
+    await field.press('Enter');
+    await expect(page.locator('.rp-toast.positive')).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('doona-profiles'))).toBe(before);
+  }
+});
+
+test('search closes on one Escape and restores the trigger', async ({page}) => {
+  await page.goto('/#/activity');
+  const trigger = page.getByRole('button', {name: /^Search pages/});
+  for (const origin of [trigger, page.getByRole('button', {name: 'Refresh', exact: true})]) {
+    await origin.focus();
+    await page.keyboard.press('Control+k');
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('searchbox').fill('proxy');
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(origin).toBeFocused();
+  }
+});
+
+test('new group requires a name and confirms discarding on Escape', async ({page}) => {
+  await page.goto('/#/policies');
+  await page.getByRole('button', {name: 'New group', exact: true}).click();
+  const dialog = page.getByRole('dialog', {name: 'New group', exact: true});
+  const name = dialog.getByRole('textbox', {name: 'Group name'});
+  await dialog.getByRole('button', {name: 'Create', exact: true}).click();
+  await expect(dialog.locator('.rp-field-error')).toHaveText('Enter a name');
+  await name.fill('draft');
+  await page.keyboard.press('Escape');
+  const discard = page.getByRole('alertdialog');
+  await expect(discard).toBeVisible();
+  await discard.getByRole('button', {name: 'Cancel', exact: true}).click();
+  await expect(name).toHaveValue('draft');
+});
+
+test('global port keeps an out-of-range value and blocks saving', async ({page}) => {
+  await page.goto('/#/config?tab=global');
+  const port = page.locator('[data-setting=tproxy_port]').getByRole('textbox');
+  await port.fill('99999');
+  await port.press('Tab');
+  await expect(port).toHaveValue('99999');
+  await expect(port).toHaveAttribute('aria-invalid', 'true');
+  await expect(port).toHaveAccessibleDescription(/65535/);
+  await expect(page.locator('#config-global-form button[type=submit]')).toBeDisabled();
+});
+
+test('top bar reload explains why it is pending', async ({page}) => {
+  const {api, handlers} = await mockBackend(page);
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  handlers['POST operations/reload'] = async () => {
+    await pending;
+    return api.startReload();
+  };
+  await page.goto('/#/activity');
+  const reload = page.locator('header').getByRole('button', {name: 'Reload honk', exact: true});
+  await reload.click();
+  await page.getByRole('dialog', {name: 'Reload honk?'}).getByRole('button', {name: 'Reload honk', exact: true}).click();
+  try {
+    await expect(reload).toHaveAttribute('data-pending');
+    await reload.hover();
+    await expect(page.getByRole('tooltip')).toHaveText('Wait for the current operation to finish.');
+  } finally {
+    release();
+  }
+  await expect(reload).not.toHaveAttribute('data-pending');
+});

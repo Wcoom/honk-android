@@ -57,3 +57,14 @@
   - 新增 `NativeApiConfig::admin_authorized()`：允许仅监听本机回环且开启 `allow_anonymous_loopback: true` 的实例直接启用 `config_write: true` 与 `--store db`，在手机内置 WebView 免登录即可使用配置编辑、导入、节点/规则/订阅管理、修订历史与地理数据更新。
   - 允许 `--store db` 与本机回环 `clash_api`（`127.0.0.1:9090`）共存，同时驱动 BoxProxy 原生「面板」与「WebUI（Doona）」。
   - Android 平台（非 `/var/lib` 数据目录）在满足管理授权时自动提升为 `ConfigStore::Db` 并默认启用常驻后台流程记录（`RecorderMode::On`）。
+
+## 7. Android 独立叶子 cgroup 内存遥测、并发观测防抖与双端核心在线更新（v1.0.6）
+
+- `crates/honk-core/src/lib.rs`（`ensure_dedicated_cgroup()`）、`crates/honk-core/src/native_api/telemetry.rs` 与 `boxproxy/boxctl/src/resource.rs`：
+  - 当 `honk-core` 运行于 Android 根 cgroup 时，自动开启 `cgroup.subtree_control` `+memory` 并将其迁入独立叶子 cgroup `/sys/fs/cgroup/honk`；`boxctl` 同步新增 `ensure_honk_unbounded_cgroup()` 为 `honk` 创建并维持独立的无上限或显式受限 `/honk` cgroup。
+  - `/api/v1/capabilities` 在 `resources.runtime_memory.metrics` 中明确声明 `cgroup.limit_bytes`（即使当前配额为 `max` 无上限），使内嵌 Doona 完整显示「内存」板块全部 8 项指标（含 `cgroup 上限 = 未设上限` 与 `cgroup 范围 = 本服务`）。
+- `crates/honk-core/src/ebpf/real/{programs.rs,observation.rs}`：
+  - `ProgramLoader::try_object()` 改为 `try_lock_for(5ms)`，`observe_backend()` 在 `programs` 仍为 `DatapathCheck::Unknown` 时保持未确认而不误判为 `DatapathObservationError::Hooks`，消除并发轮询 `/api/v1/runtime` 与 `/api/v1/datapath` 时偶发的 `hook_observation_incomplete`。
+- `crates/honk-core/src/native_api/{core_update.rs,handlers.rs,types.rs}`、`crates/honk-core/src/{main.rs,native_api.rs}` 与 `webui/`：
+  - 同步 `Zakkaus/doona` 主线至 `c7f29e3` 并接入 [`build.sh`](./build.sh) 自动内嵌标准版与 Lite 版 WebUI。
+  - 新增 `GET/POST /api/v1/x-honk/core/update`，支持检测 `Wcoom/honk-android` GitHub Releases、下载 `honk-android-arm64` 与 `SHA256SUMS.txt`、校验 SHA-256 与 ARM64 ELF64 头并原子替换后分离重启（复用 `record_startup_args()`）；同步适配 Doona 标准版/Lite 版核心更新卡片与 `BoxProxy Honk` 客户端内更新源。

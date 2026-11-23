@@ -1,0 +1,417 @@
+import {Fragment, lazy, Suspense, useId, type ReactNode} from 'react';
+import {LANGS, useT, type Lang} from '../../i18n';
+import {
+  ActionHelp,
+  Button,
+  PrimaryActions,
+  Card,
+  ErrorMessage,
+  LabeledSelect,
+  Light,
+  Link,
+  InlineAlert,
+  ConfirmDialog,
+  Switch,
+  Tabs,
+  TextField,
+  TextLink,
+  Toolbar,
+  Form
+} from '../../ui/ui';
+import {SelectBoxGroup} from '../../ui/SelectBoxGroup';
+import {preloadGlass, swatchSections} from '../../shell/swatches';
+import type {DateFormat, PaletteId, Scheme, TimeFormat, ToastPlacement, Wordmark} from '../../shell/preferences';
+import {useSettingsPage} from './useSettingsPage';
+import {useSignOut} from './useSignOut';
+import {RuntimeSettingsCard} from './RuntimeSettings';
+import {GeodataSettingsCard} from './GeodataSettings';
+import {CoreUpdateCard} from './CoreUpdateCard';
+import {ProbeSettingsCard} from './ProbeSettings';
+import {useCopyDiagnostics, useDiagnostics} from '../shared/useCopyDiagnostics';
+import {About} from '../../shell/About';
+import {openShortcuts} from '../../shell/shortcuts';
+import type {PageProps, RoutePath} from '../../shell/routes';
+import {replaceRoute, within} from '../../shell/route';
+import {cardTab, settingsCard, settingsCards, settingsTab, type SettingsCardId} from './nav';
+import {settingsTabs, settingsTabTitle} from './tabs';
+
+// A Glass palette applies once its stylesheet loads, so pointing at or focusing one of its boxes starts the load.
+const glassIntent = (event: React.SyntheticEvent) => {
+  if (event.target instanceof Element && event.target.closest('[data-key^="glass/"]')) preloadGlass();
+};
+const GlassSettings = lazy(() => import('./WallpaperSettings'));
+const cards = {backend: settingsCard('backend'), appearance: settingsCard('appearance'), about: settingsCard('about')};
+
+export function Settings({query}: PageProps) {
+  const t = useT();
+  const session = useSignOut();
+  const copyDiagnostics = useCopyDiagnostics();
+  const recorded = useDiagnostics();
+  const {
+    activeId,
+    staleLogin,
+    loginReason,
+    firstRun,
+    error,
+    retry,
+    api,
+    changeApi,
+    token,
+    changeToken,
+    demo,
+    passwordMode,
+    paired,
+    invalidText,
+    pending,
+    saving,
+    dialog,
+    setDialog,
+    name,
+    setName,
+    confirmProfile,
+    save,
+    switchProfile,
+    confirmSwitch,
+    switchPending,
+    cancelSwitch,
+    testConnection,
+    keepDemo,
+    reachable,
+    lang,
+    pickLang,
+    ap,
+    paletteSections,
+    startPageItems,
+    profile,
+    tokenType,
+    tokenToggleText,
+    toggleToken,
+    versionWarning,
+    install,
+    installHint,
+    guide,
+    addProfile,
+    renameProfile,
+    dialogTitle,
+    dialogBlocked,
+    dialogDiscards,
+    deleteHelp
+  } = useSettingsPage(query);
+  const profileFormId = useId();
+  const mirrorHelpId = useId();
+  const countryFlagsHelpId = useId();
+  const sparklinesHelpId = useId();
+  const limitNoticeHelpId = useId();
+  const tab = settingsTab(query);
+  // Switching tabs replaces the address rather than adding a step: both tabs stay mounted, so a draft in either
+  // survives the switch and there is nothing to ask about. It drops the card a link landed on, which would pick the tab.
+  const changeTab = (next: string) => replaceRoute('settings', within(query, {tab: next === 'general' ? null : next, card: null, field: null}));
+
+  const content: Record<SettingsCardId, ReactNode> = {
+    backend: (
+      // Before any backend is saved the card leads the page: it names the step and holds no profile to manage yet.
+      <Card {...(firstRun ? {title: t('settings.connectTitle'), note: firstRun} : {'aria-label': t(cards.backend.titleKey)})} id={cards.backend.headingId}>
+        <ErrorMessage error={error} onRetry={retry} />
+        {staleLogin && <InlineAlert tone="negative">{t('login.stale')}</InlineAlert>}
+        {(loginReason === 'rejected' || loginReason === 'required') && (
+          <InlineAlert tone="informative">{t(loginReason === 'rejected' ? 'login.rejected' : 'login.tokenRequired')}</InlineAlert>
+        )}
+        {!firstRun && (
+          <Toolbar>
+            <div className="rp-contents" data-setting="profile">
+              <LabeledSelect label={t('settings.profile')} side value={activeId} isDisabled={saving} items={profile.choices} onChange={switchProfile} />
+            </div>
+            <div className="rp-contents" data-setting="addProfile">
+              <Button onPress={addProfile}>{t('settings.addProfile')}</Button>
+            </div>
+            <div className="rp-contents" data-setting="renameProfile">
+              <Button onPress={renameProfile}>{t('settings.renameProfile')}</Button>
+            </div>
+            <div className="rp-contents" data-setting="deleteProfile">
+              <Button onPress={() => setDialog('delete')}>{t('settings.deleteProfile')}</Button>
+            </div>
+            {session && (
+              <div className="rp-contents" data-setting="signOut">
+                <Button isPending={session.busy} onPress={() => void session.signOut()}>
+                  {t('settings.signOut')}
+                </Button>
+              </div>
+            )}
+          </Toolbar>
+        )}
+        {session?.tokenOnly && <span className="rp-label">{t('settings.signOutTokenHelp')}</span>}
+        <Form
+          className="rp-form"
+          validationBehavior="aria"
+          onSubmit={event => {
+            event.preventDefault();
+            save();
+          }}
+        >
+          <div className="rp-contents" data-setting="api">
+            <TextField
+              label={t('ui.backendUrl')}
+              autoComplete="url"
+              spellCheck={false}
+              description={t('settings.apiHelp')}
+              error={invalidText}
+              name="api"
+              value={api}
+              onChange={changeApi}
+            />
+          </div>
+          {demo ? null : passwordMode ? (
+            <p className="rp-label">{t('settings.passwordMode')}</p>
+          ) : (
+            <div className="rp-contents" data-setting="token">
+              <TextField
+                label={t('login.token')}
+                autoComplete="off"
+                spellCheck={false}
+                reveal={{shown: tokenType === 'text', label: tokenToggleText, onToggle: toggleToken}}
+                name="token"
+                type={tokenType}
+                value={token}
+                onChange={changeToken}
+              />
+            </div>
+          )}
+          <Toolbar>
+            <PrimaryActions>
+              {firstRun && (
+                <Button isDisabled={saving} onPress={keepDemo}>
+                  {t('settings.useDemo')}
+                </Button>
+              )}
+              <div className="rp-contents" data-setting="test">
+                <Button accent={firstRun !== null && !reachable} onPress={() => void testConnection()} isPending={pending} isDisabled={saving}>
+                  {t('settings.test')}
+                </Button>
+              </div>
+              <Button type="submit" accent={firstRun === null || reachable} isPending={saving} isDisabled={staleLogin || !!invalidText}>
+                {t('settings.save')}
+              </Button>
+            </PrimaryActions>
+          </Toolbar>
+          <div className="rp-label">{t('settings.saveHelp')}</div>
+          {pending && <div role="status">{t('settings.testing')}</div>}
+          {profile.result && (
+            <div role={profile.result.role}>
+              {profile.result.text}
+              {profile.result.request && <span className="rp-code">{profile.result.request}</span>}
+              {profile.result.link && <TextLink link={profile.result.link} />}
+            </div>
+          )}
+        </Form>
+      </Card>
+    ),
+    runtime: <RuntimeSettingsCard />,
+    geodata: <GeodataSettingsCard />,
+    coreUpdate: <CoreUpdateCard />,
+    appearance: (
+      <Card aria-label={t(cards.appearance.titleKey)} id={cards.appearance.headingId}>
+        <Toolbar>
+          <div className="rp-contents" data-setting="lang">
+            <LabeledSelect label={t('ui.lang')} value={lang} onChange={value => pickLang(value as Lang)} items={LANGS.map(([id, label]) => ({id, label}))} />
+          </div>
+          <div className="rp-contents" data-setting="dateFormat">
+            <LabeledSelect
+              label={t('settings.dateFormat')}
+              value={ap.dateFormat}
+              onChange={value => ap.pickDateFormat(value as DateFormat)}
+              items={[
+                {id: 'automatic', label: t('settings.dateAutomatic')},
+                {id: 'dmy', label: t('settings.dateDmy')},
+                {id: 'mdy', label: t('settings.dateMdy')},
+                {id: 'ymd', label: t('settings.dateYmd')}
+              ]}
+            />
+          </div>
+          <div className="rp-contents" data-setting="timeFormat">
+            <LabeledSelect
+              label={t('settings.timeFormat')}
+              value={ap.timeFormat}
+              onChange={value => ap.pickTimeFormat(value as TimeFormat)}
+              items={[
+                {id: '24h', label: t('settings.timeH24')},
+                {id: '12h', label: t('settings.timeH12')},
+                {id: 'automatic', label: t('settings.timeAutomatic')}
+              ]}
+            />
+          </div>
+          <div className="rp-contents" data-setting="scheme">
+            <LabeledSelect
+              label={t('settings.scheme')}
+              value={ap.scheme}
+              onChange={value => ap.pickScheme(value as Scheme)}
+              items={[
+                {id: 'system', label: t('theme.system')},
+                {id: 'light', label: t('theme.light')},
+                {id: 'dark', label: t('theme.dark')}
+              ]}
+            />
+          </div>
+          <div className="rp-contents" data-setting="wordmark">
+            <LabeledSelect
+              label={t('ui.wordmark')}
+              value={ap.wordmark}
+              onChange={value => ap.pickWordmark(value as Wordmark)}
+              items={[
+                {id: 'gradient', label: t('wordmark.gradient')},
+                {id: 'plain', label: t('wordmark.plain')}
+              ]}
+            />
+          </div>
+          <div className="rp-contents" data-setting="toastPlacement">
+            <LabeledSelect
+              label={t('settings.toastPlacement')}
+              value={ap.toastPlacement}
+              onChange={value => ap.pickToastPlacement(value as ToastPlacement)}
+              items={[
+                {id: 'top', label: t('settings.toastTop')},
+                {id: 'top end', label: t('settings.toastTopEnd')},
+                {id: 'bottom', label: t('settings.toastBottom')},
+                {id: 'bottom end', label: t('settings.toastBottomEnd')}
+              ]}
+            />
+          </div>
+          <div className="rp-contents" data-setting="startPage">
+            <LabeledSelect
+              label={t('settings.startPage')}
+              value={ap.startPage}
+              onChange={value => ap.pickStartPage(value as RoutePath)}
+              items={startPageItems}
+            />
+          </div>
+        </Toolbar>
+        <div data-setting="palette" onPointerOver={glassIntent} onFocus={glassIntent}>
+          <SelectBoxGroup
+            label={t('ui.palette')}
+            sections={swatchSections(paletteSections, t)}
+            value={ap.shownPalette}
+            onChange={value => ap.pickPalette(value as PaletteId)}
+            help={ap.shownPalette === 'glass/glass' ? t('palette.glassNote') : undefined}
+          />
+        </div>
+        {ap.palette.startsWith('glass/') && (
+          <Suspense fallback={null}>
+            <GlassSettings palette={ap.palette} blur={ap.blur} onBlurChange={ap.pickBlur} lensPause={ap.lensPause} onLensPauseChange={ap.pickLensPause} />
+          </Suspense>
+        )}
+        <div className="rp-field" data-setting="countryFlags">
+          <Switch isSelected={ap.countryFlags} onChange={ap.pickCountryFlags} aria-describedby={countryFlagsHelpId}>
+            {t('settings.countryFlags')}
+          </Switch>
+          <span id={countryFlagsHelpId} className="rp-label">
+            {t('settings.countryFlagsHelp')}
+          </span>
+        </div>
+        <div className="rp-field" data-setting="sparklines">
+          <Switch isSelected={ap.sparklines} onChange={ap.pickSparklines} aria-describedby={sparklinesHelpId}>
+            {t('settings.sparklines')}
+          </Switch>
+          <span id={sparklinesHelpId} className="rp-label">
+            {t('settings.sparklinesHelp')}
+          </span>
+        </div>
+        <div className="rp-field" data-setting="limitNotice">
+          <Switch isSelected={ap.limitNotice} onChange={ap.pickLimitNotice} aria-describedby={limitNoticeHelpId}>
+            {t('settings.limitNotice')}
+          </Switch>
+          <span id={limitNoticeHelpId} className="rp-label">
+            {t('settings.limitNoticeHelp')}
+          </span>
+        </div>
+        <div className="rp-field" data-setting="mirrored">
+          <Switch isSelected={ap.mirrored} onChange={ap.pickMirrored} aria-describedby={mirrorHelpId}>
+            {t('settings.mirror')}
+          </Switch>
+          <span id={mirrorHelpId} className="rp-label">
+            {t('settings.mirrorHelp')}
+          </span>
+        </div>
+      </Card>
+    ),
+    probes: <ProbeSettingsCard />,
+    about: (
+      <Card level={2} title={t(cards.about.titleKey)} titleId={cards.about.headingId}>
+        {versionWarning && (
+          <Light small tone="warn">
+            {versionWarning}
+          </Light>
+        )}
+        <ActionHelp reason={!recorded.length ? t('settings.copyErrorsNone') : null}>
+          <div className="rp-cluster">
+            <About trigger={<Button>{t('about.title')}</Button>} />
+            <Button onPress={openShortcuts}>{t('shell.shortcuts')}</Button>
+            <Link appearance="button" href={guide} external>
+              {t('shell.guide')}
+            </Link>
+            <Button isDisabled={!recorded.length} onPress={() => void copyDiagnostics()}>
+              {t('settings.copyErrors')}
+            </Button>
+            {install && <Button onPress={install}>{t('settings.install')}</Button>}
+            {installHint && <p className="rp-note">{installHint}</p>}
+          </div>
+        </ActionHelp>
+      </Card>
+    )
+  };
+
+  return (
+    <div className="rp-page">
+      {paired && <p className="rp-note">{t('settings.paired')}</p>}
+      <Tabs
+        page
+        keepMounted
+        label={t('nav.settings')}
+        items={settingsTabs.map(id => ({
+          id,
+          label: t(settingsTabTitle[id]),
+          content: settingsCards.filter(card => cardTab(card.id) === id).map(card => <Fragment key={card.id}>{content[card.id]}</Fragment>)
+        }))}
+        value={tab}
+        onChange={changeTab}
+      />
+      <ConfirmDialog
+        title={t('config.discardTitle')}
+        isOpen={switchPending}
+        onCancel={cancelSwitch}
+        confirmLabel={t('config.discard')}
+        isPending={saving}
+        onConfirm={confirmSwitch}
+      >
+        <p className="rp-label">{t('settings.switchProfileHelp')}</p>
+      </ConfirmDialog>
+      {dialog && (
+        <ConfirmDialog
+          title={dialogTitle}
+          isOpen
+          onCancel={() => setDialog(null)}
+          tone={dialog === 'delete' ? 'negative' : 'accent'}
+          confirmLabel={t(dialog === 'delete' ? 'settings.deleteProfile' : 'settings.save')}
+          isDisabled={dialogBlocked}
+          isPending={saving}
+          error={profile.result?.error ? {id: profile.result.id, text: profile.result.text} : null}
+          {...(dialog === 'delete' ? {onConfirm: confirmProfile} : {form: profileFormId})}
+        >
+          {dialog === 'delete' ? (
+            <p className="rp-label">{deleteHelp}</p>
+          ) : (
+            <Form
+              id={profileFormId}
+              className="rp-contents"
+              onSubmit={event => {
+                event.preventDefault();
+                if (!dialogBlocked && !saving) confirmProfile();
+              }}
+            >
+              <TextField label={t('settings.profileName')} value={name} onChange={setName} />
+            </Form>
+          )}
+          {dialogDiscards && <p className="rp-label">{t('settings.profileDiscardHelp')}</p>}
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}

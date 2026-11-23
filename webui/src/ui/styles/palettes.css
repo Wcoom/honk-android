@@ -1,0 +1,5 @@
+/* Rosé Pine, the default palette, holds the :root defaults and loads with the app. Every other family's file, with its
+   light and dark tokens and its flavours, loads on demand only for its own palettes (src/shell/paletteSheet.ts): linked
+   before first paint for a stored palette (tools/stamp.js), else before a picked one applies. Glass's file loads with
+   ../glass.css. src/shell/palettes.ts lists the palettes. */
+@import './palettes/rose-pine.css';

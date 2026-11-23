@@ -1,0 +1,247 @@
+import {useCallback, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {
+  updateFlagOverride,
+  writeSetting,
+  type DateFormat,
+  type PaletteId,
+  type Scheme,
+  type Settings,
+  type TimeFormat,
+  type ToastPlacement,
+  type Wordmark
+} from './preferences';
+import {useMediaQuery, withCrossfade} from '../ui/hooks';
+import type {RoutePath} from './routes';
+import {setDateFormat, setTimeFormat} from '../i18n/format';
+import {isChunkLoadError, reloadForStaleChunk} from '../ui/staleChunk';
+import type {sheets} from './paletteSheets';
+
+// Every family but Rosé Pine, the default in theme.css, loads its stylesheet only for its palettes: Glass's with its
+// wallpaper (glass.ts), Halloween's from its own module (halloween.ts), and the rest from paletteSheets.ts. A failed load
+// is tried again next time.
+const sheet = (family: keyof typeof sheets) => () => import('./paletteSheets').then(module => ({linkStylesheet: () => module.linkStylesheet(family)}));
+const families: Record<string, () => Promise<{linkStylesheet(): Promise<void>}>> = {
+  glass: () => import('./glass'),
+  halloween: () => import('./halloween'),
+  antd: sheet('antd'),
+  arco: sheet('arco'),
+  catppuccin: sheet('catppuccin'),
+  kary: sheet('kary'),
+  nord: sheet('nord'),
+  qiangguo: sheet('qiangguo'),
+  semi: sheet('semi')
+};
+const loads: Record<string, Promise<void> | undefined> = {};
+const loaded = new Set<string>();
+export const hasOwnStyles = (family: string) => family in families;
+export function loadStyles(family: string): Promise<void> {
+  return (loads[family] ??= families[family]!()
+    .then(module => module.linkStylesheet())
+    .then(
+      () => void loaded.add(family),
+      error => {
+        loads[family] = undefined;
+        throw error;
+      }
+    ));
+}
+export const preloadGlass = () => void loadStyles('glass').catch(() => undefined);
+
+export function applyAppearance(dark: boolean, palette: PaletteId, wordmark: Wordmark, blur: number) {
+  const [family, flavour] = palette.split('/');
+  const d = document.documentElement.dataset;
+  d.scheme = dark ? 'dark' : 'light';
+  d.family = family;
+  d.flavour = flavour;
+  d.wordmark = wordmark;
+  document.documentElement.style.setProperty('--rp-blur-scale', String(blur));
+  // Glass's lens filters load with the palette, once; the stylesheet uses them while the root carries data-lens. Clear
+  // is Glass's blur and fill without them, in every browser, so it loads none and leaves the root without data-lens.
+  if (palette === 'glass/glass' && d.lens === undefined)
+    void import('../ui/lens').then(({installLens}) => {
+      if (installLens() && document.documentElement.dataset.flavour === 'glass') d.lens = '';
+    });
+  if (palette !== 'glass/glass') delete d.lens;
+}
+export function useAppearance(stored: Settings) {
+  const [scheme, setScheme] = useState<Scheme>(stored.scheme);
+  const [palette, setPalette] = useState<PaletteId>(stored.palette);
+  const [blur, setBlur] = useState(stored.blur);
+  const [wordmark, setWordmark] = useState<Wordmark>(stored.wordmark);
+  const [mirrored, setMirrored] = useState(stored.mirrored);
+  const [flagOverrides, setFlagOverrides] = useState(stored.flagOverrides);
+  const [countryFlags, setCountryFlags] = useState(stored.countryFlags);
+  const [lensPause, setLensPause] = useState(stored.lensPause);
+  const [sparklines, setSparklines] = useState(stored.sparklines);
+  const [limitNotice, setLimitNotice] = useState(stored.limitNotice);
+  const [toastPlacement, setToastPlacement] = useState<ToastPlacement>(stored.toastPlacement);
+  const [startPage, setStartPage] = useState<RoutePath>(stored.startPage);
+  const [dateFormat, setDateFormatState] = useState<DateFormat>(stored.dateFormat);
+  const [timeFormat, setTimeFormatState] = useState<TimeFormat>(stored.timeFormat);
+  const sysDark = useMediaQuery('(prefers-color-scheme: dark)');
+  const dark = scheme === 'dark' || (scheme === 'system' && sysDark);
+  useLayoutEffect(() => applyAppearance(dark, palette, wordmark, blur), [dark, palette, wordmark, blur]);
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.toggleAttribute('data-lens-steady', !lensPause);
+    if (!lensPause) root.removeAttribute('data-lens-paused');
+  }, [lensPause]);
+  const pickScheme = useCallback((next: Scheme) => {
+    withCrossfade(() => setScheme(next));
+    writeSetting('scheme', next);
+  }, []);
+  // A system preference toggles to its opposite; an override toggles back to system.
+  const toggle = useCallback(() => pickScheme(scheme === 'system' ? (sysDark ? 'light' : 'dark') : 'system'), [pickScheme, scheme, sysDark]);
+  // A Glass or Halloween palette applies once its stylesheet has loaded, so the page changes in one step, and only if no other
+  // palette was picked meanwhile. The pickers show it selected while it loads, so picking the current palette again is a
+  // change that wins. A tab left from an older build reloads into the palette instead.
+  const picked = useRef(stored.palette);
+  const [pending, setPending] = useState<PaletteId>();
+  const pickPalette = useCallback((next: PaletteId) => {
+    picked.current = next;
+    const apply = () => {
+      if (picked.current !== next) return;
+      withCrossfade(() => {
+        setPending(undefined);
+        setPalette(next);
+      });
+      writeSetting('palette', next);
+    };
+    const family = next.split('/')[0]!;
+    if (!hasOwnStyles(family) || loaded.has(family)) return apply();
+    setPending(next);
+    loadStyles(family).then(apply, error => {
+      if (picked.current !== next) return;
+      if (!isChunkLoadError(error)) return setPending(undefined);
+      writeSetting('palette', next);
+      // The palette is kept for the next load. When the guard refuses a second reload, nothing is going to apply it now, so
+      // the picker goes back to the palette that is on screen.
+      if (!reloadForStaleChunk()) setPending(undefined);
+    });
+  }, []);
+  const shownPalette = pending ?? palette;
+  const pickBlur = useCallback((next: number) => {
+    setBlur(next);
+    writeSetting('blur', String(next));
+  }, []);
+  const pickWordmark = useCallback((next: Wordmark) => {
+    setWordmark(next);
+    writeSetting('wordmark', next);
+  }, []);
+  const pickMirrored = useCallback((next: boolean) => {
+    setMirrored(next);
+    writeSetting('mirror', next ? 'on' : 'off');
+  }, []);
+  const pickCountryFlags = useCallback((next: boolean) => {
+    setCountryFlags(next);
+    writeSetting('countryFlags', next ? 'on' : 'off');
+  }, []);
+  const pickLensPause = useCallback((next: boolean) => {
+    setLensPause(next);
+    writeSetting('lensPause', next ? 'on' : 'off');
+  }, []);
+  const pickSparklines = useCallback((next: boolean) => {
+    setSparklines(next);
+    writeSetting('sparklines', next ? 'on' : 'off');
+  }, []);
+  const pickFlag = useCallback(
+    (name: string, value: string) => {
+      const next = updateFlagOverride(flagOverrides, name, value);
+      setFlagOverrides(next);
+      writeSetting('flagOverrides', JSON.stringify(next));
+    },
+    [flagOverrides]
+  );
+  const pickLimitNotice = useCallback((next: boolean) => {
+    setLimitNotice(next);
+    writeSetting('limitNotice', next ? 'on' : 'off');
+  }, []);
+  const pickToastPlacement = useCallback((next: ToastPlacement) => {
+    setToastPlacement(next);
+    writeSetting('toastPlacement', next);
+  }, []);
+  const pickStartPage = useCallback((next: RoutePath) => {
+    setStartPage(next);
+    writeSetting('startPage', next);
+  }, []);
+  // The formatters read the order and the clock each time they run: the settings page shows times only in tooltips,
+  // which format on hover, and a page opened after the change formats with the new ones.
+  const pickDateFormat = useCallback((next: DateFormat) => {
+    setDateFormat(next);
+    setDateFormatState(next);
+    writeSetting('dateFormat', next);
+  }, []);
+  const pickTimeFormat = useCallback((next: TimeFormat) => {
+    setTimeFormat(next);
+    setTimeFormatState(next);
+    writeSetting('timeFormat', next);
+  }, []);
+  return useMemo(
+    () => ({
+      scheme,
+      dark,
+      toggle,
+      pickScheme,
+      palette,
+      shownPalette,
+      pickPalette,
+      blur,
+      pickBlur,
+      wordmark,
+      pickWordmark,
+      mirrored,
+      pickMirrored,
+      flagOverrides,
+      pickFlag,
+      countryFlags,
+      pickCountryFlags,
+      lensPause,
+      pickLensPause,
+      sparklines,
+      pickSparklines,
+      limitNotice,
+      pickLimitNotice,
+      toastPlacement,
+      pickToastPlacement,
+      startPage,
+      pickStartPage,
+      dateFormat,
+      pickDateFormat,
+      timeFormat,
+      pickTimeFormat
+    }),
+    [
+      scheme,
+      dark,
+      toggle,
+      pickScheme,
+      palette,
+      shownPalette,
+      pickPalette,
+      blur,
+      pickBlur,
+      wordmark,
+      pickWordmark,
+      mirrored,
+      pickMirrored,
+      flagOverrides,
+      pickFlag,
+      countryFlags,
+      pickCountryFlags,
+      lensPause,
+      pickLensPause,
+      sparklines,
+      pickSparklines,
+      limitNotice,
+      pickLimitNotice,
+      toastPlacement,
+      pickToastPlacement,
+      startPage,
+      pickStartPage,
+      dateFormat,
+      pickDateFormat,
+      timeFormat,
+      pickTimeFormat
+    ]
+  );
+}

@@ -9,9 +9,9 @@ use axum::routing::{MethodRouter, delete, get, post, put};
 use axum::{Json, Router};
 
 use super::{
-    ApiError, ErrorCode, NativeState, catalog, config, connections, datapath, dns, error, events,
-    flows, geodata, groups, logs, management, parse_query, probes, providers, routing, security,
-    settings, telemetry, types,
+    ApiError, ErrorCode, NativeState, catalog, config, connections, core_update, datapath, dns,
+    error, events, flows, geodata, groups, logs, management, parse_query, probes, providers,
+    routing, security, settings, telemetry, types,
 };
 use types::RequestId;
 
@@ -214,6 +214,22 @@ pub(super) fn routes() -> Router<Arc<NativeState>> {
         .route(
             "/api/v1/x-honk/runtime/mode",
             resource(get(unsupported).put(unsupported), &["GET", "PUT"]),
+        )
+        .route(
+            "/api/v1/x-honk/core/update",
+            resource(
+                get(
+                    |State(state): App, Extension(id): Id, uri: Uri| async move {
+                        respond(core_update::get(&state, &uri, &id).await, id)
+                    },
+                )
+                .post(
+                    |State(state): App, Extension(id): Id, request: Request| async move {
+                        respond(core_update::apply(&state, request, &id).await, id)
+                    },
+                ),
+                &["GET", "POST"],
+            ),
         )
         .route(
             "/api/v1/datapath",

@@ -1,0 +1,33 @@
+import type {Version} from '../model';
+import {honk} from './honk';
+import type {Engine} from './types';
+
+export type {Engine, EngineAction, EngineConfig, EngineReason, EngineSubject} from './types';
+
+// An engine doona has no knowledge of: the contract's own facts are all the page can give.
+const unknown: Engine = {
+  id: 'unknown',
+  reason: () => undefined,
+  holdsCredentials: () => false,
+  snippet: settings => settings.map(({key, value}) => `${key}: ${value}`).join('\n'),
+  redactedSections: () => [],
+  daeText: false,
+  nodeLinkSchemes: null,
+  globalSettings: null,
+  restartOnly: [],
+  restartCommand: null,
+  flowDemandGraceSeconds: null,
+  uncheckedHooks: []
+};
+
+// The engine behind the native API, by the engine name its version reports; unknown until the version has loaded.
+export function engineOf(version: Pick<Version, 'engine'> | undefined): Engine {
+  switch (version?.engine.name) {
+    case 'honk':
+      return honk;
+    default:
+      return unknown;
+  }
+}
+
+export {configManagement, configOf} from './config';

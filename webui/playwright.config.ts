@@ -1,0 +1,67 @@
+import {defineConfig, devices} from '@playwright/test';
+
+// WebKit needs the Ubuntu libraries Playwright installs with --with-deps; CI sets this, and elsewhere the official
+// Playwright image runs it.
+const webkit = process.env.DOONA_E2E_WEBKIT === '1';
+
+export default defineConfig({
+  testDir: './e2e',
+  fullyParallel: true,
+  workers: process.env.CI ? 2 : undefined,
+  forbidOnly: !!process.env.CI,
+  // One retry tells a flake from a regression in the report; a test that only passes on retry still fails the run.
+  retries: process.env.CI ? 1 : 0,
+  failOnFlakyTests: !!process.env.CI,
+  reporter: process.env.CI ? [['list'], ['github'], ['blob']] : 'list',
+  outputDir: 'test-results',
+  use: {
+    baseURL: 'http://127.0.0.1:4177',
+    trace: 'retain-on-failure',
+    reducedMotion: 'reduce'
+  },
+  projects: [
+    {name: 'chromium', testIgnore: 'subpath.spec.ts', use: {...devices['Desktop Chrome']}},
+    {name: 'subpath', testMatch: 'subpath.spec.ts', use: {...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:4186'}},
+    ...(process.env.DOONA_E2E_FIREFOX === '1'
+      ? [{name: 'firefox', testMatch: ['connections.spec.ts', 'dashboard.spec.ts'], use: {...devices['Desktop Firefox']}}]
+      : []),
+    ...(webkit
+      ? [
+          // Safari carries the installed iOS app: a smoke pass over navigation, drag and drop, dialogs, the keyboard and
+          // the Glass materials.
+          // WebKit's request interception does not see what a service worker fetches, so the mock backend needs it
+          // blocked; the PWA spec, which is about the worker, runs with it.
+          {
+            name: 'webkit',
+            testMatch: [
+              'routes.spec.ts',
+              'group-includes.spec.ts',
+              'keyboard.spec.ts',
+              'mobile.spec.ts',
+              'charts.spec.ts',
+              'segmented.spec.ts',
+              'dashboard.spec.ts',
+              'glass.spec.ts',
+              'landing.spec.ts',
+              'wallpaper.spec.ts',
+              'page-skeletons.spec.ts'
+            ],
+            use: {...devices['Desktop Safari'], serviceWorkers: 'block'}
+          },
+          {name: 'webkit-pwa', testMatch: 'pwa.spec.ts', use: {...devices['Desktop Safari']}}
+        ]
+      : [])
+  ],
+  webServer: [
+    {
+      command: 'pnpm exec vite preview --host 127.0.0.1 --port 4177 --strictPort',
+      url: 'http://127.0.0.1:4177',
+      reuseExistingServer: false
+    },
+    {
+      command: 'python3 tools/serve.py 4186 dist --prefix /ui --worker-update',
+      url: 'http://127.0.0.1:4186/ui/',
+      reuseExistingServer: false
+    }
+  ]
+});

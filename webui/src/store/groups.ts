@@ -1,0 +1,214 @@
+import {useCallback, useMemo} from 'react';
+import {poll} from './cadence';
+import {getApi} from '../api/index';
+import type {Capabilities, Group, Node, GroupSelectionRequest, JsonPatch, ProbeRequest, ProbeResult} from '../api/model';
+import type {Api} from '../api/api';
+import {ApiError, LocalError} from '../api/error';
+import {useResource} from './resource';
+import {activationError, etag, finished, settle, readBackUnconfirmed, useAction} from './action';
+import {useSharedControl} from './sharedControl';
+import {optionsProbe, probeChoices, probeFallback, useProbeOptions, type ProbeOptions} from './probeOptions';
+import {nodeIndex, useNodes} from './nodes';
+import {useCapabilities} from './runtime';
+// A probe refused after some batches finished: the batches that did finish, and the error that stopped the rest.
+export type PartialProbeError = LocalError & {cause: unknown; partialResult: ProbeResult; completed: number; total: number};
+export async function probeGroup(
+  api: Api,
+  capabilities: Capabilities,
+  group: Group,
+  signal: AbortSignal,
+  request: ProbeRequest | null = optionsProbe(capabilities, {type: 'group', group_id: group.id})
+): Promise<ProbeResult> {
+  const limits = capabilities.resources.probes.limits;
+  if (!request || !limits || request.transport.some(transport => !group.capabilities.probe_transports.includes(transport)))
+    throw new LocalError('ui.probeUnsupported');
+  const dimensions = request.transport.length * (request.ip_version === 'any' ? 2 : 1);
+  const size = Math.min(limits.max_members_per_job, Math.floor(limits.max_results_per_job / dimensions));
+  if (size < 1 || !group.members.length) throw new LocalError('ui.probeUnsupported');
+  // honk cannot filter descendant IDs; flat groups can use direct IDs for the same leaves.
+  if (request.members === 'leaves' && (group.members.length <= size || group.members.some(member => member.kind === 'group')))
+    return finished(await settle(api, await api.startProbe(request, signal), signal), 'probe');
+  let result: ProbeResult | undefined;
+  try {
+    for (let offset = 0; offset < group.members.length; offset += size) {
+      signal.throwIfAborted();
+      const members = group.members.slice(offset, offset + size).map(member => member.id);
+      const accepted = await api.startProbe({...request, members}, signal);
+      const batch = finished(await settle(api, accepted, signal), 'probe');
+      if (!result) result = batch;
+      else {
+        result.results.push(...batch.results);
+        result.selection_after = batch.selection_after;
+        result.selection_changed.tcp ||= batch.selection_changed.tcp;
+        result.selection_changed.udp ||= batch.selection_changed.udp;
+      }
+    }
+  } catch (error) {
+    if (signal.aborted || !result) throw error;
+    // The batch's own error stays as `cause`, so the caller renders it translated next to the counts.
+    throw Object.assign(new LocalError('ui.operationFailed'), {
+      cause: error,
+      partialResult: result,
+      completed: new Set(result.results.map(row => row.member_id)).size,
+      total: group.members.length
+    });
+  }
+  return result!;
+}
+// Include descendants because options can expand leaves and a child's selected node can change.
+export async function groupProbeMembers(api: Pick<Api, 'group'>, group: Group, signal?: AbortSignal): Promise<string[]> {
+  const seen = new Set<string>();
+  const visit = async (current: Group): Promise<string[]> => {
+    if (seen.has(current.id)) return [];
+    seen.add(current.id);
+    return (await Promise.all(current.members.map(async member => (member.kind === 'node' ? [member.id] : visit(await api.group(member.id, signal)))))).flat();
+  };
+  return visit(group);
+}
+// Applies patch ops at the group's current configuration revision and waits for the reload that applies them. A 200
+// answers with the config document only; the caller refetches the group.
+export async function patchConfig(api: Api, group: Group, ops: JsonPatch, signal?: AbortSignal): Promise<void> {
+  const result = await api.patchGroup(group.id, ops, etag(group.config_revision), signal).catch(error => {
+    throw activationError(error) ?? error;
+  });
+  if ('operation_id' in result) finished(await settle(api, result, signal), 'group_update', {written: true});
+}
+// A config write refused because the group changed first: 412 for the revision it carried, 409 for a test op or an
+// update still in flight. Either way the group is read again, and the check dialog moves its draft onto it.
+export function groupConflict(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 409 || error.status === 412);
+}
+// honk offers selection and config writes for groups as a whole (resources.groups) and for each group (its capabilities);
+// the group shows only the actions both offer, and none until capabilities load. The contract lists both top-level
+// flags whenever groups are available, so an absent one leaves the group's own flags in charge.
+export function groupActions(group: Group, capabilities: Capabilities | undefined): Group {
+  const groups = capabilities?.resources.groups;
+  const selection = !!groups?.available && groups.selection !== false;
+  const patch = !!groups?.available && groups.config_patch !== false;
+  if (selection && patch) return group;
+  const {can_select, can_override, mutable_config} = group.capabilities;
+  return {
+    ...group,
+    capabilities: {
+      ...group.capabilities,
+      can_select: selection && can_select,
+      can_override: selection && can_override,
+      mutable_config: patch ? mutable_config : []
+    }
+  };
+}
+// A page that shows each group's selection asks for a faster cadence than the inventory's.
+export function useGroups(enabled = true, every: number = poll.inventory) {
+  const api = getApi();
+  return useResource({key: ['groups'], every, fetch: signal => api.groups(signal)}, {enabled});
+}
+// `shared` carries the node list when the page already reads it, which spares each card a subscription of its own.
+export function useGroupControl(id: string, refetchGroups: () => unknown, refetchNodes: () => unknown, paused = false, shared?: {nodes: Node[] | undefined}) {
+  const stored = useProbeOptions();
+  const api = getApi();
+  const capabilities = useCapabilities().data;
+  const own = useNodes(!shared).data;
+  const nodes = shared ? shared.nodes : own;
+  const resource = useResource({key: ['group', {id}], every: poll.inventory, fetch: signal => api.group(id, signal)}, {paused});
+  const {refetch} = resource;
+  const data = useMemo(() => resource.data && groupActions(resource.data, capabilities), [resource.data, capabilities]);
+  const [network, setNetwork] = useSharedControl<GroupSelectionRequest['network']>(`group-network:${id}`, 'both');
+  const action = useAction<'selection' | 'probe' | 'config'>({shared: `group-action:${id}`});
+  const {run: act} = action;
+  // Every control changes what the lists show, so all three refetch once it has gone through.
+  const refetchShown = useCallback(() => Promise.all([refetch(), refetchGroups(), refetchNodes()]), [refetch, refetchGroups, refetchNodes]);
+  const run = useCallback(
+    async <T>(kind: 'selection' | 'probe' | 'config', action: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> => {
+      const result = await act(kind, action);
+      if (result !== undefined) void refetchShown();
+      return result;
+    },
+    [act, refetchShown]
+  );
+  // Only a group with nested groups reads them; until they arrive its direct nodes decide, so the card keeps its size.
+  const nested = resource.data?.members.some(member => member.kind === 'group') ?? false;
+  const {data: leaves} = useResource(
+    {
+      key: ['groupProbeMembers', {id, revision: resource.data?.config_revision}],
+      every: poll.inventory,
+      fetch: signal => groupProbeMembers(api, resource.data!, signal)
+    },
+    {enabled: nested, paused}
+  );
+  const protocols = useMemo(
+    () =>
+      resource.data && nodes
+        ? ((nested && leaves) || resource.data.members.filter(member => member.kind === 'node').map(member => member.id)).map(
+            id => nodeIndex(nodes).get(id)?.protocol ?? null
+          )
+        : [null],
+    [resource.data, nodes, nested, leaves]
+  );
+  const request = optionsProbe(capabilities, {type: 'group', group_id: id}, stored, resource.data, protocols);
+  const limits = capabilities?.resources.probes.limits;
+  const canProbe =
+    request !== null &&
+    !!limits &&
+    limits.max_members_per_job > 0 &&
+    limits.max_results_per_job >= request.transport.length * (request.ip_version === 'any' ? 2 : 1) &&
+    !!resource.data?.members.length &&
+    request.transport.every(transport => resource.data!.capabilities.probe_transports.includes(transport));
+  const patch = useCallback(
+    (ops: JsonPatch) =>
+      run('config', async signal => {
+        if (!resource.data) throw new LocalError('ui.groupNotLoaded');
+        try {
+          await patchConfig(api, resource.data, ops, signal);
+        } catch (error) {
+          // Someone else changed the group first: fetch it, so the next attempt carries the current revision and the
+          // check dialog can show what the group holds now.
+          if (groupConflict(error)) refetch();
+          throw error;
+        }
+        return true as const;
+      }),
+    [api, resource.data, run, refetch]
+  );
+  return {
+    ...resource,
+    data,
+    // The load error stays with the resource (shown inline); `actionError` is the last control that failed.
+    actionError: action.error,
+    network,
+    setNetwork,
+    busy: action.busy,
+    canProbe,
+    probeChoices: resource.data ? probeChoices(capabilities, 'group', resource.data, protocols) : [],
+    select: useCallback(
+      (member_id: string) => run('selection', signal => api.selectGroup(id, {member_id, network}, signal).catch(readBackUnconfirmed(refetchShown, signal))),
+      [api, id, network, run, refetchShown]
+    ),
+    clearOverride: useCallback(
+      (scope = network) => run('selection', signal => api.clearGroupOverride(id, scope, signal).catch(readBackUnconfirmed(refetchShown, signal))),
+      [api, id, network, run, refetchShown]
+    ),
+    probe: useCallback(
+      (options?: ProbeOptions) =>
+        run('probe', async signal => {
+          if (!capabilities || !resource.data || (!options && !canProbe)) throw new LocalError('ui.probeUnsupported');
+          try {
+            const chosen = options ?? stored;
+            const request = optionsProbe(capabilities, {type: 'group', group_id: id}, chosen, resource.data, protocols);
+            const result = await probeGroup(api, capabilities, resource.data, signal, request);
+            return {...result, fallback: request ? probeFallback(chosen.choice, request) : undefined};
+          } catch (error) {
+            if (!signal.aborted) void refetchShown();
+            throw error;
+          }
+        }),
+      [api, id, capabilities, resource.data, protocols, stored, canProbe, run, refetchShown]
+    ),
+    patchConfig: patch,
+    // Turning off a value the group never set clears it again rather than writing false.
+    setInterrupt: useCallback(
+      (value: boolean) =>
+        patch([{op: 'replace', path: '/config/interrupt_connections', value: value || resource.data?.config.interrupt_connections !== null ? value : null}]),
+      [patch, resource.data]
+    )
+  };
+}

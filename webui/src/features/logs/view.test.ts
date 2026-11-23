@@ -1,0 +1,128 @@
+import {expect, it, vi} from 'vitest';
+import {translate, type Translator} from '../../i18n';
+import {logEmpty, logLevel, logRowText, logStatus, logsExport, logView} from './view';
+const t: Translator = (key, params) => translate('en', key, params);
+
+it('keeps structured fields readable in rows and lossless in chronological exports', () => {
+  const records = [
+    {
+      id: 'new',
+      ts: '2026-01-01T00:00:02Z',
+      level: 'error' as const,
+      target: 'dns',
+      message: 'failed',
+      fields: {host: 'a.test', attempts: 2, nested: {ok: false}}
+    },
+    {id: 'old', ts: '2026-01-01T00:00:01Z', level: 'info' as const, target: 'dns', message: 'started', fields: null}
+  ];
+  const view = logView(records, ['error'], undefined, 'en-US', t);
+  expect(view.rows[0].message).toBe('failed host=a.test attempts=2 nested={"ok":false}');
+  expect(view.rows[0].tone).toBe('err');
+  expect(logsExport(records, new Set(), t).split('\n')[0]).toContain('started');
+  expect(logsExport(records, new Set(), t)).toContain(JSON.stringify(records[0].fields));
+  expect(view.levels.map(level => level.id)).toEqual(['error']);
+});
+
+it('keeps a record without a target and exports a dash for it', () => {
+  const records = [{id: 'r', ts: '2026-01-01T00:00:00Z', level: 'info' as const, target: null, message: 'started', fields: null}];
+  expect(logView(records, ['info'], undefined, 'en-US', t).rows[0].target).toBeNull();
+  expect(logsExport(records, new Set(), t)).toContain('INFO  — started');
+});
+
+it('states a paused stream and caps the held count at what resuming can show', () => {
+  expect(logStatus(false, false, false, 0, 1000, t).tone).toBe('warn');
+  expect(logStatus(true, false, false, 0, 1000, t)).toEqual({tone: 'ok', text: 'Streaming'});
+  expect(logStatus(true, false, true, 1, 1000, t)).toEqual({tone: 'neutral', text: 'Paused: 1 new record'});
+  expect(logStatus(true, false, true, 1000, 1000, t).text).toBe('Paused: 1,000 new records');
+  expect(logStatus(true, false, true, 1001, 1000, t).text).toBe('Paused: 1,000+ new records');
+  // More than one record is held back, so the capped count stays plural.
+  expect(logStatus(true, false, true, 2, 1, t).text).toBe('Paused: 1+ new records');
+  // A reconnect keeps the paused count; only a failed stream outranks the pause.
+  expect(logStatus(false, false, true, 3, 1000, t).text).toBe('Paused: 3 new records');
+  expect(logStatus(true, true, true, 3, 1000, t)).toEqual({tone: 'err', text: t('log.disconnected')});
+});
+
+it('resolves selected log levels against advertised choices', () => {
+  expect(logLevel('info', ['warn', 'error'])).toBe('warn');
+  expect(logLevel('error', ['warn', 'error'])).toBe('error');
+  expect(logLevel('debug', ['warn', 'info'])).toBe('info');
+  expect(logLevel('info', [])).toBeUndefined();
+});
+
+it('marks where the stream lost records between older and newer rows', () => {
+  const record = (id: string) => ({id, ts: '2026-01-01T00:00:00Z', level: 'info' as const, target: 'dns', message: id, fields: null});
+  const records = [record('new'), record('old')];
+  const view = logView(records, ['info'], undefined, 'en-US', t, new Set([records[1]]));
+  expect(view.rows.map(row => [row.message, row.gap])).toEqual([
+    ['new', false],
+    [t('log.gap'), true],
+    ['old', false]
+  ]);
+  expect(new Set(view.rows.map(row => row.id)).size).toBe(3);
+  // The export keeps the marker, oldest first.
+  expect(logsExport(records, new Set([records[1]]), t).split('\n')).toEqual([expect.stringMatching(/ old$/), t('log.gap'), expect.stringMatching(/ new$/), '']);
+  // A copied row is the export's line for it; a gap marker copies its message.
+  expect(view.rows.map(logRowText)).toEqual(['2026-01-01T00:00:00Z INFO  dns new', t('log.gap'), '2026-01-01T00:00:00Z INFO  dns old']);
+});
+
+it('marks the levels the engine does not record and states the level it records', () => {
+  const view = logView([], ['trace', 'debug', 'info', 'warn', 'error'], undefined, 'en-US', t, new Set(), 'info');
+  expect(view.levels.map(level => level.label)).toEqual([
+    t('log.levelNotRecorded', {level: t('log.level.trace')}),
+    t('log.levelNotRecorded', {level: t('log.level.debug')}),
+    t('log.level.info'),
+    t('log.level.warn'),
+    t('log.level.error')
+  ]);
+  expect(view.recordedText).toBe(t('log.recorded', {level: t('log.level.info')}));
+  const unknown = logView([], ['debug', 'info'], undefined, 'en-US', t);
+  expect(unknown.levels.map(level => level.label)).toEqual([t('log.level.debug'), t('log.level.info')]);
+  expect(unknown.recordedText).toBeNull();
+});
+
+it('shows a log level from a newer backend as sent', () => {
+  const level = 'fatal' as 'error';
+  const record = {id: 'r', ts: '2026-01-01T00:00:00Z', level, target: 'dns', message: 'm', fields: null};
+  const view = logView([record], [level, 'error'], undefined, 'en-US', t, new Set(), level);
+  expect(view.rows[0].levelText).toBe('fatal');
+  expect(view.levels[0].label).toBe('fatal');
+  expect(view.recordedText).toBe(t('log.recorded', {level: 'fatal'}));
+});
+
+it('tells an empty list apart by the configuration and the recorder, then by the filter', () => {
+  const recorder = (mode: 'auto' | 'on' | 'off', allowed = true) => ({allowed, mode, active: mode === 'on'});
+  expect(logEmpty(recorder('off'), true, t)).toBe(t('log.emptyNotRecorded'));
+  // Settings cannot turn on a recorder the configuration forbids, so the list names the configuration instead.
+  expect(logEmpty(recorder('off', false), false, t)).toBe(t('log.emptyForbidden'));
+  expect(logEmpty(recorder('off', false), true, t)).toBe(t('log.emptyForbidden'));
+  expect(logEmpty(recorder('auto'), true, t)).toBe(t('log.emptyFiltered'));
+  expect(logEmpty(undefined, false, t)).toBe(t('log.empty'));
+});
+
+import {hookHarness} from '../../store/testHelpers';
+import {useLogs} from './useLogs';
+vi.mock('react', async original => ({...(await original<typeof import('react')>()), ...hookHarness.hooks, useCallback: (fn: unknown) => fn}));
+const clearLogs = vi.hoisted(() => vi.fn());
+vi.mock('../../store', () => ({
+  LOG_FEED_LIMIT: 100,
+  useCapabilities: () => ({data: undefined}),
+  useVersion: () => ({data: undefined}),
+  useRuntimeSettings: () => ({data: undefined}),
+  useLogFeed: () => ({records: [], gaps: new Set(), clear: clearLogs})
+}));
+vi.mock('../../ui/ui', async original => ({...(await original<typeof import('../../ui/ui')>()), useDebounced: (value: string) => value}));
+vi.mock('../../i18n', async original => ({...(await original<typeof import('../../i18n')>()), useT: () => t, useLang: () => 'en'}));
+it('clears logs only after confirmation and leaves them intact on Cancel', () => {
+  hookHarness.reset();
+  const read = () => hookHarness.render(() => useLogs({go: vi.fn()}));
+  read().clear();
+  expect(read().confirmClear.isOpen).toBe(true);
+  expect(clearLogs).not.toHaveBeenCalled();
+  read().confirmClear.onCancel();
+  expect(read().confirmClear.isOpen).toBe(false);
+  expect(clearLogs).not.toHaveBeenCalled();
+  read().clear();
+  read().confirmClear.onConfirm();
+  expect(clearLogs).toHaveBeenCalledOnce();
+  expect(read().confirmClear.isOpen).toBe(false);
+});

@@ -1,0 +1,49 @@
+import {expect, it} from 'vitest';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {StaticField} from './Fields';
+import {LabeledSelect} from './Picker';
+
+it('shows a single choice as text with its help below, not as a picker', () => {
+  const item = {id: 'end', label: 'New response block, as its first rule', desc: 'The dns section has no response block yet.'};
+  const markup = renderToStaticMarkup(<StaticField label="Insert position" value={item.label} description={item.desc} />);
+  expect(markup).toMatch(/role="group" aria-labelledby="([^"]+)-label" aria-describedby="\1-help"/);
+  expect(markup).toContain('>Insert position</span><span>New response block, as its first rule</span>');
+  expect(markup).toContain('class="rp-label"');
+  expect(markup).toContain('The dns section has no response block yet.');
+  expect(markup).not.toMatch(/<button|aria-haspopup|role="(combobox|listbox)"/);
+  // The same choice in a picker renders the button this field replaces.
+  expect(renderToStaticMarkup(<LabeledSelect label="Insert position" items={[item]} value="end" onChange={() => {}} />)).toContain('<button');
+});
+
+it('names the field without a description when the choice has no help', () => {
+  expect(renderToStaticMarkup(<StaticField label="Insert position" value="End of list" />)).not.toContain('aria-describedby');
+});
+
+it('associates an edited node-link error with the field inside a form', async () => {
+  const {TextField} = await import('./Fields');
+  const {Form} = await import('./Form');
+  const markup = renderToStaticMarkup(
+    <Form>
+      <TextField label="Node link" value="garbage://x" error="Invalid node link" />
+    </Form>
+  );
+  const input = markup.match(/<input[^>]+>/)![0];
+  expect(input).toContain('aria-invalid="true"');
+  const described = input.match(/aria-describedby="([^"]+)"/)![1];
+  const errorId = markup.match(/class="rp-field-error" id="([^"]+)"/)![1];
+  expect(described.split(' ')).toContain(errorId);
+  expect(markup).toContain('Invalid node link');
+});
+
+it('marks a field with a fixed width, so a form row grows only the others', async () => {
+  const {TextField} = await import('./Fields');
+  const {NumberField} = await import('./NumberField');
+  const fixed = [<TextField key="t" label="Host" value="" width={96} />, <NumberField key="n" label="Port" value={1} width={120} />];
+  const growing = [<TextField key="t" label="Host" value="" />, <NumberField key="n" label="Port" value={1} />];
+  for (const field of fixed) {
+    const root = renderToStaticMarkup(field).match(/^<div[^>]+>/)![0];
+    expect(root).toContain('data-fixed=""');
+    expect(root).toMatch(/style="width:\d+px"/);
+  }
+  for (const field of growing) expect(renderToStaticMarkup(field).match(/^<div[^>]+>/)![0]).not.toMatch(/data-fixed|style=/);
+});

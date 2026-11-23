@@ -445,6 +445,7 @@ pub(super) fn discovery(auth: AuthDiscovery, admitted: bool) -> Value {
                 "config_export": "/api/v1/x-honk/config/export",
                 "config_import": "/api/v1/x-honk/config/import",
                 "config_revisions": "/api/v1/x-honk/config/revisions",
+                "core_update": "/api/v1/x-honk/core/update",
             },
         },
         "auth": {
@@ -498,6 +499,7 @@ pub(super) async fn capabilities(state: &super::NativeState) -> Value {
                 "config_export": {"available":config.sources.available()},
                 "config_import": config.import_capability(),
                 "config_revisions": config.revisions_capability(),
+                "core_update": state.core_update.capability(state.settings.admin_authorized()),
                 "runtime_mode": {"available":false},
             },
             "config_validate": {"available":config.running(),"modes":["syntax","full"],"max_bytes":crate::configuration::MAX_SOURCE_BYTES,"max_sources":crate::configuration::MAX_SOURCES},

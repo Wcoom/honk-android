@@ -376,3 +376,69 @@ async fn ebpf_bytes_sum_memlock_of_own_bpf_fds_only() {
     }
     assert_eq!(ebpf_bytes(proc_self), None);
 }
+
+#[tokio::test]
+async fn memory_falls_back_to_cgroup_v1_when_cgroup2_lacks_memory() {
+    let fixture = tempfile::tempdir().unwrap();
+    let proc_self = fixture.path().join("proc");
+    let cg2_root = fixture.path().join("cg2");
+    let memcg_root = fixture.path().join("memcg");
+    let cgroup = memcg_root.join("honk");
+    std::fs::create_dir(&proc_self).unwrap();
+    std::fs::create_dir_all(&cg2_root).unwrap();
+    std::fs::create_dir_all(&cgroup).unwrap();
+    std::fs::write(proc_self.join("status"), "Name:\thonk\nVmRSS:\t8192 kB\n").unwrap();
+    std::fs::write(proc_self.join("cgroup"), "2:memory:/honk\n0::/\n").unwrap();
+    std::fs::write(
+        proc_self.join("mountinfo"),
+        format!(
+            "1 0 0:1 / {} rw - cgroup2 none rw\n2 0 0:2 / {} rw,nosuid - cgroup cgroup rw,memory\n",
+            cg2_root.display(),
+            memcg_root.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(cgroup.join("memory.usage_in_bytes"), "12582912\n").unwrap();
+    std::fs::write(cgroup.join("memory.limit_in_bytes"), "9223372036854771712\n").unwrap();
+    std::fs::write(cgroup.join("memory.failcnt"), "1\n").unwrap();
+    std::fs::write(
+        cgroup.join("memory.oom_control"),
+        "oom_kill_disable 0\nunder_oom 0\noom_kill 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        cgroup.join("cgroup.procs"),
+        format!("{}\n", std::process::id()),
+    )
+    .unwrap();
+
+    let reading = read_memory(&proc_self).await;
+    let group = reading.cgroup.as_ref().expect("v1 memcg reading");
+    assert_eq!(group.scope, "service");
+    assert_eq!(group.current, Some(12582912));
+    assert_eq!(group.limit, None);
+    assert!(group.limit_readable);
+    assert_eq!(group.events, [Some(1), Some(0), Some(2)]);
+    assert_eq!(
+        reading.metrics().collect::<Vec<_>>(),
+        [
+            "process.rss_bytes",
+            "cgroup.current_bytes",
+            "cgroup.limit_bytes",
+            "cgroup.events.high",
+            "cgroup.events.oom",
+            "cgroup.events.oom_kill"
+        ]
+    );
+
+    // Numeric limit below threshold is exposed directly.
+    std::fs::write(cgroup.join("memory.limit_in_bytes"), "268435456\n").unwrap();
+    assert_eq!(
+        read_memory(&proc_self).await.cgroup.unwrap().limit,
+        Some(268435456)
+    );
+
+    // Root memcg `/` is not treated as service memory.
+    std::fs::write(proc_self.join("cgroup"), "2:memory:/\n0::/\n").unwrap();
+    assert!(read_memory(&proc_self).await.cgroup.is_none());
+}

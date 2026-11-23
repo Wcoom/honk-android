@@ -1,0 +1,307 @@
+import {href} from '../../shell/route';
+import {useCallback, useMemo, useState} from 'react';
+import {useFilter, type Selection} from 'react-aria-components';
+import {useT, useLang, LOCALE, formatNumber} from '../../i18n';
+import type {Node, Provider} from '../../api/model';
+import type {ProbeOptions} from '../../store/probeOptions';
+import type {ProbeOptionsDialogModel} from '../shared/ProbeOptionsDialog';
+import {useNodeProbe} from '../../store';
+import type {OutboundNames} from '../../api/selectors';
+import {cachedRows, toast, toastFailure, useLinked, type TableSort} from '../../ui/ui';
+import {namedIn, type GroupEntry} from '../../dae/groups';
+import type {MainSourceEdit} from '../../store/mainSource';
+import {nodeRows, nodeRowView} from './view';
+import {compareNames} from '../../i18n/format';
+import {longList} from '../../ui/longList';
+import type {SearchSection} from '../../ui/SearchSelect';
+import {probeFallbackNotice, probeToast} from '../shared/probe';
+import {errorText} from '../../api/error';
+
+type NodeTableInput = {
+  // The selected source's nodes; a search looks through `all` instead when there is more than one source.
+  nodes: Node[];
+  all: Node[];
+  sourceOf: (node: Node) => string;
+  providers: Provider[];
+  names: OutboundNames;
+  loading: boolean;
+  label: string;
+  // Which source the table shows and how to change it, where there is more than one; `scopePending` while the sources
+  // are on their way, when the line is held for it.
+  scope: string | null;
+  scopeKey: string;
+  scopePending?: boolean;
+  multiple: boolean;
+  query: string | null;
+  groupQuery: string | null;
+  nodeIds: string[];
+  clearNodes: () => void;
+  source: MainSourceEdit;
+  // The groups a node can join: each declared once in a writable, complete source, where the group editor writes.
+  joinable: GroupEntry[];
+  canManage: boolean;
+  busy: boolean;
+  reload: () => void;
+  joinGroup: (node: Node, group: string) => void;
+  onAdd: () => void;
+  onNewGroup: (node: Node) => void;
+  onRemove: (node: Node) => void;
+  onRemoveSelected: (nodes: Node[], onRemoved: (id: string) => void) => void;
+  // Whether the node's declaring source rules out removing it here.
+  inInclude: (node: Node) => boolean;
+  edit: (node: Node) => (() => void) | null;
+};
+export function useNodeTable(input: NodeTableInput) {
+  const {names, providers, source, query, reload, joinGroup, onNewGroup, onRemove, canManage, sourceOf, edit, inInclude} = input;
+  const t = useT();
+  const lang = useLang();
+  const locale = LOCALE[lang];
+  const probe = useNodeProbe(reload);
+  const [progress, setProgress] = useState({done: 0, total: 0});
+  const [probeTarget, setProbeTarget] = useState<Node | null>(null);
+  const [search, setSearch] = useState(query ?? '');
+  useLinked(query, value => setSearch(value ?? ''));
+  const [group, setGroup] = useState(input.groupQuery ?? '');
+  useLinked(input.groupQuery, value => setGroup(value ?? ''));
+  const [protocol, setProtocol] = useState('');
+  useLinked(JSON.stringify(input.nodeIds), () => {
+    setGroup(input.groupQuery ?? '');
+    setProtocol('');
+  });
+  const [sort, setSort] = useState<TableSort>({column: 'name', direction: 'ascending'});
+  const selectedNodes = input.nodeIds.length > 0;
+  const across = (!!input.groupQuery || (input.multiple && search.trim() !== '')) && !selectedNodes;
+  const nodes = selectedNodes ? input.all.filter(node => input.nodeIds.includes(node.id)) : across ? input.all : input.nodes;
+  const groups = useMemo(
+    () =>
+      [...new Set(nodes.flatMap(node => node.group_ids))]
+        .sort((a, b) => compareNames(locale)(names.get(a) ?? a, names.get(b) ?? b))
+        .map(id => ({id, label: names.get(id) ?? id})),
+    [nodes, names, locale]
+  );
+  const protocols = useMemo(
+    () =>
+      [...new Set(nodes.map(node => node.protocol ?? ''))]
+        .filter(Boolean)
+        .sort(compareNames(locale))
+        .map(id => ({id, label: id})),
+    [nodes, locale]
+  );
+  const linkedGroup =
+    input.groupQuery && !groups.some(item => item.id === input.groupQuery)
+      ? [{id: input.groupQuery, label: names.get(input.groupQuery) ?? input.groupQuery}]
+      : [];
+  const groupItems = [{id: '', label: t('nodes.anyGroup')}, ...linkedGroup, ...groups];
+  // A filter chosen for another source applies only if this source offers that value.
+  const activeGroup = group === input.groupQuery || groups.some(item => item.id === group) ? group : '';
+  const activeProtocol = protocols.some(item => item.id === protocol) ? protocol : '';
+  const {contains} = useFilter({sensitivity: 'base'});
+  const members = useMemo(
+    () => nodeRows(nodes, search, activeGroup, activeProtocol, sort, contains, locale),
+    [nodes, search, activeGroup, activeProtocol, sort, contains, locale]
+  );
+  const entries = useMemo(() => input.joinable.map(entry => ({...entry, names: new Set(namedIn(entry))})), [input.joinable]);
+  // A new group is written to the main source.
+  const canCreate = source.writable && !source.busy && !!source.main;
+  const inlineProviders = useMemo(() => new Set(providers.filter(provider => provider.kind === 'inline').map(provider => provider.id)), [providers]);
+  const {probe: runProbe, choices, busy: probeBusy} = probe;
+  // A row per node object, rebuilt only when the node or what every row reads changes. The running probe is not part
+  // of a row: the table reads it, so a probe starting or ending does not rebuild every row.
+  const build = useCallback(
+    (node: Node): NodeTableView['rows'][number] => ({
+      ...nodeRowView(node, names, lang, t),
+      source: sourceOf(node),
+      groupLinks: node.group_ids.map(id => ({id, label: names.get(id) ?? id, href: href('policies', {group: id})})),
+      canProbe: choices(node).length > 0,
+      probeOptions: () => setProbeTarget(node),
+      probe: (options?: ProbeOptions) =>
+        void runProbe(node, options).then(
+          result => {
+            if (!result) return;
+            const {kind, text} = probeToast(result, node.id, node.name, t);
+            toast(kind, text + probeFallbackNotice(result.fallback, node.name, t));
+          },
+          error => toastFailure(error, t, t('nodes.probeError', {name: node.name}))
+        ),
+      menu: () => {
+        const joined = new Set(node.group_ids.map(id => names.get(id) ?? id));
+        return entries.filter(entry => !entry.names.has(node.name) && !joined.has(entry.name)).map(entry => ({id: entry.name, label: entry.name}));
+      },
+      join: (key: string) => (key === '/new' ? onNewGroup(node) : joinGroup(node, key)),
+      removable: canManage && typeof node.provider_id === 'string' && inlineProviders.has(node.provider_id),
+      removeReason: inInclude(node) ? t('nodes.removeInclude') : null,
+      remove: () => onRemove(node),
+      edit: edit(node)
+    }),
+    [names, lang, sourceOf, choices, runProbe, t, entries, onNewGroup, joinGroup, canManage, inlineProviders, onRemove, inInclude, edit]
+  );
+  const cache = useMemo(() => ({build, rows: new WeakMap<Node, NodeTableView['rows'][number]>()}), [build]);
+  const rows = useMemo(() => cachedRows(cache.rows, members, cache.build), [cache, members]);
+  const visible = useMemo(() => new Set(rows.map(row => row.id)), [rows]);
+  // Selection belongs to the visible filter and source, never to rows hidden by a later navigation.
+  const selectionScope = JSON.stringify([input.scopeKey, input.nodeIds, search, activeGroup, activeProtocol]);
+  const [selected, setSelected] = useState({scope: selectionScope, keys: new Set<string>()});
+  const selectedKeys = useMemo(
+    () => new Set(selected.scope === selectionScope ? [...selected.keys].filter(id => visible.has(id)) : []),
+    [selected, selectionScope, visible]
+  );
+  if (selected.scope !== selectionScope || selected.keys.size !== selectedKeys.size) setSelected({scope: selectionScope, keys: selectedKeys});
+  const probeable = useMemo(
+    () => members.filter(node => (!selectedKeys.size || selectedKeys.has(node.id)) && choices(node).length > 0),
+    [members, choices, selectedKeys]
+  );
+  const removable = new Set(rows.filter(row => selectedKeys.has(row.id) && row.removable && !row.removeReason).map(row => row.id));
+  const clearSelection = () => setSelected({scope: selectionScope, keys: new Set<string>()});
+  const onSelectionChange = (keys: Selection) =>
+    setSelected({scope: selectionScope, keys: keys === 'all' ? new Set(rows.map(row => row.id)) : (keys as Set<string>)});
+  const removeSelected = () => {
+    if (!canManage || input.busy || !removable.size) return;
+    input.onRemoveSelected(
+      members.filter(node => removable.has(node.id)),
+      id =>
+        setSelected(previous => {
+          if (!previous.keys.has(id)) return previous;
+          const keys = new Set(previous.keys);
+          keys.delete(id);
+          return {...previous, keys};
+        })
+    );
+  };
+  return {
+    rows,
+    selection: {keys: selectedKeys, onChange: onSelectionChange},
+    clearSelection,
+    removeSelected,
+    deleteSelectedLabel: canManage && removable.size ? t('nodes.deleteSelected', {n: removable.size}) : null,
+    probeBusy,
+    testAll: () => {
+      if (probeBusy || !probeable.length) return;
+      setProgress({done: 0, total: probeable.length});
+      void probe
+        .probeMany(probeable, done => setProgress({done, total: probeable.length}))
+        .then(result => {
+          if (!result) return;
+          setSort({column: 'latency', direction: 'ascending'});
+          toast(result.unavailable ? 'warning' : 'positive', t('nodes.batchTested', {n: result.tested, unavailable: result.unavailable}));
+        });
+    },
+    cancelTest: probe.cancel,
+    testLabel:
+      probeBusy === '*'
+        ? t('nodes.testingBatch', {n: progress.done, total: progress.total})
+        : selectedKeys.size
+          ? t('nodes.testSelected', {n: selectedKeys.size})
+          : t('policy.probeAll'),
+    testReason: probeBusy ? t('nodes.testBusy') : !members.length ? t('nodes.noMatch') : !probeable.length ? t('nodes.testNone') : null,
+    probeOptions: probeTarget
+      ? {
+          name: probeTarget.name,
+          group: false,
+          choices: choices(probeTarget),
+          busy: !!probeBusy,
+          close: () => setProbeTarget(null),
+          submit: (options: ProbeOptions) => {
+            build(probeTarget).probe(options);
+            setProbeTarget(null);
+          }
+        }
+      : null,
+    search,
+    setSearch,
+    group: activeGroup,
+    setGroup,
+    protocol: activeProtocol,
+    setProtocol,
+    sort,
+    setSort,
+    groups: groupItems,
+    groupSections: longList(groups.length) ? [{id: 'groups', items: groupItems}] : null,
+    protocols: [{id: '', label: t('nodes.anyProtocol')}, ...protocols],
+    shown: t('ui.fraction', {part: formatNumber(rows.length, locale), whole: formatNumber(nodes.length, locale)}),
+    loading: input.loading,
+    label: across || selectedNodes ? t('nav.nodes') : input.label,
+    scope: selectedNodes ? t('nodes.selectedNodes', {n: input.nodeIds.length}) : across ? t('nodes.searchAll') : input.scope,
+    scopePending: !!input.scopePending,
+    across: across || selectedNodes,
+    empty: t(across ? 'nodes.noMatch' : 'nodes.empty'),
+    canManage,
+    busy: input.busy,
+    writable: source.writable,
+    canJoin: canCreate || entries.length > 0,
+    canCreate,
+    sourceTip: source.error ? errorText(source.error, t) : undefined,
+    clearNodes: selectedNodes
+      ? () => {
+          setSearch('');
+          setGroup('');
+          setProtocol('');
+          input.clearNodes();
+        }
+      : null,
+    onAdd: input.onAdd
+  };
+}
+export type NodeTableView = {
+  selection: {keys: Set<string>; onChange: (keys: Selection) => void};
+  clearSelection: () => void;
+  removeSelected: () => void;
+  deleteSelectedLabel: string | null;
+  rows: Array<{
+    id: string;
+    name: string;
+    source: string;
+    protocol: string;
+    latency: string;
+    latencyClass: string;
+    groups: string;
+    groupLinks: Array<{id: string; label: string; href: string}>;
+    probeKinds: Array<{label: string; value: string; tone: string}>;
+    showProbeKinds: boolean;
+    probeLabel: string;
+    removeLabel: string;
+    canProbe: boolean;
+    probe: (options?: ProbeOptions) => void;
+    probeOptions: () => void;
+    menu: () => Array<{id: string; label: string}>;
+    join: (key: string) => void;
+    removable: boolean;
+    removeReason: string | null;
+    remove: () => void;
+    edit: (() => void) | null;
+  }>;
+  // The node whose probe is running; while one runs, every probe button waits.
+  probeBusy: string | null;
+  testAll: () => void;
+  cancelTest: () => void;
+  testLabel: string;
+  testReason: string | null;
+  probeOptions: ProbeOptionsDialogModel | null;
+  search: string;
+  setSearch: (value: string) => void;
+  group: string;
+  setGroup: (value: string) => void;
+  protocol: string;
+  setProtocol: (value: string) => void;
+  sort: TableSort;
+  setSort: (value: TableSort) => void;
+  groups: Array<{id: string; label: string}>;
+  // The same choices for the searchable picker when there are more groups than a menu shows; null otherwise.
+  groupSections: SearchSection[] | null;
+  protocols: Array<{id: string; label: string}>;
+  shown: string;
+  loading: boolean;
+  label: string;
+  scope: string | null;
+  scopePending: boolean;
+  // A search spanning every source, whose rows name their source.
+  across: boolean;
+  empty: string;
+  canManage: boolean;
+  busy: boolean;
+  writable: boolean;
+  canJoin: boolean;
+  canCreate: boolean;
+  sourceTip?: string;
+  onAdd: () => void;
+  clearNodes: (() => void) | null;
+};

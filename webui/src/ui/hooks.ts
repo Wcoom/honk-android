@@ -1,0 +1,321 @@
+import {type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react';
+import {flushSync} from 'react-dom';
+
+export function withCrossfade(fn: () => void) {
+  const d = document as Document & {startViewTransition?: (cb: () => void) => void};
+  if (!d.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) return fn();
+  d.startViewTransition(() => flushSync(fn));
+}
+
+// Where an item sits in the container it is placed against, from layout offsets. A pressed item sinks by a transform
+// that eases back after release, so its bounding box moves for a few frames; offsets ignore transforms and stay put.
+// The container is the marker's containing block, so it is positioned and ends the item's offsetParent chain.
+function layoutOffset(item: HTMLElement, container: HTMLElement) {
+  let x = 0;
+  let y = 0;
+  for (let node: Element | null = item; node instanceof HTMLElement && node !== container; node = node.offsetParent) {
+    x += node.offsetLeft;
+    y += node.offsetTop;
+  }
+  return {x, y};
+}
+
+export function useSlider(value: string, selector = '[data-selected]', keepVisible = false) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{x: number; y: number; w: number; h: number; still: boolean} | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // The marker slides only when the selection changes. A resize, or a hidden panel shown again, puts it in place
+    // without motion; while hidden (a kept tab panel) nothing is measured, so it does not collapse to the start.
+    const measure = (still: boolean) => {
+      if (!el.offsetWidth) return;
+      const sel = el.querySelector<HTMLElement>(selector);
+      if (!sel) return setPos(null);
+      const next = {...layoutOffset(sel, el), w: sel.offsetWidth, h: sel.offsetHeight, still};
+      if (keepVisible) {
+        const bottom = next.y + next.h - el.clientHeight;
+        if (next.y < el.scrollTop) el.scrollTop = next.y;
+        else if (bottom > el.scrollTop) el.scrollTop = bottom;
+      }
+      setPos(prev => (prev && prev.x === next.x && prev.y === next.y && prev.w === next.w && prev.h === next.h ? prev : next));
+    };
+    let still = false;
+    const ro = new ResizeObserver(() => {
+      flushSync(() => measure(still));
+      still = true;
+    });
+    ro.observe(el);
+    for (const child of el.children) ro.observe(child);
+    return () => ro.disconnect();
+  }, [value, selector, keepVisible]);
+  return [ref, pos] as const;
+}
+
+// A strip of items that scrolls within itself when it is wider than its box, as a tab bar on a phone. The selected
+// item is scrolled into view within the strip, never scrolling the page, when the selection changes and when the
+// strip resizes. `data-fade` names the ends with more to scroll to, `start` and `end`, for the CSS to fade them; it is
+// set on the element directly, so scrolling does not re-render the strip's owner.
+export function useScrollStrip(ref: RefObject<HTMLElement | null>, value: string, selector = '[data-selected]') {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fade = () => {
+      // scrollLeft runs negative in a right-to-left strip, so its magnitude is the distance from the start.
+      const from = Math.abs(el.scrollLeft);
+      const ends = [from > 1 && 'start', from < el.scrollWidth - el.clientWidth - 1 && 'end'].filter(Boolean).join(' ');
+      if (ends) el.dataset.fade = ends;
+      else delete el.dataset.fade;
+    };
+    const reveal = () => {
+      const sel = el.querySelector<HTMLElement>(selector);
+      if (!sel || !el.offsetWidth || el.scrollWidth <= el.clientWidth) return;
+      // Clear of the faded edge where the strip has room for it.
+      const box = el.getBoundingClientRect();
+      const item = sel.getBoundingClientRect();
+      const margin = Math.max(0, Math.min(24, (box.width - item.width) / 2));
+      const before = item.left - (box.left + margin);
+      const after = item.right - (box.right - margin);
+      if (before < 0) el.scrollLeft += before;
+      else if (after > 0) el.scrollLeft += Math.min(after, before);
+    };
+    const measure = () => {
+      reveal();
+      fade();
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    for (const child of el.children) ro.observe(child);
+    el.addEventListener('scroll', fade, {passive: true});
+    return () => {
+      ro.disconnect();
+      el.removeEventListener('scroll', fade);
+    };
+  }, [ref, value, selector]);
+}
+
+// Whether an element's content is wider than the element, tracked through resizes of it and of its children (a label
+// that changes, a web font that arrives). `key` names the children, so new ones are observed. A resize commits before
+// the browser paints, so no frame shows the content spilling out.
+export function useOverflow(ref: RefObject<HTMLElement | null>, key: string) {
+  const [over, setOver] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setOver(el.scrollWidth > el.clientWidth);
+    const ro = new ResizeObserver(() => flushSync(measure));
+    ro.observe(el);
+    for (const child of el.children) ro.observe(child);
+    return () => ro.disconnect();
+  }, [ref, key]);
+  return over;
+}
+
+// Content dimensions shared by responsive SVG charts and tables; activity charts round and throttle resize updates.
+// The first read and every resize read the same measure, the client box less its padding, so one layout always gives
+// one size. The first read once took clientWidth, which rounds a fractional box (under zoom), and resizes contentRect,
+// which the size floors: a table whose column minima summed to the boundary showed a column and then dropped it.
+export function useContentSize<E extends HTMLElement>(round = Math.floor, interval = 0) {
+  const ref = useRef<E>(null);
+  const [size, setSize] = useState<{width: number; height: number} | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const measure = () => {
+      // A hidden element (a kept-mounted tab panel) measures zero; keep its last size, which is the one it shows again.
+      if (!el.getClientRects().length) return;
+      const style = getComputedStyle(el);
+      const padding = (a: string, b: string) => parseFloat(a) + parseFloat(b);
+      const width = round(el.clientWidth - padding(style.paddingLeft, style.paddingRight));
+      const height = round(el.clientHeight - padding(style.paddingTop, style.paddingBottom));
+      setSize(previous => (previous?.width === width && previous.height === height ? previous : {width, height}));
+    };
+    measure();
+    const observer = new ResizeObserver(() => {
+      if (!interval) measure();
+      else if (timer === undefined)
+        timer = setTimeout(() => {
+          timer = undefined;
+          measure();
+        }, interval);
+    });
+    observer.observe(el);
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [round, interval]);
+  return [ref, size] as const;
+}
+
+// The content width of an element, tracked through resizes; null until measured.
+export function useContentWidth<E extends HTMLElement>() {
+  const [ref, size] = useContentSize<E>();
+  return [ref, size?.width ?? null] as const;
+}
+// Fill the remaining viewport without shrinking below min.
+export function useFillHeight<E extends HTMLElement>(min: number, gap = 24) {
+  const ref = useRef<E>(null);
+  const [height, setHeight] = useState(min);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      // A hidden element has no top to measure from; the height it had is the one it shows again.
+      if (!el.getClientRects().length) return;
+      const next = Math.max(min, Math.floor(window.innerHeight - el.getBoundingClientRect().top - gap));
+      setHeight(previous => (previous === next ? previous : next));
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    measure();
+    const observer = new ResizeObserver(schedule);
+    observer.observe(document.body);
+    window.addEventListener('resize', schedule);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', schedule);
+      cancelAnimationFrame(frame);
+    };
+  }, [min, gap]);
+  return [ref, height] as const;
+}
+
+// Whether shortcuts should read as ⌘ rather than Ctrl; userAgentData is the standard, platform the fallback.
+export const isMac =
+  (navigator as Navigator & {userAgentData?: {platform: string}}).userAgentData?.platform === 'macOS' || navigator.platform.startsWith('Mac');
+
+// One Escape closes one layer. A dialog takes its own Escape, so a layer under it that listens on the window (a
+// detail panel, the expanded toasts) leaves the key alone while one of these is open or holds focus.
+export const escapeLayers = '[role="dialog"], [role="alertdialog"]';
+
+// The widths a layout changes at, each the first width of the wider layout. Stylesheets write one as `(min-width: Npx)`
+// or `(max-width: N-0.02px)`; breakpoints.test.ts holds every media query in src to this list.
+export const breakpoints = {narrow: 400, phone: 600, sm: 640, md: 768, lg: 1024, wide: 1100, panel: 1200, xl: 1280, overview: 1400};
+const below = (width: number) => `(max-width: ${width - 0.02}px)`;
+// Below this breakpoint, detail drawers must not follow keyboard focus.
+export const panelQuery = `(min-width: ${breakpoints.panel}px)`;
+// The phone breakpoint, for a component whose markup, not only its layout, changes below it.
+export const phoneQuery = below(breakpoints.phone);
+// Below this width a submenu replaces its menu.
+export const smallQuery = below(breakpoints.sm);
+// The sidebar shows from this width, and with it the docking.
+export const sidebarQuery = `(min-width: ${breakpoints.lg}px)`;
+// Without the sidebar the top bar and the bottom navigation cover the viewport's edges, so a popover's boundary is the
+// band between them (index.html, sized from --rp-topbar and --rp-dock): React Aria flips and shrinks it inside.
+export function usePopoverBoundary() {
+  const sidebar = useMediaQuery(sidebarQuery);
+  return sidebar ? undefined : (globalThis.document?.querySelector('.rp-popover-band') ?? undefined);
+}
+
+// Reset linked drafts during render so navigation cannot paint the previous value.
+export function useLinked<T>(linked: T, apply: (value: T) => void) {
+  const [last, setLast] = useState(linked);
+  if (last !== linked) {
+    setLast(linked);
+    apply(linked);
+  }
+}
+
+// The value as it stood once `ms` passed without a change; a text filter that costs a request waits on it. The
+// default is a typing pause.
+export function useDebounced<T>(value: T, ms = 300): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return settled;
+}
+
+// Whether the place a link landed on is still marked: from when `target` turns up or changes, for three seconds.
+export function useLandingHighlight(target: string | boolean | null | undefined): boolean {
+  const [highlight, setHighlight] = useState({target, active: !!target});
+  if (highlight.target !== target) setHighlight({target, active: !!target});
+  useEffect(() => {
+    const timer = setTimeout(() => setHighlight(previous => ({...previous, active: false})), 3000);
+    return () => clearTimeout(timer);
+  }, [target]);
+  return highlight.active;
+}
+
+// The value while `shown`, and the last one it had then while hidden, so what is derived from it does not recompute
+// for a kept tab that is out of sight. Undefined until first shown.
+export function useWhileShown<T>(value: T | undefined, shown: boolean): T | undefined {
+  const [kept, setKept] = useState(shown ? value : undefined);
+  if (shown && kept !== value) setKept(value);
+  return shown ? value : kept;
+}
+
+// How far outside the viewport a lazy card counts as near, so it loads before it scrolls in.
+const nearMargin = 400;
+
+// Whether the element is within `nearMargin` of the viewport; `onNear` runs each time it comes near.
+export function useNearViewport(onNear?: () => void, margin = nearMargin) {
+  const [near, setNear] = useState(false);
+  // Read when it fires, so an inline `onNear` keeps the same observer across renders.
+  const latest = useRef(onNear);
+  useLayoutEffect(() => {
+    latest.current = onNear;
+  }, [onNear]);
+  const ref = useCallback(
+    (element: HTMLElement | null) => {
+      if (!element) return;
+      // An element that mounts on screen reads as near in the first frame; waiting for the observer's first report
+      // would paint the placeholder for a frame and make the page jump.
+      const box = element.getBoundingClientRect();
+      if (box.top < innerHeight + margin && box.bottom > -margin) {
+        setNear(true);
+        latest.current?.();
+      }
+      const observer = new IntersectionObserver(
+        entries => {
+          const next = entries.at(-1)!.isIntersecting;
+          setNear(next);
+          if (next) latest.current?.();
+        },
+        {rootMargin: `${margin}px`}
+      );
+      observer.observe(element);
+      return () => observer.disconnect();
+    },
+    [margin]
+  );
+  return [ref, near] as const;
+}
+
+export function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() => typeof matchMedia === 'function' && matchMedia(query).matches);
+  useEffect(() => {
+    const list = matchMedia(query);
+    const on = () => setMatches(list.matches);
+    on();
+    list.addEventListener('change', on);
+    return () => list.removeEventListener('change', on);
+  }, [query]);
+  return matches;
+}
+
+// Marks a vertical scroller with `data-more` while more of its content lies below, for the CSS to fade that edge as
+// the widget panel's list does. Set on the element directly, so scrolling does not re-render its owner.
+export function useMoreBelow(ref: RefObject<HTMLElement | null>) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => el.toggleAttribute('data-more', el.scrollHeight > el.clientHeight + el.scrollTop + 1);
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    for (const child of el.children) ro.observe(child);
+    el.addEventListener('scroll', measure, {passive: true});
+    measure();
+    return () => {
+      ro.disconnect();
+      el.removeEventListener('scroll', measure);
+    };
+  }, [ref]);
+}

@@ -100,6 +100,7 @@ async fn discovery_withholds_detail_from_callers_without_a_credential() {
             "config_export": "/api/v1/x-honk/config/export",
             "config_import": "/api/v1/x-honk/config/import",
             "config_revisions": "/api/v1/x-honk/config/revisions",
+            "core_update": "/api/v1/x-honk/core/update",
         })
     );
     assert!(full["links"].get("config_export").is_none());
@@ -110,6 +111,7 @@ async fn discovery_withholds_detail_from_callers_without_a_credential() {
         "config_export",
         "config_import",
         "config_revisions",
+        "core_update",
         "runtime_mode",
     ] {
         assert!(resources.get(key).is_none(), "{key}");

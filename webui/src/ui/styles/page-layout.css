@@ -1,0 +1,596 @@
+.rp-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-6);
+  min-width: 0;
+}
+.rp-note {
+  margin: 0;
+  font-size: var(--rp-text-sm);
+  line-height: var(--rp-line-body);
+  color: var(--rp-subtle);
+}
+.rp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-3);
+  flex-wrap: wrap;
+}
+/* A toolbar's primary text filter: the fixed width it always had, but on phones it takes the row instead of shrinking
+   to share it with the controls beside it, where a long placeholder used to be squeezed even shorter than the box. */
+.rp-toolbar .rp-filter {
+  width: 240px;
+}
+@media (max-width: 599.98px) {
+  .rp-toolbar .rp-filter {
+    width: 100%;
+  }
+  /* A lead line takes its own row on phones, so the actions after it keep their full labels on the next. */
+  .rp-toolbar > .rp-help-row {
+    flex: 1 1 100%;
+  }
+}
+/* A phone's filter row: the field takes what the button beside it leaves. */
+.rp-filter-row {
+  display: flex;
+  flex: 1 1 100%;
+  gap: var(--rp-space-2);
+  min-width: 0;
+}
+.rp-toolbar .rp-filter-row .rp-filter {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+/* Fields with descriptions differ in height; align them by their labels instead of their middles. */
+.rp-toolbar.top {
+  align-items: flex-start;
+}
+/* A labelled field beside an unlabelled control-height one, such as a switch: bottoms align, so the switch sits level
+   with the input rather than with the middle of label and input together, and a wrapped row adds no gap. */
+.rp-toolbar.end {
+  align-items: flex-end;
+}
+.rp-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rp-space-3);
+  flex-wrap: wrap;
+}
+.rp-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-4);
+  min-width: 0;
+}
+.rp-col > .rp-btn,
+.rp-card > .rp-btn,
+.rp-col > .rp-tipwrap,
+.rp-card > .rp-tipwrap,
+.rp-col > .rp-tipwrap > .rp-btn,
+.rp-card > .rp-tipwrap > .rp-btn {
+  align-self: flex-start;
+}
+
+.rp-h3 {
+  margin: 0;
+  font-size: var(--rp-text-lg);
+  line-height: 20px;
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rp-title-icon {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+}
+:root {
+  --rp-code-comment: var(--rp-muted);
+  /* Strings read the notice tone as text, so a palette whose gold is under 4.5:1 sets body text for both. */
+  --rp-code-string: var(--rp-notice-text);
+  --rp-code-keyword: var(--rp-love);
+  --rp-code-number: var(--rp-iris);
+  --rp-code-propertyName: var(--rp-pine);
+  --rp-code-variableName: var(--rp-text);
+  --rp-code-punctuation: var(--rp-subtle);
+  --rp-code-operator: var(--rp-subtle);
+}
+/* Code shows what was typed: a programming font's ligatures would draw `->` or `!=` as one glyph. */
+.rp-code,
+.rp-config-diagnostic code {
+  font-family: var(--rp-font-mono);
+  font-size: var(--rp-text-sm);
+  font-variant-ligatures: none;
+}
+/* Right to left, technical values keep their own order. A table cell or a detail value takes its direction from its
+   text, so a domain, address or path reads left to right while a name in the page's script does not; code, rule text
+   and keys are always left to right. unicode-bidi is not inherited, so the rule names each box that holds the text;
+   the value still lines up with the page, not with its own direction. */
+:root[dir='rtl'] :is(.rp-table :is([role='rowheader'], [role='gridcell'], .cell, .rp-truncate), .rp-kv :is(.v, .rp-truncate)):not(.rp-code) {
+  unicode-bidi: plaintext;
+  text-align: match-parent;
+}
+:root[dir='rtl'] :is(.rp-code, .rp-tree-tile[data-stage='rule'] .l, .cm-editor, code, kbd) {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+/* The mirrored layout runs the page right to left while the language still reads left to right. Each box takes the
+   direction of its text from the text, so "Rules (3)", a time with its AM or PM and a count in a Chinese phrase keep their
+   order and punctuation. unicode-bidi is not inherited, so the rule names every box; :where() keeps it below the rules
+   above. start and end would then follow each line's text, so the mirrored start is set as the right, which the page
+   inherits, and a box that aligns to its start or end names the side; the source editor stays left aligned, as its code
+   runs left to right in either layout. Chrome computes match-parent as inherit, so it
+   cannot turn start into the right. */
+:root[data-mirror] {
+  text-align: right;
+}
+:where(:root[data-mirror] *) {
+  unicode-bidi: plaintext;
+}
+:root[data-mirror]
+  :is(
+    input,
+    textarea,
+    .rp-tree-tile,
+    .rp-table [role='columnheader'],
+    .rp-table [role='rowheader'],
+    .rp-table [role='gridcell'],
+    .rp-node,
+    .rp-search,
+    .rp-disclosure-trigger,
+    .rp-drill-back
+  ) {
+  text-align: right;
+}
+:root[data-mirror] :is(.rp-markerplot .row .value, .rp-donut .r .p, .cm-editor) {
+  text-align: left;
+}
+.rp-dae-comment {
+  color: var(--rp-code-comment);
+}
+.rp-dae-string {
+  color: var(--rp-code-string);
+}
+.rp-dae-keyword {
+  color: var(--rp-code-keyword);
+  font-weight: 700;
+}
+.rp-dae-number {
+  color: var(--rp-code-number);
+}
+.rp-dae-propertyName {
+  color: var(--rp-code-propertyName);
+}
+.rp-dae-variableName {
+  color: var(--rp-code-variableName);
+}
+.rp-dae-punctuation {
+  color: var(--rp-code-punctuation);
+}
+.rp-dae-operator {
+  color: var(--rp-code-operator);
+}
+.rp-kv {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  gap: var(--rp-space-3) var(--rp-space-4);
+}
+/* A phone card is too narrow for two 176px columns, so it splits in two while each half keeps 128px and stacks
+   only below that; the half is a pixel short so rounding cannot drop a column. */
+@media (max-width: 599.98px) {
+  .rp-kv {
+    grid-template-columns: repeat(auto-fill, minmax(max(128px, calc((100% - 17px) / 2)), 1fr));
+  }
+}
+/* A detail panel's fields (Kv's `detail`) in titled sections: a field a line, the labels in one column of at most
+   two fifths of the panel, each value beside its label and wrapping under itself. A value drawn as a tag or with a
+   button keeps its label's baseline. */
+.rp-kv-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-2) var(--rp-space-4);
+  min-width: 0;
+}
+/* Sections in KvSections share their label column through subgrids down to each field. */
+.rp-kv-sections {
+  display: grid;
+  grid-template-columns: fit-content(40%) minmax(0, 1fr);
+  gap: var(--rp-space-6) var(--rp-space-4);
+}
+.rp-kv-sections > .rp-kv-section {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+.rp-kv-sections > .rp-kv-section > * {
+  grid-column: 1 / -1;
+}
+.rp-kv-sections .rp-kv.detail {
+  grid-template-columns: subgrid;
+}
+.rp-kv-title {
+  margin: 0;
+  font-size: var(--rp-text-md);
+  line-height: var(--rp-line-body);
+  font-weight: 700;
+}
+.rp-kv.detail {
+  grid-template-columns: fit-content(40%) minmax(0, 1fr);
+  gap: var(--rp-space-2) var(--rp-space-4);
+  margin: 0;
+}
+.rp-kv.detail > div {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: first baseline;
+}
+.rp-kv.detail .v {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+/* A value drawn as a link tag still copies with its label: the tag stays unselectable to press, its name does not. */
+.rp-kv.detail .rp-tag-label {
+  user-select: text;
+}
+.rp-kv > div {
+  min-width: 0;
+}
+.rp-kv > .wide {
+  grid-column: 1 / -1;
+}
+.rp-kv .k,
+.rp-kv-label {
+  display: block;
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+  color: var(--rp-subtle);
+  font-weight: 400;
+}
+.rp-kv .k > .rp-truncate {
+  display: block;
+}
+.rp-kv .v {
+  display: block;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.rp-badge {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  flex: none;
+  height: 20px;
+  padding: 0 var(--rp-space-2);
+  border-radius: var(--rp-r-sm);
+  font-size: var(--rp-text-xs);
+  /* Flex centres the glyphs; a line box as tall as the badge would sit CJK glyphs below its middle. */
+  line-height: 1;
+  font-weight: 500;
+  border: 1px solid var(--rp-hl-high);
+  color: var(--rp-subtle);
+}
+/* The count on a menu button whose choices are in force. */
+.rp-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--rp-space-1h);
+  border-radius: var(--rp-r-pill);
+  background: var(--rp-accent);
+  color: var(--rp-on-accent);
+  font-size: var(--rp-text-xs);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.rp-badge.warn {
+  border-color: transparent;
+  background: var(--rp-notice);
+  color: var(--rp-on-notice);
+}
+.rp-badge.negative {
+  border-color: transparent;
+  background: var(--rp-negative);
+  color: var(--rp-on-negative);
+}
+/* S2's negative fill, with the accent button's hover, focus and press steps. */
+.rp-btn.negative {
+  background: var(--rp-negative);
+  color: var(--rp-on-negative);
+}
+.rp-btn.negative:is([data-hovered], [data-focus-visible]) {
+  background: color-mix(in srgb, var(--rp-negative) 86%, var(--rp-ink-mix));
+}
+.rp-btn.negative[data-pressed] {
+  background: color-mix(in srgb, var(--rp-negative) 76%, var(--rp-ink-mix));
+}
+/* A quiet negative button (ConfirmButton's trigger, whose dialog holds the filled one) stays outlined in the tone, with
+   S2's 2px outline and ActionButton geometry. The label reads --rp-negative-text; the border keeps the tone where that falls back to body text. */
+.rp-btn.negative.quiet {
+  background: transparent;
+  border-width: 2px;
+  border-color: var(--rp-negative);
+  color: var(--rp-negative-text);
+}
+.rp-btn.negative.quiet:is([data-hovered], [data-focus-visible]) {
+  background: color-mix(in srgb, var(--rp-negative) 12%, transparent);
+}
+.rp-btn.negative.quiet[data-pressed] {
+  background: color-mix(in srgb, var(--rp-negative) 20%, transparent);
+}
+
+/* S2's disabled look: a fill keeps the gray-100 fill, an outline keeps a gray-300 border, and the label takes gray-400
+   (the overlay, highlight med and muted here). */
+.rp-btn[data-disabled] {
+  cursor: default;
+  pointer-events: none;
+  color: var(--rp-muted);
+  background: var(--rp-overlay);
+  border-color: transparent;
+}
+.rp-btn.quiet[data-disabled] {
+  background: transparent;
+}
+.rp-btn:is(.secondary, .negative.quiet)[data-disabled] {
+  background: transparent;
+  border-color: var(--rp-hl-med);
+}
+.rp-btn[data-disabled] > svg {
+  opacity: 0.6;
+}
+/* A large group's scroll panel follows the same column rule (NodeGrid.tsx). 228px holds a flag and a long name such as
+   "土耳其 04 流媒體" beside a three-digit latency without cutting it. A short group keeps the empty columns, so tiles
+   line up across every group on the page. */
+.rp-nodes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 228px), 1fr));
+  gap: var(--rp-space-2);
+  padding-inline: var(--rp-space-2);
+}
+.rp-grow {
+  flex: 1;
+}
+/* Controls that a phone swaps for a more compact form: shown only at or above the side navigation's breakpoint, or
+   only below it. */
+.rp-wide-only {
+  display: none;
+}
+@media (min-width: 1024px) {
+  .rp-wide-only {
+    display: contents;
+  }
+  .rp-narrow-only {
+    display: none;
+  }
+}
+/* Settings geodata: labelled rows with controls wrapping beside the label. */
+.rp-ops {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  gap: var(--rp-space-3);
+}
+.rp-ops-group {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--rp-space-3);
+}
+.rp-geodata {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  gap: var(--rp-space-2);
+  margin-top: var(--rp-space-2);
+}
+/* Configuration keys wrap rather than widen a phone card. */
+.rp-geodata-from-config {
+  overflow-wrap: anywhere;
+}
+/* Settings geodata: a lite source's missing categories and a failed update take their tone's text colour. */
+.rp-geodata-note.notice {
+  color: var(--rp-notice-text);
+}
+.rp-geodata-note.negative {
+  color: var(--rp-negative-text);
+}
+/* One asset per line, wrapping, so its size, host and route read whole; the full URL is the tooltip. */
+.rp-geodata-details .rp-kv {
+  grid-template-columns: minmax(0, 1fr);
+}
+.rp-geodata-details .v {
+  white-space: normal;
+}
+/* The custom URL dialog's move up button: the down chevron turned over. */
+.rp-icon.rp-up {
+  rotate: 180deg;
+}
+/* On a phone the custom URL field takes its row alone, full width under the label; the move buttons wrap onto their
+   own row below it instead of squeezing the field down to a sliver beside them. */
+@media (max-width: 599.98px) {
+  .rp-url-field .rp-input {
+    min-width: 100%;
+  }
+}
+
+/* Configuration page: the diagnostics bar under the editor's toolbar, framed as the editor is and as wide. The whole
+   bar is the disclosure's trigger; the list opens inside the same frame and scrolls in a bounded height so the pinned
+   bar never fills the screen. With nothing to list, one quiet line keeps the bar's height. */
+.rp-config-diagnostics {
+  outline: none;
+  border: 1px solid var(--rp-hl-high);
+  border-radius: var(--rp-r-md);
+  background: var(--rp-base);
+}
+.rp-config-diagnostics > .rp-disclosure > h3 > .rp-disclosure-trigger,
+.rp-config-diagnostics-quiet {
+  min-height: calc(var(--rp-control) - 2px);
+}
+.rp-config-diagnostics > .rp-disclosure > h3 > .rp-disclosure-trigger {
+  height: auto;
+  /* One line of 20px badges sits centred in the bar's height. */
+  padding-block: calc((var(--rp-control) - 22px) / 2);
+  border: 0;
+  border-radius: calc(var(--rp-r-md) - 1px);
+  white-space: normal;
+  align-items: flex-start;
+}
+.rp-config-diagnostics > .rp-disclosure > h3 > .rp-disclosure-trigger[data-focus-visible] {
+  outline-offset: calc(-1 * var(--rp-focus-width));
+}
+.rp-config-diagnostics > .rp-disclosure[data-expanded] > h3 > .rp-disclosure-trigger {
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
+.rp-config-diagnostics-quiet {
+  display: flex;
+  align-items: center;
+  padding-inline: var(--rp-space-3);
+}
+/* The counts keep their line; what they were counted on wraps under them on a phone, the chevron staying on the first. */
+.rp-config-diagnostics-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rp-space-1) var(--rp-space-2);
+  min-width: 0;
+}
+.rp-config-diagnostics > .rp-disclosure > .rp-disclosure-panel > .rp-disclosure-content {
+  padding: 0;
+}
+/* The level filter opens the panel, above the rows it narrows. */
+.rp-config-diagnostic-filter {
+  display: flex;
+  padding: var(--rp-space-2) var(--rp-space-3);
+  border-top: 1px solid var(--rp-hl-low);
+}
+/* The rows under the bar, after the kit's labelled list: the message column fits its longest message so each row's
+   action sits just after it, in one column. Past about six rows the list scrolls; like the dialog body, it keeps its
+   scrollbar's gutter and clear of it. */
+.rp-config-diagnostic-list {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) max-content max-content;
+  column-gap: var(--rp-space-3);
+  max-height: 16.5rem;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-inline: var(--rp-space-3) var(--rp-space-2);
+  border-top: 1px solid var(--rp-hl-low);
+}
+/* A row: severity and message, the details toggle and the action on one centred line, the details under it. */
+.rp-config-diagnostic {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  padding-block: var(--rp-space-1);
+}
+.rp-config-diagnostic + .rp-config-diagnostic {
+  border-top: 1px solid var(--rp-hl-low);
+}
+.rp-config-diagnostic > .rp-light {
+  grid-area: 1 / 1;
+  white-space: normal;
+}
+.rp-config-diagnostic-go {
+  grid-area: 1 / 3;
+  justify-self: start;
+}
+/* A docs link on how to fix the row goes under the message and its details. */
+.rp-config-diagnostic > .rp-link {
+  grid-area: 3 / 1 / 4 / -1;
+  justify-self: start;
+}
+.rp-config-diagnostic .rp-disclosure,
+.rp-config-diagnostic .rp-disclosure > h3 {
+  display: contents;
+}
+.rp-config-diagnostic .rp-disclosure-trigger {
+  grid-area: 1 / 2;
+  height: auto;
+  padding-block: var(--rp-space-half);
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+}
+/* The backend's words open under the message, past the severity dot, and wrap in the row's width rather than
+   widening the columns. */
+.rp-config-diagnostic .rp-disclosure-panel {
+  grid-area: 2 / 1 / 3 / -1;
+  contain: inline-size;
+}
+.rp-config-diagnostic .rp-disclosure-content {
+  padding: var(--rp-space-1) 0 var(--rp-space-1) 18px;
+  color: var(--rp-subtle);
+  font-size: var(--rp-text-xs);
+  overflow-wrap: anywhere;
+}
+/* The group's basis decides whether the action buttons share its line. Inside it, the picker keeps the basename
+   and chevron together while the badge and facts wrap on phones when they no longer fit. */
+.rp-source-pick {
+  flex: 1 1 20rem;
+}
+.rp-source-pick > .rp-cluster {
+  flex-wrap: wrap;
+}
+.rp-source-pick .rp-label {
+  flex: none;
+  white-space: nowrap;
+}
+.rp-source-pick .rp-selectbtn,
+.rp-source-pick .rp-selectbtn > span {
+  display: flex;
+  min-width: 0;
+}
+.rp-source-pick .rp-selectbtn > svg,
+.rp-source-pick > :not(.rp-cluster) {
+  flex: none;
+}
+.rp-source-note {
+  min-height: 0;
+}
+
+/* The editor card lets its toolbar stick to the page: overflow: clip keeps the rounded corners without making the card
+   a scroll container, which would pin the toolbar to the card instead. */
+.rp-source-card {
+  overflow: clip;
+}
+.rp-kv.compact {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--rp-space-2);
+}
+.rp-kv.compact > div {
+  min-inline-size: 0;
+}
+.rp-kv.compact.row {
+  display: grid;
+  gap: var(--rp-space-2);
+}
+.rp-kv.compact.row > div {
+  justify-content: space-between;
+}
+.rp-page-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rp-space-3);
+  min-inline-size: 0;
+  min-block-size: var(--rp-control);
+}
+.rp-page-actions {
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-inline-size: 0;
+}
+.rp-page-actions > * {
+  flex: none;
+}

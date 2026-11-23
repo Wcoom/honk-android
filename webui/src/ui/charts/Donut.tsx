@@ -1,0 +1,83 @@
+import {useLayoutEffect, useState} from 'react';
+import {arc, pie} from 'd3-shape';
+import {useT} from '../../i18n';
+import {useContentSize} from '../hooks';
+import {ChartTip, useChartTip} from './tip';
+import {useSelection} from './interaction';
+import {donutAngles} from './layout';
+
+export function DonutPlot({label, rows}: {label: string; rows: Array<{name: string; value: number | null; text: string; color: string}>}) {
+  const t = useT();
+  const [ref, size] = useContentSize<HTMLDivElement>(Math.round, 120);
+  const {tip, showAt, hide} = useChartTip();
+  const [selected, setSelected] = useState<number | null>(null);
+  const data = rows.filter((row): row is typeof row & {value: number} => row.value !== null && row.value > 0);
+  const width = size?.width ?? 0;
+  const height = size?.height ?? 0;
+  const angles = donutAngles(data.map(row => row.value));
+  // Preserve Recharts' minimum angle for every nonzero slice, without sorting the legend order.
+  const sectors = pie<(typeof data)[number]>()
+    .sort(null)
+    .value((_, index) => angles[index])(data);
+  // The box sets the ring's size (see `.rp-donut .box`).
+  const radius = Math.min(width, height) / 2;
+  const ring = arc<(typeof sectors)[number]>()
+    .innerRadius(radius * (44 / 56))
+    .outerRadius(radius)
+    .digits(3);
+  const select = (index: number) => setSelected(index);
+  const clear = () => {
+    setSelected(null);
+    hide();
+  };
+  useLayoutEffect(() => {
+    const sector = selected === null ? undefined : sectors[selected];
+    if (!sector || selected === null) {
+      hide();
+      return;
+    }
+    const row = data[selected];
+    const [tx, ty] = ring.centroid(sector);
+    showAt({
+      x: Math.round((width / 2 + tx) * 10000) / 10000,
+      y: Math.round((height / 2 + ty) * 10000) / 10000,
+      width,
+      bounds: {x: 0, y: 0, width, height},
+      lines: [t('ui.valuePair', {label: row.name, value: t('ui.share', {bytes: row.text, percent: String(row.value)})})]
+    });
+  });
+  const selection = useSelection(data.length, select, clear);
+  return (
+    <div ref={ref} style={{height: '100%', width: '100%', position: 'relative'}} onPointerLeave={selection.onPointerLeave}>
+      <ChartTip tip={tip} />
+      {size && (
+        <svg
+          className="rp-activity-surface"
+          width={width}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          style={{display: 'block'}}
+          role={data.length ? 'application' : 'img'}
+          aria-label={label}
+          tabIndex={data.length ? 0 : undefined}
+          onFocus={data.length ? selection.onFocus : undefined}
+          onBlur={selection.onBlur}
+          onKeyDown={data.length ? selection.onKeyDown : undefined}
+        >
+          <g transform={`translate(${width / 2},${height / 2})`}>
+            {sectors.map((sector, index) => (
+              <path
+                key={data[index].name}
+                d={ring({...sector, endAngle: Math.min(sector.endAngle, sector.startAngle + (359.999 * Math.PI) / 180)}) ?? undefined}
+                fill={data[index].color}
+                stroke="none"
+                onPointerEnter={() => select(index)}
+                onPointerLeave={selection.onPointerLeave}
+              />
+            ))}
+          </g>
+        </svg>
+      )}
+    </div>
+  );
+}

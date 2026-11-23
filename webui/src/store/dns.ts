@@ -1,0 +1,228 @@
+import {useCallback} from 'react';
+import {MAX_PAGE, poll} from './cadence';
+import {getApi} from '../api/index';
+import type {Api} from '../api/api';
+import {ApiError, isSnapshotRefusal} from '../api/error';
+import type {Capabilities, DnsCacheList, DnsQueryResponse} from '../api/model';
+import {wait} from '../api/wait';
+import {pageSize, useResource, walk} from './resource';
+import {useAction} from './action';
+import {useCapabilities} from './runtime';
+import {offered} from '../api/capabilities';
+// honk's own default page: enough records for the statistics and the log's first screen, and a size one response
+// carries even when the answers are long.
+const DNS_LOG_PAGE = 100;
+export function dnsLogLimit(capabilities: Capabilities | undefined) {
+  const advertised = pageSize(capabilities, capabilities?.resources.dns_log.max_page_size);
+  return advertised === undefined ? undefined : Math.min(DNS_LOG_PAGE, advertised);
+}
+// honk before the short-page fix refuses a DNS page whose answers exceed its response budget with a 503 instead of
+// ending the page early, and the refusal repeats however long the client waits. After the wait it asks for, the page
+// is asked for once more at a quarter of the size. Resolves to the page and the limit that produced it.
+export async function smallerOnRefusal<Q extends {limit?: number}, P>(
+  fetch: (query: Q) => Promise<P>,
+  query: Q,
+  signal?: AbortSignal
+): Promise<{page: P; limit: number | undefined}> {
+  try {
+    return {page: await fetch(query), limit: query.limit};
+  } catch (error) {
+    const {limit} = query;
+    if (!isSnapshotRefusal(error) || limit === undefined || limit < 2) throw error;
+    await wait(error.retryAfter, signal);
+    const smaller = Math.ceil(limit / 4);
+    return {page: await fetch({...query, limit: smaller}), limit: smaller};
+  }
+}
+// The whole cache, summaries only, at one page size: a cursor sent with a different limit is refused. The backend
+// holds a bounded number of listing snapshots, and one that cannot fit answers 503 snapshot_unavailable at the head;
+// after the wait it asks for, the walk starts over once without a cursor. includeExpired stays the same on every page
+// of one walk, and is left out when off, the backend's default.
+export async function dnsCacheListing(api: Api, signal?: AbortSignal, includeExpired = false) {
+  const listing = () =>
+    walk(
+      cursor => api.dnsCache({cursor, limit: MAX_PAGE, detail: 'summary', ...(includeExpired && {include_expired: true})}, signal),
+      (acc: DnsCacheList | undefined, page) => {
+        if (!acc) return {...page, entries: [...page.entries]};
+        acc.entries.push(...page.entries);
+        return acc;
+      }
+    );
+  try {
+    return await listing();
+  } catch (error) {
+    if (!isSnapshotRefusal(error)) throw error;
+    await wait(error.retryAfter, signal);
+    return listing();
+  }
+}
+export function useDnsLog(query: {name?: string; type?: string; src?: string}, enabled = true, paused = false) {
+  const api = getApi();
+  const name = query.name?.trim() || undefined;
+  const type = query.type && query.type !== 'all' ? query.type : undefined;
+  const src = query.src?.trim() || undefined;
+  const capabilities = useCapabilities().data;
+  const limit = dnsLogLimit(capabilities);
+  const resource = useResource(
+    {
+      key: ['dnsLog', {name, type, src, limit}],
+      // The page keeps the limit it was served at, so what reads it compares against what was actually asked for.
+      fetch: async signal => {
+        const result = await smallerOnRefusal(query => api.dnsLog(query, signal), {name, type, src, limit}, signal);
+        return {...result.page, limit: result.limit};
+      }
+    },
+    {enabled, paused}
+  );
+  return {...resource, limit: resource.data ? resource.data.limit : limit};
+}
+// Every page of the listing repeats the whole cache's usage. The backend keeps a snapshot for each listing read, so
+// the usage card reuses a walk from the last minute rather than asking for a second snapshot.
+const walks = new WeakMap<Api, {at: number; list: DnsCacheList}>();
+// Counts flushes and deletions, so a walk that was already listing when one landed does not store its older usage.
+const changes = new WeakMap<Api, number>();
+export async function walkCache(api: Api, signal: AbortSignal, includeExpired = false) {
+  const change = changes.get(api) ?? 0;
+  const list = await dnsCacheListing(api, signal, includeExpired);
+  // A walk with expired entries counts more than the usage read would, so only the default walk stands in for it.
+  if (!includeExpired && (changes.get(api) ?? 0) === change) walks.set(api, {at: Date.now(), list: {...list, entries: []}});
+  return list;
+}
+// A flush or a deletion changes usage, so the next read asks again rather than reuse a walk from before it.
+const changed = (api: Api) => {
+  changes.set(api, (changes.get(api) ?? 0) + 1);
+  walks.delete(api);
+};
+export function flushCache(api: Api, signal: AbortSignal) {
+  return api.flushDnsCache(signal).finally(() => changed(api));
+}
+export function deleteCacheEntry(api: Api, id: string, signal: AbortSignal) {
+  return api.deleteDnsEntry(id, signal).finally(() => changed(api));
+}
+export function deleteCacheName(api: Api, query: Parameters<Api['deleteDnsCacheByName']>[0], signal: AbortSignal) {
+  return api.deleteDnsCacheByName(query, signal).finally(() => changed(api));
+}
+const DELETE_CONCURRENCY = 4;
+// Deletes the entries a few at a time; a DELETE is sent once, so a refusal counts as failed. A failed entry is counted
+// and the rest still go, so the result says how far it got. An entry that is already gone (404) is not a failure.
+export async function deleteCacheEntries(api: Api, ids: string[], signal: AbortSignal) {
+  let next = 0;
+  let deleted = 0;
+  let failed = 0;
+  const worker = async () => {
+    while (next < ids.length) {
+      signal.throwIfAborted();
+      try {
+        const result = await deleteCacheEntry(api, ids[next++], signal);
+        deleted += result.deleted;
+      } catch (error) {
+        signal.throwIfAborted();
+        if (!(error instanceof ApiError && error.status === 404)) failed++;
+      }
+    }
+  };
+  await Promise.all(Array.from({length: Math.min(DELETE_CONCURRENCY, ids.length)}, worker));
+  return {deleted, failed};
+}
+// Otherwise one entry is enough to read the usage and coverage.
+export function readCacheUsage(api: Api, signal: AbortSignal): Promise<DnsCacheList> {
+  const recent = walks.get(api);
+  if (recent && Date.now() - recent.at < poll.background) return Promise.resolve(recent.list);
+  return api.dnsCache({limit: 1, detail: 'summary'}, signal);
+}
+function useDnsCache(enabled = true, paused = false, includeExpired = false) {
+  const api = getApi();
+  return useResource(
+    {
+      key: ['dnsCache', {includeExpired}],
+      // The backend retains a snapshot per listing for its cursors and refuses a ninth within half a minute.
+      every: poll.lists,
+      // The cache table shows no answers, so the summary listing, which leaves them out, is enough.
+      fetch: signal => walkCache(api, signal, includeExpired)
+    },
+    {enabled, paused}
+  );
+}
+export function useDnsCacheUsage(enabled = true, paused = false) {
+  const api = getApi();
+  return useResource({key: ['dnsCache', {usage: true}], every: poll.background, fetch: signal => readCacheUsage(api, signal)}, {enabled, paused});
+}
+// Paused, the listing keeps what it last read and walks the cache again only once it is resumed.
+export function useDnsControl(paused = false, includeExpired = false) {
+  const api = getApi();
+  const capabilities = useCapabilities();
+  const resources = capabilities.data?.resources;
+  const cache = useDnsCache(offered(resources, 'dns_cache', {whileLoading: false}) && !!resources?.dns_cache.read, paused, includeExpired);
+  const {refetch} = cache;
+  const {busy, error, run, cancel} = useAction<string>({rethrow: true});
+  return {
+    capabilities,
+    cache,
+    busy,
+    error,
+    cancel,
+    remove: useCallback(
+      (id: string) =>
+        run(id, async signal => {
+          const value = await deleteCacheEntry(api, id, signal);
+          refetch();
+          return value;
+        }),
+      [api, run, refetch]
+    ),
+    removeName: useCallback(
+      (query: Parameters<Api['deleteDnsCacheByName']>[0]) =>
+        run('delete-match', async signal => {
+          const value = await deleteCacheName(api, query, signal);
+          refetch();
+          return value;
+        }),
+      [api, run, refetch]
+    ),
+    removeMany: useCallback(
+      (ids: string[]) =>
+        run('delete-match', async signal => {
+          // Read again even when the run was cut short, which may have deleted some.
+          try {
+            return await deleteCacheEntries(api, ids, signal);
+          } finally {
+            refetch();
+          }
+        }),
+      [api, run, refetch]
+    ),
+    flush: useCallback(
+      () =>
+        run('flush', async signal => {
+          const value = await flushCache(api, signal);
+          refetch();
+          return value;
+        }),
+      [api, run, refetch]
+    )
+  };
+}
+
+export async function queryTypes(
+  query: Api['dnsQuery'],
+  domain: string,
+  types: string[],
+  limit: number,
+  signal: AbortSignal,
+  cacheMode: DnsQueryResponse['cache_mode'] = 'normal',
+  upstream?: string
+): Promise<DnsQueryResponse> {
+  const size = Math.max(1, Math.floor(limit));
+  let response: DnsQueryResponse | undefined;
+  for (let start = 0; start < types.length; start += size) {
+    signal.throwIfAborted();
+    const batch = types.slice(start, start + size);
+    // Transient refusals are waited out by the client itself; this only batches record types.
+    const part = await query(domain, batch, signal, cacheMode, upstream);
+    signal.throwIfAborted();
+    if (response) response.results.push(...part.results);
+    else response = {...part, results: [...part.results]};
+  }
+  if (!response) throw new Error('DNS query requires at least one record type');
+  return response;
+}

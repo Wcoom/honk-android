@@ -1,0 +1,69 @@
+import {afterEach, expect, it} from 'vitest';
+import {createServerClock, selectServerClock} from '../../api/serverClock';
+import {historyTrafficSamples, isTrafficRange, kernelTrafficUncounted, trafficRanges, trafficWindow} from '../shared/traffic';
+import type {Runtime} from '../../api/model';
+
+afterEach(() => selectServerClock(createServerClock()));
+
+it('places the live window on the host clock, so a lagging host still charts', () => {
+  const host = Date.now() - 600_000;
+  const clock = createServerClock();
+  clock.note(new Date(host).toISOString());
+  selectServerClock(clock);
+  const samples = [5, 4, 3].map(back => ({time: host - back * 1000, up: 1, down: 1, connections: 1}));
+  const series = trafficWindow({fine: [], coarse: []}, samples, 120);
+  expect(series.timestamps).toEqual(samples.map(s => s.time));
+});
+
+it('maps a history ring to samples in KB/s and keeps unknown rates null', () => {
+  expect(
+    historyTrafficSamples({
+      observed_at: '2026-08-15T10:00:00Z',
+      window_seconds: 10,
+      sampled_every_seconds: 5,
+      samples: [
+        {sampled_at: '2026-08-15T09:59:55Z', upload_bytes_per_second: '2000', download_bytes_per_second: '512000', connections: 12},
+        {sampled_at: '2026-08-15T10:00:00Z', upload_bytes_per_second: '1000', download_bytes_per_second: null, connections: null}
+      ]
+    })
+  ).toEqual([
+    {time: Date.parse('2026-08-15T09:59:55Z'), up: 2, down: 512, connections: 12},
+    {time: Date.parse('2026-08-15T10:00:00Z'), up: 1, down: null, connections: null}
+  ]);
+});
+
+it('keeps malformed rates unknown rather than converting them to zero', () => {
+  expect(
+    historyTrafficSamples({
+      observed_at: '2026-08-15T10:00:00Z',
+      window_seconds: 5,
+      sampled_every_seconds: 5,
+      samples: [{sampled_at: '2026-08-15T10:00:00Z', upload_bytes_per_second: 'broken', download_bytes_per_second: '0', connections: 0}]
+    })
+  ).toEqual([{time: Date.parse('2026-08-15T10:00:00Z'), up: null, down: 0, connections: 0}]);
+});
+
+it('offers each traffic range once, shortest first, and nothing outside the table', () => {
+  expect(Object.keys(trafficRanges)).toEqual(['live', 'm10', 'h1', 'h6', 'h24', 'd7']);
+  const seconds = Object.values(trafficRanges).map(range => range.seconds);
+  expect(seconds).toEqual([...seconds].sort((a, b) => a - b));
+  expect(isTrafficRange('h6')).toBe(true);
+  expect(isTrafficRange('h2')).toBe(false);
+  expect(isTrafficRange('toString')).toBe(false);
+});
+
+it.each([
+  ['userspace', 'ebpf', true],
+  ['mixed', 'ebpf', false],
+  ['ebpf', 'ebpf', false],
+  ['userspace', 'userspace', false],
+  ['userspace', 'mock', false],
+  ['userspace', 'unknown', false]
+] as const)('traffic observed by %s on a %s datapath leaves out kernel-forwarded bytes: %s', (observed, kind, uncounted) => {
+  const runtime = {datapath: {kind}, traffic: {observed_by: observed}} as Pick<Runtime, 'datapath' | 'traffic'>;
+  expect(kernelTrafficUncounted(runtime)).toBe(uncounted);
+});
+
+it('says nothing about uncounted traffic before the runtime is read', () => {
+  expect(kernelTrafficUncounted(undefined)).toBe(false);
+});

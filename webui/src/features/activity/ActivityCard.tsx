@@ -1,0 +1,287 @@
+import {useContext} from 'react';
+import {DeferredChart, DeferredLoading} from './DeferredLoading';
+import Download from '../../ui/icons/Download';
+import Upload from '../../ui/icons/Upload';
+import LinkIcon from '../../ui/icons/Link';
+import Cpu from '../../ui/icons/Cpu';
+import Memory from '../../ui/icons/Memory';
+import {useT} from '../../i18n';
+import {
+  Card,
+  CardLink,
+  ContextualHelp,
+  Segmented,
+  Light,
+  ErrorMessage,
+  Empty,
+  Link,
+  ChartWait,
+  SkeletonBar,
+  SkeletonGroup,
+  TextTooltip,
+  ValueTile
+} from '../../ui/ui';
+import {WideCell} from '../../ui/DashboardTile';
+import {href} from '../../shell/route';
+import {SettingsContext} from '../../shell/preferences';
+import {AreaChart, FactStrip, Legend, Spark} from '../../ui/charts';
+import {ModeCards} from './ModeSwitch';
+import {useMode} from '../shared/useMode';
+import {seriesFacts} from '../shared/widgetSeries';
+import {useNotices} from './useNotices';
+import {Notices} from './Notices';
+import {useActivity} from './useActivity';
+import {NodeCard} from './NodeCard';
+import {OutboundsCard} from './OutboundsCard';
+import {RankingCard} from './RankingCard';
+import {useRankingCard} from './useRankingCard';
+
+export function ActivityCard({
+  item,
+  selection,
+  ranking
+}: {
+  item: {id: string; form?: string; rows?: number; width?: string};
+  ranking?: {by: string; setBy: (by: string) => void};
+  selection?: {chosen: string; setChosen: (id: string) => void};
+}) {
+  // A value tile two thirds of a row or wider, by the box packing measured (data-wide), lists its sparkline's peak and
+  // average (see dashboard.css). An area chart marks them on its plot and says them in its tip.
+  const stats = useContext(WideCell);
+  switch (item.id) {
+    case 'mode':
+      return <ModeModule part="mode" />;
+    case 'global':
+      return <ModeModule part="global" />;
+    case 'latency':
+      return <NodeCard connections={undefined} selection={selection} stats={stats} />;
+    case 'ranking':
+      return <RankingModule selection={ranking} limit={item.rows} />;
+    case 'notices':
+      return <NoticesModule />;
+    case 'outbounds':
+      return <OutboundsCard />;
+    case 'download':
+    case 'upload':
+    case 'connections':
+    case 'cpu':
+    case 'history':
+    case 'status':
+      return <MetricModule kind={item.id} stats={stats} />;
+    // Memory's sparkline form is a value tile like download's; its area form is the chart card.
+    case 'memory':
+      return <MetricModule kind={item.form === 'sparkline' ? 'memoryTile' : 'memory'} stats={stats} />;
+    default:
+      return null;
+  }
+}
+function ModeModule({part}: {part: 'mode' | 'global'}) {
+  return <ModeCards model={useMode()} part={part} />;
+}
+
+function RankingModule({selection, limit}: {selection?: {by: string; setBy: (by: string) => void}; limit?: number}) {
+  return <RankingCard model={useRankingCard(true, selection, limit)} />;
+}
+function NoticesModule() {
+  return <Notices {...useNotices()} />;
+}
+// The status card carries the runtime read's error; without it, the dashboard shows the same error and retry above
+// the cards that read runtime.
+export function RuntimeAlert() {
+  const vm = useActivity('status');
+  return vm.error ? <ErrorMessage error={vm.error} onRetry={vm.retry} /> : null;
+}
+// An area chart takes its height from the chart token, times the card's height step, which the card's skeleton
+// repeats (dashboard.css); the plots take any height its row gives the card beyond it. Traffic stacks a plot for
+// download over one for upload, whose rates often lie ten times apart; memory's two measures share one scale and one
+// plot.
+function MetricModule({kind, stats: wide}: {kind: Parameters<typeof useActivity>[0] | 'memoryTile'; stats: boolean}) {
+  const t = useT();
+  const vm = useActivity(kind === 'memoryTile' ? 'memory' : kind);
+  const limitNotice = useContext(SettingsContext)?.ap.limitNotice ?? true;
+  const {p, locale, range, ranges, setRange, traffic, spark, sparklines, cpuSpark, chartRate, count, cpuText, memorySeries, memoryBytes} = vm;
+  const big = vm.stale ? 'rp-big rp-muted' : 'rp-big';
+  const alert = kind === 'status' && vm.error && <ErrorMessage error={vm.error} onRetry={vm.retry} />;
+  const stats = (label: string, values: (number | null)[], fmt: (value: number) => string) =>
+    wide && <FactStrip facts={seriesFacts([{label, values}], fmt, t)} />;
+  if (!vm.ready) return alert || (vm.discoveryFailed ? null : <DeferredLoading />);
+  let content;
+  switch (kind) {
+    case 'status':
+      content = (
+        <Card className="rp-control-card">
+          <div className="rp-row">
+            {/* The first read draws the state and the link as bars about as wide as their usual text. */}
+            {vm.statusLoading ? (
+              <SkeletonGroup>
+                <SkeletonBar line="body" width={88} />
+                <div className="rp-control-tail">
+                  <SkeletonBar line="body" width={112} />
+                </div>
+              </SkeletonGroup>
+            ) : (
+              <>
+                <Light tone={vm.status.tone}>{vm.status.text}</Light>
+                <div className="rp-control-tail">
+                  <Link appearance="button" quiet href={href('overview', limitNotice && vm.limited ? {card: 'limits'} : {})}>
+                    <TextTooltip>{(limitNotice && vm.limited) || t('act.viewDetails')}</TextTooltip>
+                  </Link>
+                </div>
+              </>
+            )}
+          </div>
+        </Card>
+      );
+      break;
+    case 'download':
+      content = (
+        <CardLink href={href('connections', {tab: 'traffic'})} label={t('ui.download')} tile={{icon: <Download />, tint: 1}}>
+          <ValueTile
+            value={<span className={big}>{vm.download}</span>}
+            spark={sparklines && <Spark values={spark.down} timestamps={spark.timestamps} color={p.cat[0]} floor={100} fmt={chartRate} locale={locale} />}
+            facts={stats(t('ui.download'), spark.down, chartRate)}
+          />
+        </CardLink>
+      );
+      break;
+    case 'upload':
+      content = (
+        <CardLink href={href('connections', {tab: 'traffic'})} label={t('ui.upload')} tile={{icon: <Upload />, tint: 4}}>
+          <ValueTile
+            value={<span className={big}>{vm.upload}</span>}
+            spark={sparklines && <Spark values={spark.up} timestamps={spark.timestamps} color={p.cat[3]} floor={100} fmt={chartRate} locale={locale} />}
+            facts={stats(t('ui.upload'), spark.up, chartRate)}
+          />
+        </CardLink>
+      );
+      break;
+    case 'connections':
+      content = (
+        <CardLink href={href('connections', {tab: 'list'})} label={t('act.active')} tile={{icon: <LinkIcon />, tint: 3}}>
+          <ValueTile
+            value={<span className={big}>{vm.connections}</span>}
+            spark={sparklines && <Spark values={spark.connections} timestamps={spark.timestamps} color={p.cat[2]} fmt={count} locale={locale} />}
+            facts={stats(t('act.active'), spark.connections, count)}
+          />
+        </CardLink>
+      );
+      break;
+    case 'cpu':
+      content = (
+        <Card title={t('act.cpu')} tile={{icon: <Cpu />, tint: 2, kind: 'metric'}} aside={<ContextualHelp {...vm.cpuHelp} />}>
+          <ValueTile
+            // The value opens the overview, where the engine's process figures sit.
+            value={
+              <Link appearance="link" href={href('overview')} label={t('ui.valuePair', {label: t('act.cpu'), value: vm.cpu})}>
+                <span className={big}>{vm.cpu}</span>
+              </Link>
+            }
+            // Percent of one core: the line keeps a 0 to 100 scale and grows only past one busy core.
+            spark={sparklines && <Spark values={cpuSpark.values} timestamps={cpuSpark.timestamps} color={p.cat[1]} floor={100} fmt={cpuText} locale={locale} />}
+            facts={stats(t('act.cpu'), cpuSpark.values, cpuText)}
+          />
+        </Card>
+      );
+      break;
+    case 'history':
+      content = (
+        <Card
+          title={t('act.traffic')}
+          help={vm.trafficUncounted ? {title: t('act.traffic'), text: t('ui.trafficUncounted')} : undefined}
+          aside={<Segmented label={t('act.historyRange')} value={range} onChange={setRange} items={ranges} />}
+        >
+          {vm.history.error && vm.history.state !== 'ready' ? (
+            <ErrorMessage error={vm.history.error} onRetry={vm.history.retry} />
+          ) : vm.history.state === 'unavailable' ? (
+            <ChartWait holds="tall">
+              <Empty>{t('act.noHistory')}</Empty>
+            </ChartWait>
+          ) : vm.history.state === 'loading' ? (
+            // The legend's line and the chart's height, as the loaded body draws them.
+            <DeferredChart parts={[{line: 'body'}, {line: 'chart-stacked'}]} />
+          ) : vm.history.state === 'empty' ? (
+            <ChartWait holds="tall">
+              <Empty>{t('act.emptyHistory')}</Empty>
+            </ChartWait>
+          ) : (
+            <AreaChart
+              legend={<Legend series={traffic} fmt={chartRate} />}
+              label={t('act.traffic')}
+              series={traffic}
+              timestamps={vm.trafficTimestamps}
+              fmt={chartRate}
+              locale={locale}
+              fill
+              split
+              window={vm.trafficBounds}
+            />
+          )}
+        </Card>
+      );
+      break;
+    case 'memoryTile':
+      content = (
+        <Card title={t('act.memory')} tile={{icon: <Memory />, tint: 5, kind: 'metric'}}>
+          {vm.memoryState.error ? (
+            <ErrorMessage error={vm.memoryState.error} onRetry={vm.memoryState.retry} />
+          ) : (
+            <ValueTile
+              // The value opens the overview, where the cgroup's limit and events sit.
+              value={
+                <Link appearance="link" href={href('overview')} label={t('ui.valuePair', {label: t('act.memory'), value: vm.memoryValue})}>
+                  <span className={big}>{vm.memoryValue}</span>
+                </Link>
+              }
+              spark={
+                sparklines && (
+                  <Spark values={vm.memoryLine.values} timestamps={vm.memoryTimestamps} color={vm.memoryLine.color} fmt={memoryBytes} locale={locale} />
+                )
+              }
+              facts={stats(vm.memoryLine.label, vm.memoryLine.values, memoryBytes)}
+            />
+          )}
+        </Card>
+      );
+      break;
+    case 'memory':
+      content = (
+        <Card
+          title={t('act.memory')}
+          aside={
+            <Link appearance="button" quiet small href={href('overview')}>
+              {t('act.viewDetails')}
+            </Link>
+          }
+        >
+          {vm.memoryState.error ? (
+            <ErrorMessage error={vm.memoryState.error} onRetry={vm.memoryState.retry} />
+          ) : vm.memoryState.state === 'ready' ? (
+            <AreaChart
+              legend={<Legend series={memorySeries} fmt={memoryBytes} />}
+              label={t('act.memory')}
+              series={memorySeries}
+              timestamps={vm.memoryTimestamps}
+              fmt={memoryBytes}
+              locale={locale}
+              fill
+              baseline="auto"
+              window={vm.memoryBounds}
+            />
+          ) : vm.memoryState.state === 'unavailable' ? (
+            <Empty>{t('act.noHistory')}</Empty>
+          ) : (
+            <ChartWait>
+              <DeferredLoading shape="block" label={t('act.sampling')} />
+            </ChartWait>
+          )}
+        </Card>
+      );
+      break;
+  }
+  return (
+    <>
+      {alert}
+      {content}
+    </>
+  );
+}

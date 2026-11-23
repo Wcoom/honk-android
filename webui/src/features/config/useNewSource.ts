@@ -1,0 +1,77 @@
+import {useMemo, useState} from 'react';
+import {useT} from '../../i18n';
+import type {ConfigSource} from '../../api/model';
+import {failureNotice, noticeText} from '../../api/error';
+import {useConfigCreate} from '../../store';
+import {toast, toastFailure, type Problem} from '../../ui/ui';
+import {useDialogSession} from '../../shell/draft';
+import {includeCheck, includeDirectory, includePatterns, namePatterns, newSourceNameProblem, newSourcePathProblem} from '../../dae/newSource';
+
+export type NewSourceProps = {
+  sources: ConfigSource[];
+  refetch: () => void;
+  open: (sourceId: string) => void;
+};
+
+export function useNewSource({sources, refetch, open}: NewSourceProps) {
+  const t = useT();
+  const main = sources.find(source => source.kind === 'main');
+  const patterns = useMemo(() => (main ? includePatterns(main.content) : null), [main]);
+  // With a pattern to fill, the field holds only the name its `*` stands for; without one, the whole relative path.
+  const choices = useMemo(() => namePatterns(patterns ?? []), [patterns]);
+  const loads = useMemo(() => includeCheck(sources), [sources]);
+  // null while the dialog is closed.
+  const [draft, setDraft] = useState<{text: string; pattern: string} | null>(null);
+  // Why the last submit did not land; `id` changes with each refusal so the alert takes focus again. A neutral `kind`
+  // is an outcome that could not be confirmed, which is no refusal.
+  const [problem, setProblem] = useState<Problem | null>(null);
+  const {busy, create} = useConfigCreate(refetch);
+  const session = useDialogSession();
+  const text = draft?.text ?? '';
+  const choice = choices.find(item => item.pattern === draft?.pattern) ?? null;
+  const value = choice ? choice.prefix + text + choice.suffix : text;
+  const invalid = !text ? null : choice ? newSourceNameProblem(text, choice) : newSourcePathProblem(text);
+  const submit = async (close: () => void) => {
+    if (!text || invalid || busy) return;
+    // The dialog can close while the create is pending; its outcome then leaves any dialog opened since alone.
+    const current = session.start();
+    try {
+      const created = await create(value);
+      if (!created) return;
+      toast('positive', t('config.newSourceCreated', {path: value}));
+      if (!current()) return;
+      close();
+      if (created.id) open(created.id);
+    } catch (error) {
+      const summary = t('config.newSourceFailed', {path: value});
+      if (current()) {
+        const notice = failureNotice(error, t, summary);
+        setProblem(prev => ({id: (prev?.id ?? 0) + 1, text: noticeText(notice, t), kind: notice.kind}));
+      } else toastFailure(error, t, summary);
+    }
+  };
+  return {
+    isOpen: draft !== null,
+    show: () => {
+      session.next();
+      setProblem(null);
+      setDraft({text: choices.length ? '' : includeDirectory(patterns ?? []), pattern: choices[0]?.pattern ?? ''});
+    },
+    hide: () => {
+      session.next();
+      setDraft(null);
+    },
+    choices,
+    choice,
+    setChoice: (pattern: string) => setDraft(prev => prev && {...prev, pattern}),
+    text,
+    setText: (next: string) => setDraft(prev => prev && {...prev, text: next}),
+    error: invalid ? t(invalid) : undefined,
+    // Only the known patterns of every loaded file can say a path is not loaded; the backend refuses it either way.
+    unmatched: !!text && !invalid && loads !== null && !loads(value),
+    problem,
+    busy,
+    canSubmit: !!text && !invalid && !busy,
+    submit
+  };
+}

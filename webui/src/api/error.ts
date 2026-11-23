@@ -1,0 +1,314 @@
+import type {ErrorResponse} from './model';
+
+import type {Key} from '../i18n';
+import type {Params, Translator} from '../i18n/index';
+import {backendMessage, oneLine, refusalMessage, type BackendMessage} from '../i18n/backend';
+
+export class ApiError extends Error {
+  configurationWrite = false;
+  // The request that failed and the response headers that explain it, for a bug report: the path only, never the query,
+  // which can carry a token from a redirect or a filter that says what someone looked up.
+  request: {method: string; path: string} | null = null;
+  headers: Record<string, string> | null = null;
+  // A read that failed again on its one retry says so.
+  attempts = 1;
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+    public requestId: string | null = null,
+    public details: unknown = null,
+    // Seconds the backend asked to wait before trying again, when it said so.
+    public retryAfter: number | null = null,
+    // Set when doona raised the error itself, so the text shown is translated rather than the English message.
+    public text: {key: Key; params?: Params} | null = null
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+  // A 503 or 429 with a Retry-After is the backend saying not now, not no: a poll waits it out before it
+  // counts as a failure. A bare 503 is a proxy with nothing behind it, and shows at once.
+  get transient() {
+    return (this.status === 503 || this.status === 429) && this.retryAfter !== null;
+  }
+}
+
+// The seconds a response's Retry-After asks for, or null when it is absent or not a positive number.
+export const parseRetryAfter = (response: Response): number | null => {
+  const seconds = Number(response.headers.get('Retry-After'));
+  return seconds > 0 ? seconds : null;
+};
+
+// A 503 snapshot_unavailable with a Retry-After: the backend cannot hold the listing snapshot now, and asks for a wait
+// before the listing is asked for again. The same refusal without a Retry-After is not retried.
+export const isSnapshotRefusal = (error: unknown): error is ApiError & {retryAfter: number} =>
+  error instanceof ApiError && error.status === 503 && error.code === 'snapshot_unavailable' && error.retryAfter !== null;
+
+export async function responseError(response: Response, method = 'GET'): Promise<ApiError> {
+  const body: Partial<ErrorResponse> | null = await response.json().catch(() => null);
+  const error = new ApiError(
+    response.status,
+    body?.error?.code ?? '',
+    body?.error?.message ?? (response.statusText || `HTTP ${response.status}`),
+    body?.request_id ?? null,
+    body?.error?.details ?? null,
+    parseRetryAfter(response)
+  );
+  return response.url ? describe(error, method, response.url, response) : error;
+}
+
+const REPORTED_HEADERS = ['Content-Type', 'Content-Length', 'Transfer-Encoding', 'Content-Encoding', 'Server'];
+// Names the failed request on an error, and the response headers that say what came back when there was a response.
+export function describe(error: ApiError, method: string, url: string, response?: Response): ApiError {
+  error.request = {method: method.toUpperCase(), path: new URL(url, globalThis.location?.href).pathname};
+  if (response) error.headers = Object.fromEntries(REPORTED_HEADERS.flatMap(name => (response.headers.has(name) ? [[name, response.headers.get(name)!]] : [])));
+  return error;
+}
+
+// A contract failure detected by doona: it keeps the status and code callers branch on, and a translated text.
+export const clientError = (status: number, code: string, message: string, key: Key, params?: Params) =>
+  new ApiError(status, code, message, null, null, null, {key, params});
+const networkError = (error: TypeError) => clientError(0, 'network_error', error.message, 'ui.errNetwork');
+
+// A backend that accepts the connection and never answers would leave the request, and every consumer sharing it,
+// waiting forever. A write gets longer, since the backend may be applying it. The limit runs until the headers arrive
+// and then between chunks of the body, so a large body arriving steadily is not cut off, only one that stalls.
+const READ_DEADLINE_MS = 15000;
+const WRITE_DEADLINE_MS = 30000;
+
+// The caller's signals and the deadline as one. AbortSignal.any lets the browser drop them once all are gone; the
+// fallback forwards through listeners, which release removes once the request is over.
+function either(signals: AbortSignal[]): {signal: AbortSignal; release: () => void} {
+  if (typeof AbortSignal.any === 'function') return {signal: AbortSignal.any(signals), release: () => {}};
+  const all = new AbortController();
+  const aborted = signals.find(signal => signal.aborted);
+  if (aborted) {
+    all.abort(aborted.reason);
+    return {signal: all.signal, release: () => {}};
+  }
+  const forward = (event: Event) => all.abort((event.target as AbortSignal).reason);
+  for (const signal of signals) signal.addEventListener('abort', forward, {once: true});
+  return {signal: all.signal, release: () => signals.forEach(signal => signal.removeEventListener('abort', forward))};
+}
+
+// One request's deadline: `arm` starts the limit over, `join` adds one attempt's own signal to it, and `over` stops it
+// and releases the caller's signal and every attempt's once the request has finished, failed or been cancelled.
+type Deadline = {signal: AbortSignal; arm: () => void; join: (own: AbortSignal | undefined) => AbortSignal; over: () => void};
+function deadlineFor(callers: AbortSignal[], limit: number, timeout: ApiError): Deadline {
+  const controller = new AbortController();
+  const joined = callers.length ? either([...callers, controller.signal]) : {signal: controller.signal, release: () => {}};
+  const releases = [joined.release];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(timeout), limit);
+  };
+  arm();
+  return {
+    signal: joined.signal,
+    arm,
+    join: own => {
+      if (!own) return joined.signal;
+      const attempt = either([joined.signal, own]);
+      releases.push(attempt.release);
+      return attempt.signal;
+    },
+    over: () => {
+      clearTimeout(timer);
+      releases.forEach(release => release());
+    }
+  };
+}
+
+// The body is read after send has returned, and some engines error the stream with a plain AbortError rather than the
+// abort reason. A read that fails once the deadline has passed fails with the timeout error; a caller abort keeps its
+// own error, and a connection dropped mid-body fails as a network failure; the timeout and the network failure name the
+// request and the headers that came. A body-less response has nothing to stall and passes as it is, and so does a
+// no-content status, which Chromium gives an empty stream but a Response cannot be built with. A body nobody reads keeps the deadline, which
+// then frees the connection. The rebuilt response keeps the original's url, type and redirect flag.
+export const NO_CONTENT = new Set([204, 205, 304]);
+function bodyWithin(response: Response, caller: AbortSignal | null, deadline: Deadline, timeout: ApiError, method: string, url: string): Response {
+  if (!response.body || NO_CONTENT.has(response.status)) {
+    deadline.over();
+    return response;
+  }
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const {done, value} = await reader.read();
+        if (done) {
+          deadline.over();
+          controller.close();
+        } else {
+          deadline.arm();
+          controller.enqueue(value);
+        }
+      } catch (error) {
+        deadline.over();
+        if (caller?.aborted || !(deadline.signal.aborted || error instanceof TypeError)) controller.error(error);
+        else controller.error(describe(deadline.signal.aborted ? timeout : networkError(error as TypeError), method, url, response));
+      }
+    },
+    cancel: reason => {
+      deadline.over();
+      return reader.cancel(reason);
+    }
+  });
+  const rebuilt = new Response(body, {status: response.status, statusText: response.statusText, headers: response.headers});
+  for (const key of ['url', 'type', 'redirected'] as const) Object.defineProperty(rebuilt, key, {value: response[key]});
+  return rebuilt;
+}
+
+// A reload or navigation that cuts a fetch off before its response makes WebKit log it as an access-control failure.
+// On beforeunload every GET still waiting for its headers is cancelled instead; a write is never cancelled, since it
+// may already be applying. The page may stay, when a draft's leave prompt is declined, so the cancelled reads, and
+// any read started meanwhile, wait and are sent again once the page has stayed: at once when a prompt was asked for,
+// after a grace period otherwise, which a page that does unload never reaches. Callers see no failure either way.
+const LEAVE_GRACE_MS = 3000;
+const leaving = new Set<AbortController>();
+let stayed: {promise: Promise<void>; resume: () => void} | null = null;
+export function leavePage(event: Event) {
+  for (const controller of leaving) controller.abort(new DOMException('The page is being left', 'AbortError'));
+  leaving.clear();
+  if (!stayed) {
+    let resume!: () => void;
+    const promise = new Promise<void>(resolve => (resume = resolve));
+    stayed = {promise, resume};
+  }
+  const current = stayed;
+  const resume = () => {
+    if (stayed !== current) return;
+    stayed = null;
+    current.resume();
+  };
+  // Decided once the dispatch is over, so a prompt asked for by a listener that runs after this one counts.
+  setTimeout(() => {
+    if (event.defaultPrevented) resume();
+    else setTimeout(resume, LEAVE_GRACE_MS);
+  });
+}
+if (typeof window !== 'undefined') window.addEventListener('beforeunload', leavePage);
+// Waits for the page to have stayed; the caller's cancel and the deadline still end the wait.
+const stay = (resumed: Promise<void>, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const cancel = () => reject(signal.reason);
+    signal.addEventListener('abort', cancel, {once: true});
+    void resumed.then(() => {
+      signal.removeEventListener('abort', cancel);
+      resolve();
+    });
+  });
+
+// A request that gets no response at all fails with the browser's own words ("Failed to fetch", "Load failed"); it is
+// reported as a network failure in the page language instead. A cancelled request keeps its AbortError. A stalled
+// body read fails with the timeout error as well. A write that timed out may still have been applied, and its text
+// says so.
+export async function send(input: RequestInfo | URL, init?: RequestInit, write?: boolean, deadlineMs?: number): Promise<Response> {
+  const signal = init?.signal ?? (input instanceof Request ? input.signal : null);
+  const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+  const read = method === 'GET';
+  const writes = write ?? (method !== 'GET' && method !== 'HEAD');
+  const limit = deadlineMs ?? (writes ? WRITE_DEADLINE_MS : READ_DEADLINE_MS);
+  const timeout = clientError(0, 'timeout', `No response within ${limit / 1000} seconds`, writes ? 'ui.errTimeoutWrite' : 'ui.errTimeout', {
+    seconds: limit / 1000
+  });
+  // One deadline for the headers across every send of a read, running while it waits for the page to stay.
+  const deadline = deadlineFor(signal ? [signal] : [], limit, timeout);
+  const url = input instanceof Request ? input.url : String(input);
+  try {
+    for (;;) {
+      while (read && stayed) await stay(stayed.promise, deadline.signal);
+      const leave = read ? new AbortController() : null;
+      if (leave) leaving.add(leave);
+      try {
+        const response = await fetch(input, {...init, signal: deadline.join(leave?.signal)});
+        // The headers are in; from here the limit runs between chunks of the body.
+        deadline.arm();
+        return bodyWithin(response, signal, deadline, timeout, method, url);
+      } catch (error) {
+        // A read cancelled by a page leave is sent again once the page stays, unless the deadline has passed.
+        if (!leave?.signal.aborted || deadline.signal.aborted) throw error;
+      } finally {
+        if (leave) leaving.delete(leave);
+      }
+    }
+  } catch (error) {
+    deadline.over();
+    if (signal?.aborted) throw error;
+    if (deadline.signal.aborted) throw describe(timeout, method, url);
+    if (error instanceof TypeError) throw describe(networkError(error), method, url);
+    throw error;
+  }
+}
+
+// The operation a failure belongs to, with the last status doona saw.
+export type OperationRef = {id: string; kind: string; status: string};
+
+// Local failures carry a message key; detail, code and details preserve the backend's error.
+export class LocalError extends Error {
+  operation: OperationRef | null = null;
+  constructor(
+    public key: Key,
+    public detail: string | null = null,
+    public code: string | null = null,
+    public details: unknown = null
+  ) {
+    super(key);
+    this.name = 'LocalError';
+  }
+}
+
+// The backend's part of a local failure, in its words when it sent a known code.
+const localDetail = (error: LocalError, t: Translator) =>
+  error.detail ? (error.code ? oneLine(backendMessage(error.code, error.detail, t, error.details), t) : error.detail) : undefined;
+
+// Local failures use the page language; backend refusals name the recovery or keep the backend's message.
+export function errorLines(error: unknown, t: Translator, showRequestId = true): BackendMessage {
+  if (error instanceof LocalError) {
+    const refusal = error.key === 'ui.operationFailed' && error.code ? refusalMessage(error.details, t) : undefined;
+    if (refusal) return {summary: refusal};
+    const detail = localDetail(error, t);
+    return {summary: detail ? t('ui.valuePair', {label: t(error.key), value: detail}) : t(error.key)};
+  }
+  if (error instanceof ApiError && error.text) return {summary: t(error.text.key, error.text.params)};
+  if (!(error instanceof ApiError)) return {summary: error instanceof Error ? error.message : String(error)};
+  const {summary, detail} = backendMessage(error.code, error.message, t, error.details, error.configurationWrite);
+  const note = showRequestId && error.requestId ? t('ui.requestNote', {requestId: error.requestId}) : '';
+  return detail ? {summary, detail: detail + note} : {summary: summary + note};
+}
+
+// The same words on one line.
+export const errorText = (error: unknown, t: Translator, showRequestId = true) => oneLine(errorLines(error, t, showRequestId), t);
+
+// The backend's request id for a failure, or for the failure that stopped a partial one.
+export const requestIdOf = (error: unknown): string | undefined =>
+  error instanceof ApiError ? (error.requestId ?? undefined) : error instanceof Error && error.cause instanceof ApiError ? requestIdOf(error.cause) : undefined;
+
+// What to tell the person about a failed action: the action's summary, with the error as its detail. An operation
+// whose outcome is unknown did not fail: it is reported on its own, neutrally. A file written but not applied is
+// reported under its own summary too, since the action's would say the write failed, and so is an activation that
+// left the change active or its outcome unknown. A write that landed but could not be read back is not a failure of the
+// write: it is told neutrally, and the failed read keeps its own error and Retry.
+// `error` is the failure it reports, for a toast to record and offer to copy; an invalid edit has none.
+// `lines` are the refused lines of a configuration, each with its file and line, and `backend` the backend's words they leave out.
+export type Notice = {kind: 'neutral' | 'negative'; text: string; detail?: string; lines?: string[]; backend?: string[]; requestId?: string; error?: unknown};
+const ownSummary = new Set<Key>([
+  'ui.writtenNotApplied',
+  'ui.activationDegraded',
+  'ui.activationDegradedSaved',
+  'ui.activationDegradedUnconfirmed',
+  'ui.activationNotSaved',
+  'ui.activationUnknown'
+]);
+export function failureNotice(error: unknown, t: Translator, summary: string): Notice {
+  if (error instanceof LocalError && (error.key === 'ui.operationUnknown' || error.key === 'ui.writtenNotRead'))
+    return {kind: 'neutral', text: t(error.key), error};
+  if (error instanceof LocalError && ownSummary.has(error.key)) return {kind: 'negative', text: t(error.key), detail: localDetail(error, t), error};
+  return {kind: 'negative', text: summary, detail: errorText(error, t, false), requestId: requestIdOf(error), error};
+}
+
+// A notice as one line, for a place that shows it inline rather than as a toast.
+export const noticeText = ({text, detail, requestId}: Notice, t: Translator, showRequestId = true) =>
+  detail ? t('ui.valuePair', {label: text, value: detail + (showRequestId && requestId ? t('ui.requestNote', {requestId}) : '')}) : text;

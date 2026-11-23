@@ -1,0 +1,104 @@
+import {expect, it} from 'vitest';
+import type {ApiEvent} from '../../api/model';
+import {createMockApi} from '../../../mock';
+import {localTime} from '../../i18n/format';
+import {translate, type Translator} from '../../i18n';
+import {eventHelp, eventLinks, eventsExport, eventsView, eventText} from './view';
+const t: Translator = (key, params) => translate('en', key, params);
+
+it('exports only the selected event kind while preserving raw data', () => {
+  const events: ApiEvent[] = [
+    {id: 'ready', event: 'stream.ready', data: {instance_id: 'instance', observed_at: '2026-01-01T00:00:00Z'}},
+    {id: 'runtime', event: 'runtime.updated', data: {instance_id: 'instance', observed_at: '2026-01-01T00:00:01Z', href: '/api/v1/runtime'}}
+  ];
+  const view = eventsView(events, 'stream.ready', false, false, 200, 'en-US', t, ['stream.ready', 'runtime.updated']);
+  expect(view.rows.map(row => row.id)).toEqual(['stream.ready:ready']);
+  expect(JSON.parse(eventsExport(view.shown))).toEqual([events[0]]);
+  expect(eventText(view.rows[0].event)).toBe(JSON.stringify(events[0], null, 2));
+  expect(view.rows[0].timestamp).toBe(localTime(events[0].data.observed_at, 'en-US'));
+  expect(view.status.text).toBe(t('event.unavailable'));
+  expect(eventsView(events, 'all', true, true, 200, 'en-US', t, ['stream.ready', 'runtime.updated']).rows.map(row => row.id)).toEqual([
+    'stream.ready:ready',
+    'runtime.updated:runtime'
+  ]);
+});
+
+it('offers only advertised event kinds and resets an unsupported selection', () => {
+  const view = eventsView([], 'flow.updated', true, true, 200, 'en-US', t, ['stream.ready', 'runtime.updated']);
+  expect(view.kind).toBe('all');
+  expect(eventsView([], 'all', false, true, 200, 'en-US', t, [], true).status.text).toBe(t('event.disconnected'));
+  expect(view.kinds.map(item => item.id)).toEqual(['without-runtime', 'all', 'stream.ready', 'runtime.updated']);
+});
+
+it('filters runtime updates before limiting the default view and its export', () => {
+  const data = {instance_id: 'instance', observed_at: '2026-01-01T00:00:00Z'};
+  const ready: ApiEvent = {id: 'ready', event: 'stream.ready', data};
+  const events: ApiEvent[] = [
+    ...Array.from({length: 201}, (_, id): ApiEvent => ({id: String(id), event: 'runtime.updated', data: {...data, href: '/api/v1/runtime'}})),
+    ready
+  ];
+  const view = eventsView(events, 'without-runtime', true, true, 200, 'en-US', t, ['stream.ready', 'runtime.updated']);
+  expect(view.rows.map(row => row.id)).toEqual(['stream.ready:ready']);
+  expect(JSON.parse(eventsExport(view.shown))).toEqual([ready]);
+});
+
+it('says on the ready row after lost history that events are missing', () => {
+  const data = {instance_id: 'instance', observed_at: '2026-01-01T00:00:00Z'};
+  const lost: ApiEvent = {id: 'ready:2', event: 'stream.ready', data};
+  const resumed: ApiEvent = {id: 'ready:1', event: 'stream.ready', data};
+  const view = eventsView([lost, resumed], 'all', true, true, 200, 'en-US', t, ['stream.ready'], false, event => event === lost);
+  expect(view.rows.map(row => row.summary)).toEqual([t('event.lostHistory'), 'instance']);
+});
+
+it('shows an event kind from a newer backend as sent, with the resource it names', () => {
+  const event = {id: 'x', event: 'policy.updated', data: {observed_at: '2026-01-01T00:00:00Z', resource_id: 'proxy'}} as unknown as ApiEvent;
+  const view = eventsView([event], 'all', true, true, 200, 'en-US', t, ['policy.updated' as ApiEvent['event']]);
+  expect(view.rows.map(row => [row.kindText, row.summary])).toEqual([['policy.updated', 'proxy']]);
+  expect(view.kinds.at(-1)).toEqual({id: 'policy.updated', label: 'policy.updated'});
+});
+
+it('explains the gaps that lose flow records and leaves other events alone', () => {
+  const gap = (reason: 'buffer_overflow' | 'evicted' | 'sampled'): ApiEvent => ({
+    id: '1',
+    event: 'flow.gap',
+    data: {instance_id: 'i', observed_at: '2026-01-01T00:00:00Z', resource_id: null, reason, dropped_records: '4'}
+  });
+  expect(eventHelp(gap('buffer_overflow'), t)).toEqual({title: t('event.gap.overflow'), text: t('event.gapHelp.overflow')});
+  expect(eventHelp(gap('evicted'), t)).toEqual({title: t('event.gap.evicted'), text: t('event.gapHelp.evicted')});
+  expect(eventHelp(gap('sampled'), t)).toBeUndefined();
+});
+
+it('links the flow an event names, the configuration of a new generation and the recording settings of a gap', async () => {
+  const data = {instance_id: 'i', observed_at: '2026-01-01T00:00:00Z'};
+  const {resources} = await createMockApi().capabilities();
+  const links = (event: ApiEvent) => eventLinks(event, t, resources).map(link => [link.label, link.href]);
+  const flow = ['View flow record', '#/flows?tab=records&id=f1'];
+  const recording = ['Recording settings', '#/settings?card=runtime'];
+  expect(links({id: '1', event: 'flow.updated', data: {...data, resource_id: 'f1', revision: 2, href: '/api/v1/flows/f1'}} as ApiEvent)).toEqual([flow]);
+  const gap = (resource_id: string | null): ApiEvent => ({id: '2', event: 'flow.gap', data: {...data, resource_id, reason: 'evicted', dropped_records: '1'}});
+  expect(links(gap('f1'))).toEqual([flow, recording]);
+  expect(links(gap(null))).toEqual([recording]);
+  expect(links({id: '3', event: 'generation.changed', data: {...data, previous_generation_id: '1', generation_id: '2'}} as ApiEvent)).toEqual([
+    ['View configuration', '#/config']
+  ]);
+  expect(links({id: '4', event: 'stream.ready', data} as ApiEvent)).toEqual([]);
+  resources.runtime_settings.available = false;
+  resources.config.available = false;
+  expect(links(gap('f1'))).toEqual([flow]);
+  expect(links({id: '3', event: 'generation.changed', data: {...data, previous_generation_id: '1', generation_id: '2'}} as ApiEvent)).toEqual([]);
+  expect(eventLinks(gap(null), t, undefined)).toEqual([]);
+});
+
+it('rebuilds the links of an event already shown when the offered pages change', async () => {
+  const event = {
+    id: '3',
+    event: 'generation.changed',
+    data: {instance_id: 'i', observed_at: '2026-01-01T00:00:00Z', previous_generation_id: '1', generation_id: '2'}
+  } as ApiEvent;
+  const {resources} = await createMockApi().capabilities();
+  const links = (offered?: typeof resources) =>
+    eventsView([event], 'all', true, true, 10, 'en', t, [], false, undefined, offered).rows[0].links.map(link => link.href);
+  expect(links()).toEqual([]);
+  expect(links(resources)).toEqual(['#/config']);
+  expect(links({...resources, config: {...resources.config, available: false}})).toEqual([]);
+});

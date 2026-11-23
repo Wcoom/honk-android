@@ -1,0 +1,106 @@
+import {logLevelLabels, logLevels} from '../../api/selectors';
+import {enumLabel} from '../../i18n/enum';
+import type {LogLevel, LogRecord, RecorderState} from '../../api/model';
+import {recorderEmpty} from '../shared/recorder';
+import {localTime} from '../../i18n/format';
+import {type Translator as LabelFn} from '../../i18n';
+
+const tones = {trace: 'muted', debug: 'neutral', info: 'info', warn: 'warn', error: 'err'} as const;
+type LogRow = {
+  id: string;
+  timestamp: string;
+  iso: string;
+  levelText: string;
+  tone: (typeof tones)[LogLevel];
+  target: string | null;
+  message: string;
+  // The record itself, for the text a copy puts on the clipboard.
+  record: LogRecord;
+  // Marks the records the stream lost between the rows around it.
+  gap: boolean;
+};
+// A record never changes once appended, so its row is computed once per locale and reused across publications.
+const rows = new WeakMap<LogRecord, {locale: string; row: LogRow}>();
+function logRow(record: LogRecord & {id: string}, locale: string, t: LabelFn): LogRow {
+  const hit = rows.get(record);
+  if (hit && hit.locale === locale) return hit.row;
+  const row: LogRow = {
+    id: record.id,
+    timestamp: localTime(record.ts, locale),
+    iso: record.ts,
+    levelText: enumLabel(logLevelLabels, record.level, t),
+    tone: tones[record.level],
+    target: record.target,
+    gap: false,
+    record,
+    message:
+      record.message +
+      (record.fields
+        ? ' ' +
+          Object.entries(record.fields)
+            .map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`)
+            .join(' ')
+        : '')
+  };
+  rows.set(record, {locale, row});
+  return row;
+}
+export function logView(
+  records: Array<LogRecord & {id: string}>,
+  levels: LogLevel[],
+  engine: string | undefined,
+  locale: string,
+  t: LabelFn,
+  gaps: ReadonlySet<LogRecord> = new Set(),
+  // The runtime log.level: the engine emits nothing below it, whatever the stream asks for.
+  recorded?: LogLevel
+) {
+  const below = (level: LogLevel) => !!recorded && logLevels.indexOf(level) < logLevels.indexOf(recorded);
+  return {
+    rows: records.flatMap(record => {
+      const row = logRow(record, locale, t);
+      if (!gaps.has(record)) return [row];
+      return [{...row, id: `gap ${record.id}`, timestamp: '', iso: '', levelText: '', target: '', gap: true, message: t('log.gap')}, row];
+    }),
+    levels: levels.map(id => ({
+      id,
+      label: below(id) ? t('log.levelNotRecorded', {level: enumLabel(logLevelLabels, id, t)}) : enumLabel(logLevelLabels, id, t)
+    })),
+    recordedText: recorded ? t('log.recorded', {level: enumLabel(logLevelLabels, recorded, t)}) : null,
+    exportBase: `${engine || 'engine'}-log`
+  };
+}
+
+export function logEmpty(recorder: RecorderState | undefined, filtered: boolean, t: LabelFn): string {
+  return t(
+    recorderEmpty(recorder, filtered, {forbidden: 'log.emptyForbidden', off: 'log.emptyNotRecorded', filtered: 'log.emptyFiltered', empty: 'log.empty'})
+  );
+}
+
+// Kept apart from `logView` because the count of held records changes while the list does not.
+export function logStatus(connected: boolean, failed: boolean, paused: boolean, pending: number, limit: number, t: LabelFn) {
+  // A failed stream is not retried until asked, so it is not "connecting".
+  if (failed) return {tone: 'err' as const, text: t('log.disconnected')};
+  // A paused list is not live either way, so a brief reconnect does not replace what the pause is holding back.
+  // The ring keeps only the newest `limit` records, so resuming never shows more than that.
+  if (paused) return {tone: 'neutral' as const, text: t(pending > limit ? 'log.pausedOverflow' : 'log.paused', {n: Math.min(pending, limit)})};
+  return {tone: connected ? ('ok' as const) : ('warn' as const), text: t(connected ? 'log.connected' : 'log.reconnecting')};
+}
+
+export function logLevel(level: LogLevel, levels: LogLevel[] = []): LogLevel | undefined {
+  return levels.includes(level) ? level : levels.includes('info') ? 'info' : levels[0];
+}
+
+const logLine = (r: LogRecord) => `${r.ts} ${r.level.toUpperCase().padEnd(5)} ${r.target ?? '—'} ${r.message}${r.fields ? ' ' + JSON.stringify(r.fields) : ''}`;
+// One row as the export writes it; a gap marker is its message.
+export const logRowText = (row: LogRow) => (row.gap ? row.message : logLine(row.record));
+
+// Oldest first. The gap marker the list shows gets its own line after the last record before the loss.
+export function logsExport(records: LogRecord[], gaps: ReadonlySet<LogRecord>, t: LabelFn) {
+  return (
+    [...records]
+      .reverse()
+      .flatMap(r => (gaps.has(r) ? [logLine(r), t('log.gap')] : [logLine(r)]))
+      .join('\n') + '\n'
+  );
+}

@@ -1,0 +1,485 @@
+.rp-table-scroll {
+  position: relative;
+  min-width: 0;
+}
+.rp-table-scroll::before,
+.rp-table-scroll::after {
+  content: '';
+  position: absolute;
+  inset-block: 1px;
+  width: 24px;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+}
+.rp-table-scroll::before {
+  left: 1px;
+  background: linear-gradient(to right, var(--rp-surface), transparent);
+  border-start-start-radius: var(--rp-r-md);
+  border-end-start-radius: var(--rp-r-md);
+}
+.rp-table-scroll::after {
+  right: 1px;
+  background: linear-gradient(to left, var(--rp-surface), transparent);
+  border-start-end-radius: var(--rp-r-md);
+  border-end-end-radius: var(--rp-r-md);
+}
+.rp-table-scroll[data-fade~='left']::before,
+.rp-table-scroll[data-fade~='right']::after {
+  opacity: 1;
+}
+.rp-table {
+  width: 100%;
+  min-width: 0;
+  height: 442px;
+  border: 1px solid var(--rp-hl-med);
+  border-radius: var(--rp-r-md);
+  background: var(--rp-surface);
+  overflow: auto;
+  outline: none;
+}
+/* React Aria sizes the columns from the clientWidth of whichever element scrolls: this container around a native
+   table, the grid itself once virtualised. With classic scrollbars (Chromium on Linux and Windows) that width drops
+   when a scrollbar appears after the rows arrive, and again when a table switches from native to virtualised, so every
+   column slid sideways a moment after load. Reserving the gutter on the scroller keeps the width the same in every
+   state. Overlay scrollbars (Firefox on Linux, macOS) reserve nothing, which is why they never showed it.
+   As with the page gutter in foundations.css, phones are left alone: their scrollbars overlay the content. */
+@media (min-width: 640px) {
+  .rp-table:has(> table),
+  .rp-table > :is([role='grid'], [role='treegrid']):not(table) {
+    scrollbar-gutter: stable;
+  }
+}
+.rp-table table {
+  --rp-cell-padding: var(--rp-space-2);
+}
+/* In a card, a table's frame hangs into the card's padding by its border and its cells' padding, so the first column's
+   text starts at the card's text inset as the card's other text does. */
+.rp-card :is(.rp-table:not(.rp-table-scroll > *):has(> table), .rp-table-scroll:has(> .rp-table > table)) {
+  width: auto;
+  margin-inline: calc(-1 * (1px + var(--rp-space-2)));
+}
+.rp-table table,
+.rp-table [role='grid'] {
+  /* RAC sets min-content inline; fractional columns must fill the scrollport. */
+  width: 100% !important;
+  min-width: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+.rp-table [role='columnheader'] {
+  text-align: start;
+  font-size: var(--rp-text-md);
+  line-height: var(--rp-line-body);
+  font-weight: 700;
+  color: var(--rp-text);
+  padding: var(--rp-space-2) var(--rp-cell-padding, var(--rp-space-4));
+  background: var(--rp-base);
+  border-bottom: 1px solid var(--rp-hl-med);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: sticky;
+  top: 0;
+  /* Above row content that forms its own stacking context (translated marks). */
+  z-index: 1;
+  outline: none;
+}
+/* The select-all box sits on the header line, without the form control height. */
+.rp-table [role='columnheader'] .rp-radio {
+  min-height: 0;
+  padding-block: 0;
+}
+.rp-table [role='row']:is([data-selected], [data-open]) {
+  background: var(--rp-selected);
+}
+/* The sort arrow is one chevron that turns: ascending points up, descending down. */
+.rp-th > .rp-sort {
+  width: 14px;
+  height: 14px;
+  margin-inline-start: var(--rp-space-half);
+  rotate: 180deg;
+  transition: rotate var(--rp-duration-panel) var(--rp-ease-out);
+}
+.rp-th > .rp-sort.descending {
+  rotate: 0deg;
+}
+.rp-th {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+/* Column resizing: the header keeps its text, a thin handle sits on its right edge and shows on hover or drag. */
+.rp-resizer {
+  position: absolute;
+  top: 0;
+  inset-inline-end: 0;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  border-inline-end: 2px solid transparent;
+  outline: none;
+  transition: border-color var(--rp-duration) var(--rp-ease);
+}
+/* A finger needs a wider handle: the hit area grows inward from the column edge, where the line stays. */
+@media (pointer: coarse) {
+  .rp-resizer {
+    width: 24px;
+  }
+}
+.rp-resizer[data-hovered],
+.rp-resizer[data-resizing] {
+  border-inline-end-color: var(--rp-accent);
+}
+.rp-table [role='columnheader'][data-resizing] {
+  color: var(--rp-text);
+}
+.rp-table [role='row'][data-hovered]:not([data-selected], [data-open]) {
+  background: var(--rp-fill);
+}
+.rp-table [role='rowheader'],
+.rp-table [role='gridcell'] {
+  text-align: start;
+  font-variant-numeric: tabular-nums;
+  padding: 0 var(--rp-cell-padding, var(--rp-space-4));
+  height: 40px;
+  border-bottom: 1px solid var(--rp-line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 0;
+  outline: none;
+  vertical-align: middle;
+}
+.rp-table [role='rowheader']:has(> .rp-table-empty) {
+  padding: 0;
+  overflow: visible;
+  max-width: none;
+  white-space: normal;
+}
+.rp-table-empty {
+  position: sticky;
+  inset-inline-start: 0;
+  flex-shrink: 0;
+  max-width: 100%;
+}
+/* The first-load Skeleton (Skeleton.tsx) draws its own row lines, so its cell drops the empty state's. Each cell is a
+   real row's height and inset; the bars take the kit Skeleton's fill and shimmer (cards-dashboard.css). */
+.rp-table [role='rowheader']:has(> .rp-table-empty > .rp-table-skeleton) {
+  border-bottom: 0;
+}
+.rp-table-skeleton > [aria-hidden] {
+  display: grid;
+  overflow: hidden;
+}
+.rp-table-skeleton > [aria-hidden] > span {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 40px;
+  padding: 0 var(--rp-cell-padding, var(--rp-space-4));
+  border-bottom: 1px solid var(--rp-line);
+}
+.rp-table [role='row'][data-selection-mode='single'] {
+  cursor: default;
+}
+/* The icon, rather than its hit area, starts at the header's text inset. */
+.rp-table .rp-cell-actions {
+  padding-inline-start: calc(var(--rp-cell-padding, var(--rp-space-4)) - (var(--rp-control) - var(--rp-icon-size)) / 2);
+}
+/* Virtualised tables use divs; only their layout differs from native cells. */
+.rp-table > div[role='grid'],
+.rp-table > div[role='treegrid'] {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  outline: none;
+}
+.rp-table div[role='row'],
+.rp-table div[role='columnheader'],
+.rp-table div[role='rowgroup'] {
+  height: 100%;
+}
+.rp-table div[role='columnheader'] {
+  position: static;
+}
+.rp-table div[role='rowheader'],
+.rp-table div[role='gridcell'] {
+  display: flex;
+  align-items: center;
+  max-width: none;
+}
+/* A group row's chevron points along the row while folded and down while open. */
+.rp-table .rp-expand {
+  flex: none;
+  color: var(--rp-muted);
+}
+.rp-table .rp-expand > svg {
+  rotate: calc(-90deg * var(--rp-dir));
+  transition: rotate var(--rp-duration-panel) var(--rp-ease-out);
+}
+.rp-table [data-expanded] > .rp-expand > svg {
+  rotate: 0deg;
+}
+.rp-table .cell {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rp-dialog .foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--rp-space-2);
+  padding-top: var(--rp-space-2);
+}
+.rp-dialog h2:not(.rp-h3) {
+  margin: 0;
+  font-size: var(--rp-text-xl);
+  line-height: 24px;
+  font-weight: 700;
+}
+.rp-modal.narrow {
+  width: min(480px, 90vw);
+}
+/* S2's dialog anatomy for long content: the title and the footer keep their place and only the content between them
+   scrolls. The padding moves from the dialog to each part so the scrollbar runs along the content alone; while the
+   content overflows, a divider sets it off from each. */
+.rp-dialog.split {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+.rp-dialog.split > h2,
+.rp-dialog.split > .rp-help-row {
+  flex: none;
+  padding: var(--rp-space-6) var(--rp-space-8) var(--rp-space-3);
+}
+.rp-dialog-body {
+  scrollbar-gutter: stable;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-block: var(--rp-space-3);
+  padding-inline: var(--rp-space-8) calc(var(--rp-space-8) - var(--rp-gutter, 0px));
+  overflow: hidden auto;
+  border-block: 1px solid transparent;
+  outline: none;
+}
+.rp-dialog-body[data-overflow] {
+  border-color: var(--rp-hl-med);
+}
+.rp-dialog-body[data-focus-visible],
+.rp-dialog-body:focus-visible {
+  outline: 2px solid var(--rp-accent);
+  outline-offset: -2px;
+}
+.rp-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-4);
+  min-width: 0;
+}
+.rp-dialog.split > .foot {
+  flex: none;
+  padding: var(--rp-space-3) var(--rp-space-8) var(--rp-space-6);
+}
+.rp-dialog.split > .foot + .rp-label {
+  margin: calc(-1 * var(--rp-space-4)) 0 0;
+  padding: 0 var(--rp-space-8) var(--rp-space-6);
+}
+/* The diff in a scrolling dialog grows with its lines: the dialog is the only vertical scroller. */
+.rp-dialog-body .rp-diff {
+  max-height: none;
+}
+
+/* Keyboard shortcuts: titled sections of rows, a label and its key caps. Two columns fit it in the viewport above phone
+   width; the rows are tighter than a control row, since nothing in them is pressed. */
+.rp-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--rp-space-5) var(--rp-space-8);
+  align-items: start;
+}
+.rp-shortcuts > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-5);
+  min-width: 0;
+}
+.rp-shortcuts section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.rp-shortcuts h3 {
+  margin: 0 0 var(--rp-space-1);
+  font-size: var(--rp-text-md);
+  line-height: var(--rp-line-body);
+  font-weight: 700;
+}
+.rp-shortcuts section > .rp-label {
+  margin: 0 0 var(--rp-space-1);
+}
+.rp-shortcuts .rp-row {
+  min-height: 28px;
+  flex-wrap: nowrap;
+}
+.rp-shortcuts .keys {
+  display: flex;
+  flex: none;
+  gap: var(--rp-space-1);
+}
+@media (max-width: 599.98px) {
+  .rp-shortcuts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.rp-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-3);
+}
+
+/* The row a table discloses (DataTable `detail`). Empty, it leaves no box, so the page's gap is as before, yet it stays
+   in the accessibility tree as a live region. */
+.rp-table-detail {
+  min-width: 0;
+}
+.rp-table-detail:empty {
+  display: contents;
+}
+/* A flow table's detail: the fields and actions fill the row; the close button keeps the top right. */
+.rp-table-detail-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--rp-space-3);
+}
+.rp-table-detail-body > .rp-btn {
+  flex: none;
+}
+.rp-table [role='gridcell']:has(.rp-btn) {
+  overflow: visible;
+}
+.rp-kv.inline {
+  display: flex;
+  gap: var(--rp-space-6);
+  flex-wrap: wrap;
+}
+.rp-kv.row {
+  align-items: center;
+  gap: var(--rp-space-4);
+}
+.rp-kv.row > div {
+  display: flex;
+  align-items: center;
+  gap: var(--rp-space-1h);
+}
+.rp-kv.row .k {
+  line-height: 20px;
+}
+/* A unified line diff (Diff.tsx) in the code face: added and removed lines take a faint positive or negative tint and
+   their mark the matching text colour; a gap between hunks is a label. The tint is see-through, so a tinted row still
+   reads as part of the panel in every palette, where an opaque highlight can match the dialog behind it. A long line
+   wraps inside the panel, its continuation indented past the text so it does not read as a line of its own. The mark
+   hangs in the row's start padding rather than sitting in a grid cell: a grid item is a block, and a copy would put the
+   mark and its text on separate lines. */
+.rp-diff {
+  max-height: 320px;
+  margin: 0;
+  padding: var(--rp-space-2) 0;
+  overflow: auto;
+  border-radius: var(--rp-r-md);
+  background: var(--rp-base);
+}
+.rp-diff-line {
+  display: block;
+  padding-inline: calc(var(--rp-space-2) + 6ch) var(--rp-space-2);
+  text-indent: -6ch;
+  white-space: pre-wrap;
+}
+.rp-diff-line[data-kind='add'] {
+  background: color-mix(in srgb, var(--rp-positive) 12%, transparent);
+}
+.rp-diff-line[data-kind='del'] {
+  background: color-mix(in srgb, var(--rp-negative) 12%, transparent);
+}
+.rp-diff-mark {
+  display: inline-block;
+  width: 2ch;
+  text-indent: 0;
+}
+.rp-diff-text {
+  overflow-wrap: anywhere;
+}
+.rp-diff-line[data-kind='add'] .rp-diff-mark {
+  color: var(--rp-positive-text);
+}
+.rp-diff-line[data-kind='del'] .rp-diff-mark {
+  color: var(--rp-negative-text);
+}
+
+.rp-table[data-flow] {
+  overflow: visible;
+}
+.rp-table[data-flow] > div[role='grid'] {
+  scrollbar-gutter: auto;
+  border-radius: inherit;
+  overflow: auto hidden;
+  overflow-anchor: none;
+  scroll-padding-top: calc(var(--rp-topbar) + 37px);
+  scroll-padding-bottom: calc(var(--rp-dock) + var(--rp-space-4));
+}
+.rp-table[data-flow] > div[role='grid'] > div > div:has(> [role='rowgroup']:first-child [role='columnheader']) {
+  top: var(--rp-flow-heading, 0px) !important;
+}
+
+@media (max-width: 1023.98px) and (max-height: 500px) {
+  .rp-table[data-flow] > div[role='grid'] {
+    scroll-padding-top: 37px;
+  }
+}
+
+.rp-table-detail[data-flow]:not(:empty) {
+  scrollbar-gutter: stable;
+  position: sticky;
+  bottom: calc(var(--rp-dock) + var(--rp-space-4));
+  z-index: 1;
+  max-height: 50vh;
+  overflow: auto;
+  padding: var(--rp-space-4);
+  background: var(--rp-surface);
+  border: 1px solid var(--rp-hl-med);
+  border-radius: var(--rp-r-md);
+}
+
+.rp-table[data-flow] :is([role='row'][data-key], [role='rowheader'], [role='gridcell']) {
+  scroll-margin-block-start: calc(var(--rp-topbar) + 37px);
+  scroll-margin-block-end: var(--rp-flow-bottom, calc(var(--rp-dock) + var(--rp-space-4)));
+}
+@media (max-width: 1023.98px) and (max-height: 500px) {
+  .rp-table[data-flow] :is([role='row'][data-key], [role='rowheader'], [role='gridcell']) {
+    scroll-margin-block-start: 37px;
+  }
+}
+
+.rp-table .rp-cell-wrap {
+  height: auto;
+  min-height: var(--rp-space-10);
+  padding-block: var(--rp-space-2);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  text-overflow: clip;
+}
+.rp-table[data-multiline] div:is([role='row'], [role='rowheader'], [role='gridcell']) {
+  height: 100%;
+  min-height: var(--rp-space-10);
+}
+.rp-cell-wrap .rp-code > span {
+  white-space: normal;
+}

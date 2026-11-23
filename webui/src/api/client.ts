@@ -1,0 +1,436 @@
+import createClient, {type Middleware} from 'openapi-fetch';
+import type {components, paths as StandardPaths} from './types';
+import type {ConfigPaths} from './engines/types';
+type paths = StandardPaths & ConfigPaths;
+import type {Api} from './api';
+import {
+  operationDone,
+  type ApiEvent,
+  type CoreUpdateApplyResult,
+  type CoreUpdateStatus,
+  type EventKind,
+  type EventOptions,
+  type FlowDetail,
+  type LogOptions,
+  type LogRecord,
+  type OperationAccepted,
+  type OperationState,
+  type RoutingTraceResponse
+} from './model';
+import {ApiError, clientError, describe, NO_CONTENT, parseRetryAfter, responseError, send} from './error';
+import {uuid} from './hash';
+import {readSse} from './sse';
+import {pause, wait} from './wait';
+import {waitOutRefusal} from './refusal';
+import {eventKinds} from './selectors';
+import {normalizeCapabilities} from './capabilities';
+import {createServerClock, type ServerClock} from './serverClock';
+
+// An operation's poll delay: Retry-After, or one second when it is absent, and never less than one.
+const retryAfter = (response: Response) => Math.max(1, parseRetryAfter(response) ?? 1);
+
+function data<T>(result: {data?: T; response: Response}): T {
+  if (result.data === undefined) throw clientError(result.response.status, 'empty_response', 'Response has no JSON body', 'ui.errNoJson');
+  return result.data;
+}
+
+function accepted(result: {data?: Omit<OperationAccepted, 'retryAfter'>; response: Response}): OperationAccepted {
+  return {...data(result), retryAfter: retryAfter(result.response)};
+}
+
+// A JSON read that succeeds with no body fails at the transport, where the request is known. Only the first non-empty
+// chunk is read, from a copy, so the caller still reads the whole body.
+const expectsJson = (request: Request) => request.headers.get('Accept')?.includes('application/json') ?? false;
+async function filled(request: Request, response: Response): Promise<Response> {
+  if (!response.ok || NO_CONTENT.has(response.status)) return response;
+  const reader = response.clone().body?.getReader();
+  try {
+    for (let chunk = await reader?.read(); chunk && !chunk.done; chunk = await reader!.read()) if (chunk.value.byteLength) return response;
+  } finally {
+    reader?.cancel().catch(() => {});
+  }
+  throw describe(clientError(response.status, 'empty_response', 'Response has no JSON body', 'ui.errNoJson'), request.method, request.url, response);
+}
+// A JSON read that comes back empty or gets no response is sent once more after this pause, since a tunnel or proxy
+// can drop a single body. Timeouts, caller aborts and error statuses are not retried here, and streams never come here.
+// An error status on the retry becomes an ApiError in the middleware, which counts the attempt through `retried`.
+const READ_RETRY_MS = 300;
+
+// Keyed mutations and requests that write nothing retry explicit transient refusals this many times.
+const MAX_REFUSALS = 3;
+// The contract replays a repeated Idempotency-Key only for operation starts, the calls that can answer 202 with a
+// retained operation. Synchronous writes accept a key but run again, so they are sent without one.
+type OperationStarts = {
+  [P in keyof paths]: {[M in keyof paths[P] as paths[P][M] extends {responses: {202: unknown}} ? M : never]: paths[P][M]};
+};
+// Requests that write nothing, so a refusal is safe to replay without an Idempotency-Key.
+const readOnlyPaths = ['/dns/query', '/config/validate', '/routing/trace'];
+// These requests write configuration; a missing reason still needs the backend's specific refusal message. So do an
+// engine's import and revision activation, which `writesConfig` marks.
+const configurationWrites = new Set([
+  'PUT /api/v1/config/sources/{source_id}',
+  'POST /api/v1/config/sources',
+  'PATCH /api/v1/groups/{group_id}/config',
+  'POST /api/v1/nodes',
+  'DELETE /api/v1/nodes/{node_id}',
+  'POST /api/v1/providers',
+  'DELETE /api/v1/providers/{provider_id}'
+]);
+const writesConfig = <T>(request: Promise<T>) =>
+  request.catch((error: unknown) => {
+    if (error instanceof ApiError) error.configurationWrite = true;
+    throw error;
+  });
+// Both streams send a heartbeat comment at least this often while idle. A half-open connection never errors, so a
+// stream silent for MISSED_HEARTBEATS intervals is treated as dropped.
+const HEARTBEAT_SECONDS = 15;
+const MISSED_HEARTBEATS = 2.5;
+// A tiny advertised interval must not turn a brief stall into a reconnect storm.
+const MIN_SILENCE_MS = 10000;
+const silenceLimit = (seconds: number) =>
+  Math.max(MIN_SILENCE_MS, (Number.isFinite(seconds) && seconds > 0 ? seconds : HEARTBEAT_SECONDS) * MISSED_HEARTBEATS * 1000);
+
+/** Base is the server root, optionally including a reverse-proxy prefix. */
+export function createApi(base: string, token?: string, clock: ServerClock = createServerClock()): Api {
+  const baseUrl = base.replace(/\/+$/, '');
+  const read = <T>(result: {data?: T; response: Response}): T => {
+    const value = data(result);
+    clock.note((value as {observed_at?: unknown} | null)?.observed_at);
+    return value;
+  };
+  // A write that may run in the background answers with its result, or 202 with the operation that produces it.
+  const resultOrAccepted = <R extends object>(result: {data?: R | Omit<OperationAccepted, 'retryAfter'>; response: Response}): R | OperationAccepted => {
+    const value = read(result);
+    return 'operation_id' in value ? accepted({data: value, response: result.response}) : (value as R);
+  };
+  const headers: Record<string, string> = {Accept: 'application/json'};
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const retried = new WeakSet<Response>();
+  const options = {
+    baseUrl,
+    headers,
+    cache: 'no-store' as const,
+    fetch: async (request: Request) => {
+      if (request.method !== 'GET' || !expectsJson(request)) return exchange(request);
+      try {
+        return await filled(request, await exchange(request));
+      } catch (error) {
+        if (!(error instanceof ApiError) || (error.code !== 'empty_response' && error.code !== 'network_error')) throw error;
+        await pause(READ_RETRY_MS, request.signal);
+        return exchange(request)
+          .then(response => {
+            retried.add(response);
+            return filled(request, response);
+          })
+          .catch((again: unknown) => {
+            if (again instanceof ApiError) again.attempts = 2;
+            throw again;
+          });
+      }
+    }
+  };
+  async function exchange(request: Request): Promise<Response> {
+    // A mutation is replayed only under an Idempotency-Key, which only operation starts carry, so a refusal that
+    // already wrote something cannot repeat the write.
+    const {pathname} = new URL(request.url);
+    const readOnly = readOnlyPaths.some(path => pathname.endsWith(path));
+    // A read-only POST gets the read deadline and text: it cannot have changed anything.
+    const write = request.method !== 'GET' && !readOnly;
+    const retryable = request.headers.has('Idempotency-Key') || readOnly;
+    if (!retryable) return send(request, undefined, write);
+    // A refusal with Retry-After is waited out a few times; the caller sees the last refusal after that.
+    for (let refused = 0; ; refused++) {
+      const response = await send(request.clone(), {signal: request.signal}, write);
+      if ((response.status !== 503 && response.status !== 429) || refused >= MAX_REFUSALS) return response;
+      const error = await responseError(response.clone());
+      if (!error.transient) return response;
+      await response.body?.cancel();
+      await waitOutRefusal(response.status, error.retryAfter!, request.signal);
+    }
+  }
+  const failures: Middleware = {
+    onResponse: async ({request, response, schemaPath}) => {
+      if (!response.ok) {
+        const error = await responseError(response, request.method);
+        error.configurationWrite = configurationWrites.has(`${request.method} ${schemaPath}`);
+        if (retried.has(response)) error.attempts = 2;
+        throw error;
+      }
+      return response;
+    }
+  };
+  const client = createClient<paths>(options);
+  client.use(failures);
+  // A fresh key per operation start prevents transport retries from starting a second operation.
+  const starts = createClient<OperationStarts>(options);
+  starts.use({onRequest: ({request}) => request.headers.set('Idempotency-Key', uuid())}, failures);
+  // Resolve contract-absolute hrefs under the configured reverse-proxy prefix, not the origin.
+  const resolveHref = (href: string) => {
+    const root = new URL(baseUrl + '/', globalThis.location?.href);
+    const url = new URL(href.replace(/^\/+/, ''), root);
+    if (url.origin !== root.origin) throw clientError(0, 'invalid_location', 'Operation URL has a different origin', 'ui.errOtherOrigin');
+    return url;
+  };
+  async function pollOperation(accepted: OperationAccepted, signal?: AbortSignal): Promise<OperationState> {
+    let delay = accepted.retryAfter;
+    let dropped = 0;
+    const url = resolveHref(accepted.href);
+    while (true) {
+      await wait(delay, signal);
+      let response: Response;
+      try {
+        response = await send(url, {headers, cache: 'no-store', signal});
+        dropped = 0;
+      } catch (error) {
+        // A dropped connection says nothing about the accepted operation; ask again a few times before giving up.
+        if (signal?.aborted || ++dropped > 3) throw error;
+        delay = Math.min(delay * 2, 30);
+        continue;
+      }
+      if (!response.ok) {
+        const error = await responseError(response);
+        // Rate limited or briefly unavailable: the accepted operation is still running, so keep polling.
+        if (!error.transient) throw error;
+        delay = error.retryAfter!;
+        continue;
+      }
+      const operation: OperationState = await response.json();
+      if (operationDone(operation.status)) return operation;
+      delay = retryAfter(response);
+    }
+  }
+  // Both SSE feeds resume with Last-Event-ID and honour Retry-After; cursor expiry restarts at the head, a definitive
+  // 4xx or an oversized frame stops, and transient failures and silent connections back off to 30 seconds.
+  async function subscribeStream(
+    url: URL,
+    lastEventId: string | undefined,
+    signal: AbortSignal | undefined,
+    onConnectionChange: ((ready: boolean) => void) | undefined,
+    onCursorExpired: (() => void) | undefined,
+    onFrame: (event: string, data: unknown, cursor: string) => void,
+    heartbeatSeconds = HEARTBEAT_SECONDS
+  ): Promise<void> {
+    let cursor = lastEventId;
+    let backoff = 1;
+    // A failed attempt's Retry-After, honoured on top of the backoff; cleared once used.
+    let pause = 0;
+    try {
+      while (!signal?.aborted) {
+        onConnectionChange?.(false);
+        const attempt = new AbortController();
+        const cancel = () => attempt.abort(signal?.reason);
+        signal?.addEventListener('abort', cancel, {once: true});
+        let silence: ReturnType<typeof setTimeout> | undefined;
+        const alive = () => {
+          clearTimeout(silence);
+          silence = setTimeout(() => attempt.abort(), silenceLimit(heartbeatSeconds));
+        };
+        alive();
+        try {
+          const streamHeaders = {...headers, Accept: 'text/event-stream', ...(cursor ? {'Last-Event-ID': cursor} : {})};
+          const response = await fetch(url, {headers: streamHeaders, cache: 'no-store', signal: attempt.signal});
+          if (!response.ok) {
+            const error = await responseError(response);
+            if (cursor && error.status === 409 && error.code === 'event_cursor_expired') {
+              cursor = undefined;
+              onCursorExpired?.();
+              continue;
+            }
+            pause = retryAfter(response);
+            throw error;
+          }
+          if (!response.body) throw clientError(response.status, 'empty_stream', 'Response has no event stream', 'ui.errNoStream');
+          await readSse(
+            response.body,
+            frame => {
+              if (frame.id !== undefined) cursor = frame.id;
+              if (frame.event === 'stream.ready') {
+                backoff = 1;
+                onConnectionChange?.(true);
+              }
+              if (frame.data) {
+                let value: unknown;
+                try {
+                  value = JSON.parse(frame.data);
+                } catch {
+                  return;
+                }
+                onFrame(frame.event, value, cursor ?? '');
+              }
+            },
+            attempt.signal,
+            alive
+          );
+          onConnectionChange?.(false);
+          await wait(retryAfter(response), signal);
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          // An oversized frame would arrive again on resuming, so it ends the stream like a definitive 4xx.
+          if (error instanceof ApiError && ((error.status >= 400 && error.status < 500 && error.status !== 429) || error.code === 'frame_too_large'))
+            throw error;
+          onConnectionChange?.(false);
+          await wait(Math.max(backoff, pause), signal);
+          pause = 0;
+          backoff = Math.min(backoff * 2, 30);
+        } finally {
+          clearTimeout(silence);
+          signal?.removeEventListener('abort', cancel);
+        }
+      }
+    } catch (error) {
+      if (!signal?.aborted) throw error;
+    } finally {
+      onConnectionChange?.(false);
+    }
+  }
+  function subscribeEvents({kinds, lastEventId, heartbeatSeconds, signal, onEvent, onConnectionChange, onCursorExpired}: EventOptions): Promise<void> {
+    const url = new URL(baseUrl + '/api/v1/events', globalThis.location?.href);
+    if (kinds?.length) url.searchParams.set('kinds', kinds.join(','));
+    return subscribeStream(
+      url,
+      lastEventId,
+      signal,
+      onConnectionChange,
+      onCursorExpired,
+      // A kind from a newer backend still reaches the feeds, which describe it generically. Its payload has to be an
+      // object, as every event's is, and the time the feeds print is kept only when it is a string.
+      (event, data, cursor) => {
+        if (eventKinds.includes(event as EventKind)) onEvent({id: cursor, event, data} as ApiEvent);
+        else if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+          const observed = (data as {observed_at?: unknown}).observed_at;
+          onEvent({id: cursor, event, data: {...data, observed_at: typeof observed === 'string' ? observed : ''}} as ApiEvent);
+        }
+      },
+      heartbeatSeconds
+    );
+  }
+  function subscribeLogs({level, target, lastEventId, signal, onRecord, onConnectionChange, onCursorExpired}: LogOptions): Promise<void> {
+    const url = new URL(baseUrl + '/api/v1/logs', globalThis.location?.href);
+    if (level) url.searchParams.set('level', level);
+    if (target) url.searchParams.set('target', target);
+    return subscribeStream(url, lastEventId, signal, onConnectionChange, onCursorExpired, (event, data, cursor) => {
+      if (event === 'log') onRecord({id: cursor, ...(data as LogRecord)});
+    });
+  }
+  return {
+    discovery: async signal => read(await client.GET('/api', {signal})),
+    version: async signal => read(await client.GET('/api/v1/version', {signal})),
+    capabilities: async signal => normalizeCapabilities(read(await client.GET('/api/v1/capabilities', {signal}))),
+    runtime: async signal => read(await client.GET('/api/v1/runtime', {signal})),
+    runtimeOutbounds: async signal => read(await client.GET('/api/v1/runtime/outbounds', {signal})),
+    trafficHistory: async (query, signal) => read(await client.GET('/api/v1/runtime/traffic/history', {params: {query}, signal})),
+    memoryHistory: async (query, signal) => read(await client.GET('/api/v1/runtime/memory/history', {params: {query}, signal})),
+    datapath: async (detail, signal) => read(await client.GET('/api/v1/datapath', {params: {query: {detail}}, signal})),
+    runtimeMemory: async signal => read(await client.GET('/api/v1/runtime/memory', {signal})),
+    nodes: async (query, signal) => read(await client.GET('/api/v1/nodes', {params: {query}, signal})),
+    groups: async signal => read(await client.GET('/api/v1/groups', {signal})),
+    group: async (id, signal) => read(await client.GET('/api/v1/groups/{group_id}', {params: {path: {group_id: id}}, signal})),
+    selectGroup: async (groupId, body, signal) =>
+      read(await client.PUT('/api/v1/groups/{group_id}/selection', {params: {path: {group_id: groupId}}, body, signal})),
+    clearGroupOverride: async (groupId, network, signal) =>
+      read(await client.DELETE('/api/v1/groups/{group_id}/selection', {params: {path: {group_id: groupId}, query: {network}}, signal})),
+    patchGroup: async (groupId, body, ifMatch, signal) => {
+      const result = await starts.PATCH('/api/v1/groups/{group_id}/config', {
+        params: {path: {group_id: groupId}, header: {'If-Match': ifMatch}},
+        headers: {'Content-Type': 'application/json-patch+json'},
+        body,
+        signal
+      });
+      return resultOrAccepted(result);
+    },
+    // The generated default requires members, but the contract forbids it on node targets.
+    startProbe: async (body, signal) => accepted(await starts.POST('/api/v1/probes', {body: body as components['schemas']['ProbeRequest'], signal})),
+    connections: async (query, signal) => read(await client.GET('/api/v1/connections', {params: {query}, signal})),
+    flows: async (query, signal) => read(await client.GET('/api/v1/flows', {params: {query}, signal})),
+    // Readable in openapi-fetch drops required null fields from composed schemas.
+    flow: async (id, signal) => read(await client.GET('/api/v1/flows/{flow_id}', {params: {path: {flow_id: id}}, signal})) as FlowDetail,
+    dnsCache: async (query, signal) => read(await client.GET('/api/v1/dns/cache', {params: {query}, signal})),
+    dnsLog: async (query, signal) => read(await client.GET('/api/v1/dns/log', {params: {query}, signal})),
+    dnsQuery: async (domain, types, signal, cacheMode = 'normal', upstream) =>
+      read(
+        await client.POST('/api/v1/dns/query', {
+          params: {query: {detail: 'full'}},
+          body: {domain, type: types, cache_mode: cacheMode, ...(upstream ? {upstream} : {})},
+          signal
+        })
+      ),
+    // 204 carries no body; the response middleware has already turned any error status into an ApiError.
+    closeConnection: async (connection_id, signal) => {
+      await client.DELETE('/api/v1/connections/{connection_id}', {params: {path: {connection_id}}, signal});
+    },
+    closeConnections: async (query, signal) => read(await client.DELETE('/api/v1/connections', {params: {query}, signal})),
+    runtimeSettings: async signal => read(await client.GET('/api/v1/runtime/settings', {signal})),
+    providers: async (query, signal) => read(await client.GET('/api/v1/providers', {params: {query}, signal})),
+    refreshProvider: async (id, signal) => accepted(await starts.POST('/api/v1/providers/{provider_id}/refresh', {params: {path: {provider_id: id}}, signal})),
+    // Node and provider writes may answer 202 with an operation, yet the contract keeps them out of Idempotency-Key
+    // replay, so they go through the plain client.
+    createProvider: async (body, signal) => resultOrAccepted(await client.POST('/api/v1/providers', {body, signal})),
+    deleteProvider: async (id, signal) => resultOrAccepted(await client.DELETE('/api/v1/providers/{provider_id}', {params: {path: {provider_id: id}}, signal})),
+    createNode: async (body, signal) => resultOrAccepted(await client.POST('/api/v1/nodes', {body, signal})),
+    deleteNode: async (id, signal) => resultOrAccepted(await client.DELETE('/api/v1/nodes/{node_id}', {params: {path: {node_id: id}}, signal})),
+    geodata: async signal => read(await client.GET('/api/v1/geodata', {signal})),
+    rules: async signal => read(await client.GET('/api/v1/rules', {signal})),
+    dnsRules: async signal => read(await client.GET('/api/v1/dns/rules', {signal})),
+    updateGeodata: async signal => accepted(await starts.POST('/api/v1/geodata/update', {signal})),
+    exportConfig: async (config, signal) => {
+      const result = await client.GET(config.paths.export, {signal, parseAs: 'text', headers: {Accept: 'text/plain'}});
+      return {
+        content: data(result),
+        filename: config.exportFilename(result.response.headers.get('Content-Disposition')),
+        contentType: result.response.headers.get('Content-Type') ?? 'text/plain;charset=utf-8'
+      };
+    },
+    importConfig: async (config, replace, signal) => accepted(await writesConfig(starts.POST(config.paths.import, {signal, body: {replace}}))),
+    configRevisions: async (config, signal) => read(await client.GET(config.paths.revisions, {signal})),
+    activateConfigRevision: async (config, revision, signal) =>
+      accepted(await writesConfig(starts.POST(config.paths.activate, {signal, params: {path: {revision}}}))),
+    coreUpdateStatus: async (refresh = false, signal) => {
+      const url = resolveHref('/api/v1/x-honk/core/update' + (refresh ? '?refresh=1' : ''));
+      const response = await send(new Request(url, {headers, cache: 'no-store', signal}), undefined, false, refresh ? 30_000 : undefined);
+      if (!response.ok) throw await responseError(response, 'GET');
+      const body = (await response.json()) as CoreUpdateStatus;
+      clock.note(body.observed_at);
+      return body;
+    },
+    applyCoreUpdate: async (force = false, signal) => {
+      const url = resolveHref('/api/v1/x-honk/core/update');
+      const response = await send(
+        new Request(url, {
+          method: 'POST',
+          headers: {...headers, 'Content-Type': 'application/json'},
+          body: JSON.stringify(force ? {force: true} : {}),
+          cache: 'no-store',
+          signal
+        }),
+        undefined,
+        true,
+        180_000
+      );
+      if (!response.ok) throw await responseError(response, 'POST');
+      return (await response.json()) as CoreUpdateApplyResult;
+    },
+    config: async signal => read(await client.GET('/api/v1/config', {signal})),
+    validateConfig: async (body, signal) => read(await client.POST('/api/v1/config/validate', {body, signal})),
+    replaceConfigSource: async (source_id, content, ifMatch, signal) =>
+      accepted(
+        await starts.PUT('/api/v1/config/sources/{source_id}', {
+          params: {path: {source_id}, header: {'If-Match': ifMatch}},
+          body: {content},
+          signal
+        })
+      ),
+    createConfigSource: async (path, content, signal) => accepted(await starts.POST('/api/v1/config/sources', {body: {path, content}, signal})),
+    patchRuntimeSettings: async (body, signal) => read(await client.PATCH('/api/v1/runtime/settings', {body, signal})),
+    deleteDnsEntry: async (entry_id, signal) => read(await client.DELETE('/api/v1/dns/cache/{entry_id}', {params: {path: {entry_id}}, signal})),
+    deleteDnsCacheByName: async (query, signal) => read(await client.DELETE('/api/v1/dns/cache', {params: {query}, signal})),
+    flushDnsCache: async signal => read(await client.POST('/api/v1/dns/cache/flush', {body: {}, signal})),
+    // Readable also drops SimulationDnsData.attempt_id, whose contract value is null.
+    routingTrace: async (body, signal) => read(await client.POST('/api/v1/routing/trace', {body, signal})) as RoutingTraceResponse,
+    startReload: async signal => accepted(await starts.POST('/api/v1/operations/reload', {body: {}, signal})),
+    startSuspend: async signal => accepted(await starts.POST('/api/v1/operations/suspend', {body: {}, signal})),
+    startResume: async signal => accepted(await starts.POST('/api/v1/operations/resume', {body: {}, signal})),
+    pollOperation,
+    subscribeEvents,
+    subscribeLogs
+  };
+}

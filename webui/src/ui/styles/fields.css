@@ -1,0 +1,429 @@
+.rp-menu-scroll {
+  max-height: 360px;
+  overflow: auto;
+}
+.rp-menu-search {
+  margin: var(--rp-space-1) var(--rp-space-1) var(--rp-space-2);
+  width: 240px;
+}
+/* Holds a long menu's full height while its search loads; a list past twelve rows always reaches the cap above. */
+.rp-menu-pending {
+  height: 360px;
+}
+/* A boxless wrapper that listens for intent on the control inside it without changing the layout around it. */
+.rp-contents {
+  display: contents;
+}
+
+.rp-muted {
+  color: var(--rp-muted);
+}
+
+/* Keyboard focus must scroll the control's hidden input and painted mark together. */
+.rp-radio,
+.rp-switch {
+  position: relative;
+}
+
+.rp-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rp-space-2);
+  cursor: pointer;
+  min-height: var(--rp-control);
+}
+.rp-switch .track {
+  width: 32px;
+  height: 16px;
+  border-radius: var(--rp-r-md);
+  background: var(--rp-hl-high);
+  position: relative;
+  transition: background var(--rp-duration) var(--rp-ease);
+  flex-shrink: 0;
+}
+.rp-switch .track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  inset-inline-start: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--rp-surface);
+}
+.rp-switch[data-selected] .track {
+  background: var(--rp-accent);
+}
+.rp-switch[data-selected] .track::after {
+  transform: translateX(calc(16px * var(--rp-dir)));
+}
+/* S2 Slider, emphasized, with its thin track and default thumb. The label and the value share the line above the
+   track and span its width, the value end-aligned in tabular figures and as wide as the longest value. The track's box
+   is the control height; the 4px track in its middle has S2's large radius, so its ends are round. Unfilled, it is
+   S2's gray-300, here half the muted grey over what lies beneath, so it still shows on a glass card; the fill is the
+   emphasized accent-900, the accent here as on the Switch. The thumb is 20px at M and 22px at L, a 2px gray-800 ring
+   (text here) around gray-25 (the opaque card colour of the Glass palettes, else the surface), centred on the track.
+   S2 darkens the ring to gray-900 on hover and drag, and doona's text is already the end of its scale, so the ring
+   keeps it; a drag sinks the thumb as S2's pressScale does (motion.css). Disabled, the label, the value, both tracks
+   and the ring take S2's disabled grey, the muted grey here. */
+.rp-range {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: var(--rp-space-2);
+  inline-size: min(100%, 240px);
+}
+.rp-range .lbl {
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+  color: var(--rp-subtle);
+}
+.rp-range .out {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+.rp-range .track {
+  grid-column: 1 / -1;
+  position: relative;
+  block-size: var(--rp-control);
+}
+.rp-range[data-size='L'] .track {
+  block-size: var(--rp-control-lg);
+}
+.rp-range .track::before,
+.rp-range .fill {
+  content: '';
+  position: absolute;
+  inset-block-start: calc(50% - 2px);
+  block-size: 4px;
+  border-radius: var(--rp-r-lg);
+}
+.rp-range .track::before {
+  inset-inline: 0;
+  background: color-mix(in srgb, var(--rp-muted) 50%, transparent);
+}
+.rp-range .fill {
+  inset-inline-start: 0;
+  background: var(--rp-accent);
+}
+.rp-range .thumb {
+  --rp-thumb: 20px;
+  inset-block-start: 50%;
+  inline-size: var(--rp-thumb);
+  block-size: var(--rp-thumb);
+  box-sizing: border-box;
+  border: 2px solid var(--rp-text);
+  border-radius: 50%;
+  background: var(--rp-solid-card, var(--rp-surface));
+  cursor: grab;
+}
+.rp-range[data-size='L'] .thumb {
+  --rp-thumb: 22px;
+}
+.rp-range .thumb[data-dragging] {
+  cursor: grabbing;
+}
+.rp-range .thumb[data-focus-visible] {
+  outline: var(--rp-focus-width) solid var(--rp-focus-color);
+  outline-offset: 2px;
+}
+.rp-range[data-disabled] .lbl {
+  color: var(--rp-muted);
+}
+.rp-range[data-disabled] .track::before,
+.rp-range[data-disabled] .fill {
+  background: var(--rp-muted);
+}
+.rp-range[data-disabled] .thumb {
+  border-color: var(--rp-muted);
+  cursor: default;
+}
+.rp-switch[data-disabled],
+.rp-radio[data-disabled],
+.rp-selectbtn[data-disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+/* S2 RadioGroup: radios stacked, each a 14px ring beside its label with any help under the label. Selected, the ring
+   thickens in the accent colour around a dot of the surface; the focus ring hugs the mark, not the row. */
+.rp-radios {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-1);
+  min-width: 0;
+}
+.rp-radio {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--rp-space-2h);
+  min-height: var(--rp-control);
+  padding-block: var(--rp-space-1h);
+  cursor: pointer;
+}
+.rp-radio-mark {
+  flex: none;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border: 2px solid var(--rp-subtle);
+  border-radius: 50%;
+  background: var(--rp-surface);
+}
+.rp-radio[data-hovered] .rp-radio-mark {
+  border-color: var(--rp-text);
+}
+.rp-radio[data-selected] .rp-radio-mark {
+  border-width: 4px;
+  border-color: var(--rp-accent);
+}
+.rp-radio[data-focus-visible] {
+  outline: none;
+}
+.rp-radio[data-focus-visible] .rp-radio-mark {
+  outline: 2px solid var(--rp-accent);
+  outline-offset: 2px;
+}
+.rp-radio-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-half);
+  min-width: 0;
+}
+.rp-radio-option {
+  display: grid;
+  grid-template-columns: auto max-content minmax(0, 1fr);
+  row-gap: var(--rp-space-half);
+}
+.rp-radio-option > .rp-radio {
+  display: grid;
+  grid-area: 1 / 1 / 3 / 4;
+  grid-template-columns: subgrid;
+  grid-template-rows: subgrid;
+  gap: normal;
+}
+.rp-radio-option .rp-radio-mark {
+  margin-inline-end: var(--rp-space-2h);
+}
+.rp-radio-option .rp-radio-text {
+  display: contents;
+}
+.rp-radio-option .rp-radio-text > span {
+  grid-column: 2;
+}
+.rp-radio-option .rp-radio-text > .rp-label {
+  grid-column: 2 / -1;
+}
+.rp-radio-option .rp-help {
+  position: relative;
+  grid-area: 1 / 3 / 3 / 4;
+  align-self: start;
+  margin-block-start: var(--rp-space-1);
+}
+/* S2 Checkbox: the radio's row with a 14px box of 2px radius; checked, it fills with the accent colour under a
+   checkmark in the colour text on the accent takes. */
+.rp-checkbox-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border: 2px solid var(--rp-subtle);
+  border-radius: 2px;
+  background: var(--rp-surface);
+  color: var(--rp-on-accent);
+}
+.rp-checkbox-mark .rp-icon {
+  width: 10px;
+  height: 10px;
+  visibility: hidden;
+}
+.rp-checkbox[data-hovered] .rp-checkbox-mark {
+  border-color: var(--rp-text);
+}
+.rp-checkbox:is([data-selected], [data-indeterminate]) .rp-checkbox-mark {
+  border-color: var(--rp-accent);
+  background: var(--rp-accent);
+}
+.rp-checkbox[data-selected] .rp-checkbox-mark .rp-icon {
+  visibility: visible;
+}
+.rp-checkbox[data-focus-visible] .rp-checkbox-mark {
+  outline: 2px solid var(--rp-accent);
+  outline-offset: 2px;
+}
+.rp-radios > .rp-label:last-child {
+  margin-top: var(--rp-space-1);
+}
+/* Radios under a Disclosure in the group keep the group's spacing. */
+.rp-radios .rp-disclosure-content {
+  gap: var(--rp-space-1);
+  padding: var(--rp-space-1) 0 0;
+}
+.rp-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-1);
+  min-width: 0;
+}
+/* A control beside stacked fields in a top-aligned toolbar sits level with their inputs, under the label row. A disabled
+   button sits in its tooltip wrapper, which then takes the offset; a passive wrapper has no box, so its button does. */
+.rp-toolbar.top > :is(.rp-field-row, .rp-tipwrap:has(> .rp-field-row)),
+.rp-toolbar.top > .rp-tipwrap[data-passive] > .rp-field-row {
+  margin-top: var(--rp-space-5);
+}
+/* A form row in a dialog: a field with no fixed width grows to fill the row, so its edges meet those of the full-width
+   fields around it. Two such fields share a row while each keeps 11rem, then the row wraps and each takes a row of its
+   own; a field with a fixed width keeps it. A wrapped row is spaced as the dialog's other fields are. */
+.rp-dialog .rp-toolbar.top {
+  row-gap: var(--rp-space-2);
+}
+.rp-dialog .rp-toolbar.top > .rp-field:not([data-fixed]) {
+  flex: 1 1 11rem;
+}
+/* S2 help text: an error reads in the negative tone at the hint's size, and the field it names takes a negative edge.
+   The icon and weight carry it where a palette's negative text is the body colour. */
+.rp-field-error {
+  display: flex;
+  gap: var(--rp-space-1);
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+  font-weight: 500;
+  color: var(--rp-negative-text);
+}
+.rp-field-error > .rp-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+/* A search field stacks its box over its error the way a labelled field does, without a label. */
+.rp-search-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-1);
+  min-width: 0;
+  max-width: 100%;
+}
+/* In a toolbar the error adds height below the box only, so the row aligns by the top of its controls and centres its
+   text in a control-high line, instead of lifting the box above its neighbours. A side-labelled field does the same. */
+.rp-toolbar:has(> :is(.rp-search-field, .rp-cluster)[data-invalid]) {
+  align-items: flex-start;
+}
+.rp-toolbar:has(> .rp-search-field[data-invalid]) > .rp-label {
+  line-height: var(--rp-control);
+}
+.rp-toolbar:has(> .rp-search-field[data-invalid]) > .rp-help-row {
+  min-height: var(--rp-control);
+}
+:is(.rp-field, .rp-cluster, .rp-search-field)[data-invalid] .rp-input {
+  border-color: var(--rp-negative);
+}
+/* Any focus inside the field, mouse included, takes the strong border as in S2; an invalid field keeps its own. */
+.rp-input:focus-within {
+  border-color: var(--rp-text);
+}
+.rp-field > label:not(.rp-switch),
+.rp-field .lbl {
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+  color: var(--rp-subtle);
+}
+.rp-selectbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rp-space-2);
+  height: var(--rp-control);
+  padding-block: 0;
+  padding-inline: var(--rp-space-3);
+  border-radius: var(--rp-r-md);
+  background: var(--rp-overlay);
+  border: 0;
+  color: var(--rp-text);
+  cursor: pointer;
+  min-width: 120px;
+}
+.rp-selectbtn[data-size='L'] {
+  height: var(--rp-control-lg);
+  padding-inline: var(--rp-lg-inset-field);
+  font-size: var(--rp-lg-text);
+  border-radius: var(--rp-lg-radius);
+}
+.rp-switch[data-size='L'] {
+  min-height: var(--rp-control-lg);
+  font-size: var(--rp-lg-text);
+}
+.rp-selectbtn[data-hovered] {
+  background: var(--rp-hl-med);
+}
+/* Settings controls share one column width across groups (auto-fill keeps empty tracks), including fields with nested status or help text. */
+.rp-toolbar.rp-fieldgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  align-items: start;
+}
+.rp-fieldgrid :is(.rp-field, .rp-selectbtn, .rp-input) {
+  width: 100% !important;
+  min-width: 0;
+}
+.rp-fieldgrid > .rp-label {
+  grid-column: 1 / -1;
+}
+
+/* A searchable picker's popover spans its trigger, as a picker's list does; the virtual rows cannot size it. */
+.rp-popover.rp-search-popover {
+  width: max(var(--trigger-width), 260px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.rp-search-popover > [role='dialog'] {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.rp-search-popover .rp-menu-scroll {
+  min-height: 0;
+}
+.rp-search-popover .rp-menu-search {
+  width: auto;
+  flex: none;
+}
+
+.rp-switch {
+  font-size: var(--rp-text-md);
+  line-height: var(--rp-line-body);
+  color: var(--rp-text);
+}
+
+.rp-checkbox-set {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-2);
+  min-width: 0;
+}
+.rp-checkbox-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--rp-space-2) var(--rp-space-4);
+  padding: var(--rp-space-1);
+}
+.rp-checkbox-options .rp-radio-text {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .rp-checkbox-options {
+    grid-template-columns: 1fr;
+  }
+}
+
+.rp-field-help {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rp-space-2);
+}

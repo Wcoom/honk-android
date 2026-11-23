@@ -1,0 +1,242 @@
+.rp-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rp-space-1);
+  height: var(--rp-control);
+  padding: 0 var(--rp-space-2);
+  border-radius: var(--rp-r-md);
+  background: transparent;
+  border: 0;
+  color: var(--rp-text);
+  cursor: pointer;
+  font-size: var(--rp-text-xs);
+  line-height: var(--rp-line-caption);
+}
+.rp-select[data-size='L'] {
+  height: var(--rp-control-lg);
+  padding-inline: var(--rp-lg-inset-field);
+  font-size: var(--rp-lg-text-compact);
+  line-height: var(--rp-line-body);
+  border-radius: var(--rp-lg-radius);
+}
+.rp-select[data-hovered] {
+  background: var(--rp-fill);
+}
+/* The box is the modal; the dialog scrolls inside it, so the surface and its rim never scroll away. */
+.rp-modal {
+  position: relative;
+  background: var(--rp-surface);
+  border-radius: var(--rp-r-xl);
+  width: min(720px, 90vw);
+  max-height: calc(100dvh - var(--rp-modal-top) - 24px - env(safe-area-inset-bottom, 0px));
+  display: flex;
+  overflow: hidden;
+}
+.rp-dialog {
+  flex: 1;
+  min-width: 0;
+  padding: var(--rp-space-6) var(--rp-space-8);
+  overflow: hidden auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-4);
+  outline: none;
+}
+/* The column's gap spaces a dialog's paragraphs; a paragraph's own margin would add to it. */
+.rp-dialog > p,
+.rp-dialog-section > p,
+.rp-dialog-content > p {
+  margin: 0;
+}
+.rp-dialog-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-6);
+}
+.rp-dialog-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-2);
+  min-width: 0;
+}
+.rp-underlay {
+  /* Where a modal starts: 12dvh down, or below the toasts that are showing (their height, published as --rp-toast-band,
+     plus their 16px edge gap and a 12px gap) so they never cover it. */
+  --rp-modal-top: max(12dvh, var(--rp-toast-band, 0px) + 28px);
+  position: fixed;
+  inset: 0;
+  background: var(--rp-underlay);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: var(--rp-modal-top);
+  z-index: var(--rp-z-modal);
+}
+.rp-input {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--rp-space-2);
+  height: var(--rp-control);
+  padding: 0 var(--rp-space-3);
+  border: 1px solid var(--rp-hl-high);
+  border-radius: var(--rp-r-md);
+  background: var(--rp-base);
+}
+.rp-input[data-size='L'] {
+  height: var(--rp-control-lg);
+  padding-inline: var(--rp-lg-inset-field);
+  font-size: var(--rp-lg-text);
+  border-radius: var(--rp-lg-radius);
+}
+/* The field's own glyphs match button icons: 16px in the 32px field, 20px in the large header search. */
+.rp-input .rp-icon {
+  width: 16px;
+  height: 16px;
+}
+.rp-input[data-size='L'] > .rp-icon {
+  width: 20px;
+  height: 20px;
+}
+.rp-input :is(.clear, .reveal) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--rp-control);
+  height: var(--rp-control);
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--rp-subtle);
+  cursor: pointer;
+}
+.rp-input :is(.clear, .reveal)[data-hovered] {
+  background: var(--rp-hl-med);
+}
+.rp-input .clear {
+  transition:
+    opacity var(--rp-duration) var(--rp-ease),
+    scale var(--rp-duration) var(--rp-ease-out),
+    background-color var(--rp-duration) var(--rp-ease);
+}
+/* A secret field's show or hide toggle sits at the field's end. */
+.rp-input .reveal {
+  flex: none;
+}
+.rp-input .reveal[data-focus-visible] {
+  outline: 2px solid var(--rp-accent);
+  outline-offset: -2px;
+}
+.rp-search-field[data-empty] .clear {
+  opacity: 0;
+  scale: 0.6;
+  pointer-events: none;
+}
+.rp-input input {
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  /* A value or placeholder wider than the field fades to an ellipsis instead of an abrupt cut mid-word. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Fixed text around the value, such as a path's directory and extension: muted, inside the border, and close enough
+   to the value to read as one string. */
+.rp-input.affixed {
+  gap: 0;
+}
+.rp-input.affixed input {
+  padding-inline: 0;
+}
+.rp-input .affix {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--rp-subtle);
+}
+/* S2 NumberField at M: two 20px stepper buttons at the field's end, 4px apart and 4px in from the border. */
+.rp-input.stepped {
+  padding-inline-end: var(--rp-space-1);
+}
+.rp-input .steppers {
+  display: flex;
+  flex: none;
+  gap: var(--rp-space-1);
+}
+.rp-input .step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rp-r-xs);
+  background: var(--rp-hl-low);
+  color: var(--rp-text);
+}
+.rp-input .step[data-hovered] {
+  background: var(--rp-hl-med);
+}
+.rp-input .step[data-disabled] {
+  opacity: 0.4;
+}
+.rp-input .step .rp-icon {
+  width: 10px;
+  height: 10px;
+}
+.rp-input input::-webkit-search-cancel-button {
+  display: none;
+}
+.rp-results {
+  max-height: 420px;
+  overflow: auto;
+}
+.rp-results .rp-sec-h {
+  /* Search results have no check column to align with. */
+  padding: var(--rp-space-2) var(--rp-space-3) var(--rp-space-1);
+}
+
+.group-dialog-filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-1);
+  min-width: 0;
+}
+.group-dialog-filter-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rp-space-2);
+  min-width: 0;
+}
+.group-dialog-filter-list:empty {
+  display: none;
+}
+.group-dialog-filters > button {
+  align-self: flex-start;
+}
+.rp-modal[data-size='large'] {
+  width: min(960px, 94vw);
+}
+.rp-modal[data-size='wide'] {
+  width: min(1440px, 94vw);
+}
+@media (max-width: 639.98px) {
+  .rp-underlay[data-size='wide'],
+  .rp-underlay[data-size='large'] {
+    padding: 0;
+  }
+  .rp-modal[data-size='wide'],
+  .rp-modal[data-size='large'] {
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+}

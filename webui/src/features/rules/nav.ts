@@ -1,0 +1,46 @@
+import type {Capabilities} from '../../api/model';
+import {offered} from '../../api/capabilities';
+import {rulesTabs} from './tabs';
+import type {SearchTarget} from '../../shell/routes';
+
+// The tabs are read apart from the search targets, so the startup Skeleton does not load these.
+export {rulesTabs};
+
+// The rule editors and the routing modes, for search; editing needs a writable configuration.
+export function rulesTargets(resources: Capabilities['resources'] | undefined): SearchTarget[] {
+  const tabs = rulesTabs(resources).map(tab => tab.id);
+  const routing = tabs.includes('list') && offered(resources, 'rules', {whileLoading: false}) && resources?.config.writable === true;
+  return [
+    ...(routing
+      ? [
+          {
+            id: 'rules:add',
+            titleKey: 'rule.add',
+            parentKey: 'rule.listTitle',
+            route: 'rules',
+            params: {tab: 'list', view: 'advanced'},
+            aliases: ['condition']
+          } as const,
+          {
+            id: 'rules:services',
+            titleKey: 'rule.service.add',
+            parentKey: 'rule.listTitle',
+            route: 'rules',
+            params: {tab: 'list', view: 'simple', service: 'add'},
+            aliases: ['Steam Telegram GitHub geosite']
+          } as const,
+          {
+            id: 'rules:modes',
+            titleKey: 'rule.template.mode',
+            parentKey: 'rule.listTitle',
+            route: 'rules',
+            params: {tab: 'list', view: 'simple'},
+            aliases: ['template']
+          } as const
+        ]
+      : []),
+    ...(tabs.includes('dns') && resources?.config.writable === true
+      ? [{id: 'rules:dns-add', titleKey: 'rule.add', parentKey: 'rule.dnsTitle', route: 'rules', params: {tab: 'dns'}, aliases: ['dns condition']} as const]
+      : [])
+  ];
+}

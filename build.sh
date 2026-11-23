@@ -46,7 +46,46 @@ if [ -z "${HONK_DOONA_DIR:-}" ]; then
     if [ "${FETCH_DOONA:-0}" = "1" ] && [ -x "$SRC/ci/fetch-doona.sh" ]; then
         HONK_DOONA_DIR="$("$SRC/ci/fetch-doona.sh")"
         export HONK_DOONA_DIR
-    else
+    elif [ -f "$(dirname "$SRC")/webui/package.json" ]; then
+        WEBUI_DIR="$(cd "$(dirname "$SRC")/webui" && pwd)"
+        PNPM_BIN="$(command -v pnpm || true)"
+        if [ -z "$PNPM_BIN" ] && [ -x "$HOME/.local/bin/pnpm" ]; then
+            PNPM_BIN="$HOME/.local/bin/pnpm"
+        fi
+        if [ -n "$PNPM_BIN" ] && command -v node >/dev/null 2>&1; then
+            if [ ! -d "$WEBUI_DIR/node_modules" ]; then
+                "$PNPM_BIN" -C "$WEBUI_DIR" install --frozen-lockfile
+            fi
+            if [ ! -d "$WEBUI_DIR/apps/lite/node_modules" ]; then
+                "$PNPM_BIN" -C "$WEBUI_DIR/apps/lite" install --frozen-lockfile
+            fi
+            if [ "${REBUILD_WEBUI:-0}" = "1" ] || [ ! -f "$WEBUI_DIR/dist/index.html" ] || [ ! -f "$WEBUI_DIR/dist/.vite/bundled-packages.json" ]; then
+                "$PNPM_BIN" -C "$WEBUI_DIR" build
+            fi
+            if [ "${REBUILD_WEBUI:-0}" = "1" ] || [ ! -f "$WEBUI_DIR/apps/lite/dist/index.html" ] || [ ! -f "$WEBUI_DIR/apps/lite/dist/.vite/bundled-packages.json" ]; then
+                "$PNPM_BIN" -C "$WEBUI_DIR/apps/lite" build
+            fi
+            STAGE_DOONA="$SRC/target/doona-embedded"
+            for edition in main lite; do
+                if [ "$edition" = "main" ]; then
+                    DIST_DIR="$WEBUI_DIR/dist"
+                    OUT_DIR="$STAGE_DOONA"
+                else
+                    DIST_DIR="$WEBUI_DIR/apps/lite/dist"
+                    OUT_DIR="${STAGE_DOONA}-lite"
+                fi
+                rm -rf "$OUT_DIR"
+                mkdir -p "$OUT_DIR"
+                cp -a "$DIST_DIR"/. "$OUT_DIR"/
+                rm -rf "$OUT_DIR/fonts" "$OUT_DIR/.vite"
+                cp "$WEBUI_DIR/LICENSE" "$WEBUI_DIR/NOTICE" "$WEBUI_DIR/README.md" "$WEBUI_DIR/README.en.md" "$OUT_DIR"/
+                (cd "$WEBUI_DIR" && node tools/notices.mjs "$OUT_DIR" "$DIST_DIR/.vite/bundled-packages.json")
+            done
+            HONK_DOONA_DIR="$STAGE_DOONA"
+            export HONK_DOONA_DIR
+        fi
+    fi
+    if [ -z "${HONK_DOONA_DIR:-}" ]; then
         for cand in "$SRC"/target/doona-[0-9]*; do
             if [ -d "$cand" ] && [ -d "${cand}-lite" ]; then
                 HONK_DOONA_DIR="$cand"

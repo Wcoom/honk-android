@@ -1,0 +1,219 @@
+import {useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {poll, useCapabilities, useGroups, useNodes, useProviders, useSteadyNodes} from '../../store';
+import {healthMillis, preferredHealth} from '../../api/selectors';
+import {useMainSourceEdit} from '../../store/mainSource';
+import {useCompleteness, useConfig} from '../../store/config';
+import {editedCard, groupKind, kindFilter, kindQuery, kindView, subscriptionSources} from './view';
+import {groupOwners, outboundLinks, type OutboundCatalogue} from '../shared/groupText';
+import type {HealthObservation} from '../../api/model';
+import {sameHealth, selectionHealth} from './health';
+import type {PageProps} from '../../shell/routes';
+import {within} from '../../shell/route';
+import {offered} from '../../api/capabilities';
+import {openGroup} from './group/openGroup';
+import {useNearViewport} from '../../ui/ui';
+import {useLanding} from '../../ui/landing';
+import {useGroupDialog} from './group/useGroupDialog';
+import {quoteName, isWritableName} from '../../dae/groups';
+import {useT} from '../../i18n';
+import {declaredSubscriptions, uniqueEntries} from '../shared/subscriptionEntries';
+
+export function usePolicies({go, query}: PageProps) {
+  const t = useT();
+  const capabilities = useCapabilities();
+  const resources = capabilities.data?.resources;
+  // The list carries each group's selection, so a change made elsewhere shows within one live poll; the poll stops
+  // while the tab is hidden and when the page is left.
+  const groups = useGroups(offered(resources, 'groups', {whileLoading: true}), poll.live);
+  const nodesOffered = offered(resources, 'nodes', {whileLoading: false});
+  const nodes = useNodes(nodesOffered);
+  const roster = useSteadyNodes(nodes.data);
+  const params = new URLSearchParams(query);
+  const requestedGroup = params.get('group');
+  const focus = groups.data?.find(group => group.id === requestedGroup || group.name === requestedGroup)?.id ?? requestedGroup;
+  const providers = useProviders(offered(resources, 'providers', {whileLoading: false}));
+  useEffect(() => {
+    if (new URLSearchParams(query).has('tab')) go('policies', within(query, {tab: null}), {replace: true});
+  }, [query, go]);
+  const [health, setHealth] = useState<{from: typeof nodes.data; groups: typeof groups.data; map: Map<string, HealthObservation | undefined>}>({
+    from: undefined,
+    groups: undefined,
+    map: new Map()
+  });
+  if (health.from !== nodes.data || health.groups !== groups.data) {
+    const map = selectionHealth(new Map((nodes.data ?? []).map(node => [node.id, preferredHealth(node)])), groups.data ?? []);
+    setHealth({from: nodes.data, groups: groups.data, map: sameHealth(health.map, map) ? health.map : map});
+  }
+  const sourceState = useMainSourceEdit();
+  const {main, writable, busy, apply, error, retry} = sourceState;
+  const source = useMemo(() => ({main, writable, busy, apply, error, retry}), [main, writable, busy, apply, error, retry]);
+  // A group is edited in the source that declares it, which need not be the main one.
+  const config = useConfig(offered(resources, 'config', {whileLoading: false}));
+  const sources = config.data?.sources;
+  const owners = useMemo(() => groupOwners(sources ?? []), [sources]);
+  const isComplete = useCompleteness(useMemo(() => sources ?? [], [sources]));
+  const memberSources = useMemo(
+    () => subscriptionSources(providers.data?.providers ?? [], roster ?? [], uniqueEntries(declaredSubscriptions(sources ?? []))),
+    [providers.data, roster, sources]
+  );
+  const runtimeGroups = offered(resources, 'groups', {whileLoading: true});
+  const declarations = useMemo(
+    () =>
+      runtimeGroups
+        ? []
+        : [...owners].map(([name, owner]) => ({
+            name,
+            declaration: {owner, complete: owner !== 'ambiguous' ? isComplete(owner.origin) : undefined, loaded: !!sources, error: config.error}
+          })),
+    [runtimeGroups, owners, isComplete, sources, config.error]
+  );
+  const cards = useMemo(
+    () =>
+      (runtimeGroups ? (groups.data ?? []) : []).map(group => {
+        const owner = owners.get(group.name);
+        return {
+          id: group.id,
+          domId: 'group-' + group.id,
+          name: group.name,
+          members: group.member_count,
+          kind: groupKind(group.policy),
+          selection: group.selection,
+          declaration: {
+            owner,
+            complete: owner && owner !== 'ambiguous' ? isComplete(owner.origin) : undefined,
+            loaded: !!sources,
+            error: config.error
+          }
+        };
+      }),
+    [runtimeGroups, groups.data, owners, isComplete, sources, config.error]
+  );
+  // Rebuilt only when a name, a declaration or a shown latency changes, so a poll that changes none keeps the cards memoised.
+  const groupKey = (runtimeGroups ? (groups.data ?? []).map(group => group.name) : [...owners.keys()]).join('\n');
+  const nodeKey = (nodes.data ?? []).map(node => `${node.id}\u0000${node.name}`).join('\n');
+  const [named, setNamed] = useState<{key: string; nodes: Array<{id: string; name: string}>}>({key: '', nodes: []});
+  if (named.key !== nodeKey) setNamed({key: nodeKey, nodes: (nodes.data ?? []).map(({id, name}) => ({id, name}))});
+  const outbounds = useMemo<OutboundCatalogue>(
+    () => ({
+      groups: groupKey ? groupKey.split('\n') : [],
+      nodes: named.nodes.map(node => {
+        const observed = health.map.get(node.id);
+        return {name: node.name, tcp: healthMillis(observed), alive: observed?.state === 'unavailable' ? false : undefined};
+      }),
+      links: outboundLinks(owners)
+    }),
+    [groupKey, named, health.map, owners]
+  );
+  // The card whose editor is open outlives its group, so the editor keeps the unsaved edits until it is closed.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [kept, setKept] = useState<(typeof cards)[number] | null>(null);
+  const edited = editedCard(cards, editing, kept);
+  if (edited.kept !== kept) setKept(edited.kept);
+  const onEditing = useCallback((id: string, open: boolean) => setEditing(prev => (open ? id : prev === id ? null : prev)), []);
+  const kinds = kindView(cards, kindFilter(params.get('kind')), focus, t);
+  const requested = kindFilter(params.get('kind'));
+  useEffect(() => {
+    if (kinds.kind !== requested) go('policies', within(query, {kind: null}), {replace: true});
+  }, [kinds.kind, requested, go, query]);
+  const ready = !!groups.data && (!focus || cards.some(card => card.id === focus));
+  // Cards above the linked one may still settle as their details mount, so the landing follows it.
+  useLanding(
+    focus,
+    () => {
+      const card = document.getElementById('group-' + focus);
+      return card && {target: card, focus: card.querySelector<HTMLElement>('h2')};
+    },
+    ready
+  );
+  const {refetch: refreshGroups} = groups;
+  const {refetch: refreshNodes} = nodes;
+  const reload = useCallback(() => {
+    if (runtimeGroups) refreshGroups();
+    else retry();
+    refreshNodes();
+  }, [runtimeGroups, refreshGroups, refreshNodes, retry]);
+  const create = useGroupDialog({
+    mode: 'create',
+    source,
+    taken: new Set([...outbounds.groups, ...owners.keys()]),
+    outbounds,
+    nodes: roster ?? [],
+    onCreated: name => (runtimeGroups ? openGroup(go, name) : go('policies', within('', {group: name})))
+  });
+  const openCreate = useEffectEvent(() => {
+    create.show(params.has('node') && isWritableName(params.get('node')!) ? [`name(${quoteName(params.get('node')!)})`] : []);
+    go('policies', within(query, {new: null, node: null}), {replace: true});
+  });
+  const editorOpened = useCallback(() => go('policies', within(query, {edit: null, node: null}), {replace: true}), [go, query]);
+  const newRequested = params.get('new') === '1';
+  useEffect(() => {
+    if (newRequested && source.main && source.writable) openCreate();
+  }, [newRequested, source.main, source.writable]);
+  return {
+    declarations,
+    cards: edited.gone ? [...kinds.shown, {...edited.gone, gone: true}] : kinds.shown,
+    onEditing,
+    nodes: roster,
+    providers: providers.data?.providers ?? [],
+    memberSources,
+    create,
+    createDisabled: !source.writable || !source.main || source.busy,
+    editRequested: params.get('edit') === '1',
+    seedNode: params.get('node') ?? undefined,
+    editorOpened,
+    // The kind filter, in the query so a reload and Back keep it. Choosing one ends a link's hold on its group.
+    kind: kinds.kind,
+    kindItems: kinds.items,
+    kindEmpty: kinds.empty,
+    kindLabel: t('policy.kind.label'),
+    setKind: (next: string) => go('policies', kindQuery(query, next)),
+    showKinds: cards.length > 0,
+    focus,
+    health: health.map,
+    outbounds,
+    source,
+    error: groups.error ?? nodes.error ?? (!runtimeGroups ? config.error : null),
+    // A card's size depends on its members' health as well, so the cards wait for the node list too, and for the
+    // capabilities that say whether it is offered.
+    loading:
+      (runtimeGroups ? groups.loading && !groups.data : config.loading && !sources) ||
+      (!resources && !capabilities.error) ||
+      (nodesOffered && !nodes.data && !nodes.error),
+    empty: runtimeGroups ? groups.data?.length === 0 : !!sources && declarations.length === 0,
+    reload,
+    refreshGroups: groups.refetch,
+    refreshNodes: nodes.refetch,
+    groups: groups.data
+  };
+}
+// A card mounts its details the first time it nears the viewport and keeps them; `visible` follows the viewport.
+// `onOpen` runs the first time the card opens, including in the ref of a card that mounts on screen.
+export function usePolicyVisibility(focused: boolean, onOpen?: () => void) {
+  const [expanded, setExpanded] = useState(false);
+  const card = useRef<HTMLElement | null>(null);
+  // Expanding removes the focused placeholder button, so the card itself takes focus instead of the page body.
+  const refocus = useRef(false);
+  const opened = useRef(false);
+  const open = useCallback(() => {
+    refocus.current = !!card.current?.contains(document.activeElement);
+    // The viewport reports a card near again after its details have mounted; a focused card's details mount at once.
+    if (!opened.current && !focused) onOpen?.();
+    opened.current = true;
+    setExpanded(true);
+  }, [focused, onOpen]);
+  const [nearRef, visible] = useNearViewport(open);
+  const ref = useCallback(
+    (element: HTMLElement | null) => {
+      card.current = element;
+      return nearRef(element);
+    },
+    [nearRef]
+  );
+  const active = focused || expanded;
+  useLayoutEffect(() => {
+    if (!active || !refocus.current) return;
+    refocus.current = false;
+    if (!card.current?.contains(document.activeElement)) card.current?.focus();
+  }, [active]);
+  return {ref, active, visible, expand: open};
+}

@@ -1,0 +1,153 @@
+import {detail, expect, test, loadingState} from './fixtures';
+import {createMockApi} from '../mock';
+
+test('native activity shows the API version and follows runtime events', async ({page}) => {
+  const version = await createMockApi().version();
+  await page.clock.install();
+  await page.goto('/#/activity');
+  await expect(page.locator('.rp-version')).toHaveText(`${version.engine.name} ${version.engine.version}`);
+  const notifications = page.getByRole('region', {name: 'Notifications', exact: true});
+  await notifications.scrollIntoViewIfNeeded();
+  await page.clock.fastForward(5100);
+  await expect(notifications.getByRole('listitem').filter({hasText: 'runtime.updated'})).toHaveCount(0);
+  await page.goto('/#/events');
+  // Runtime heartbeats are hidden by default; the stream reconnects on the new page and the next tick lands
+  // after the mock's five-second cadence.
+  await page.getByRole('button', {name: 'Exclude runtime updates Kind', exact: true}).click();
+  await page.getByRole('option', {name: 'Runtime updated', exact: true}).click();
+  await page.clock.fastForward(5100);
+  await page.clock.fastForward(5100);
+  await expect(page.locator('.rp-table [role=row][data-key]').filter({hasText: 'Runtime updated'}).first()).toContainText('/api/v1/runtime');
+  await page.goto('/#/connections?id=2');
+  await expect(detail(page).getByRole('heading', {name: 'cdn.bilibili.com'})).toBeVisible();
+});
+
+test('refresh remains pending until completion, refetches non-polling resources, and reports errors', async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 1000});
+  const api = createMockApi();
+  const capabilities = await api.capabilities();
+  capabilities.resources.events.available = false;
+  const version = await api.version();
+  const responses: Record<string, unknown> = {
+    '/capabilities': capabilities,
+    '/version': version,
+    '/runtime': await api.runtime(),
+    '/datapath': await api.datapath('full'),
+    '/runtime/memory': await api.runtimeMemory(),
+    '/runtime/memory/history': await api.memoryHistory({window_seconds: 600}),
+    '/runtime/outbounds': await api.runtimeOutbounds(),
+    '/runtime/traffic/history': await api.trafficHistory(),
+    '/connections': await api.connections({detail: 'full', limit: 1000}),
+    '/nodes': await api.nodes({limit: 1000}),
+    '/providers': await api.providers({limit: 1000}),
+    '/config': await api.config(),
+    '/groups': await api.groups()
+  };
+  const counts: Record<string, number> = {};
+  let hold: Promise<void> | undefined;
+  let release = () => {};
+  let brokenRuntime = false;
+  await page.clock.install({time: new Date('2026-09-16T00:00:00Z')});
+  await page.clock.pauseAt(new Date('2026-09-16T00:00:01Z'));
+  // A saved bearer lets the Activity chunk load with the shell; without one it would wait for capabilities, and a
+  // paused clock holds a suspended page.
+  await page.addInitScript(() => {
+    localStorage.setItem('doona-api', location.origin);
+    localStorage.setItem('doona-api-token', 'e2e');
+  });
+  await page.route('**/api/v1/**', async route => {
+    const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
+    counts[path] = (counts[path] ?? 0) + 1;
+    if (path === '/version') await hold;
+    if (path === '/runtime' && brokenRuntime) return route.fulfill({contentType: 'application/json', body: '{'});
+    if (path === '/dns/query') return route.fulfill({contentType: 'application/json', body: '{'});
+    await route.fulfill({json: responses[path]});
+  });
+  await page.goto('/#/activity');
+  await expect(page.locator('.rp-version')).toHaveText(`${version.engine.name} ${version.engine.version}`);
+  await expect(page.locator(`.rp-content ${loadingState}`)).toHaveCount(0);
+  await expect.poll(() => Object.keys(counts).sort()).toEqual(Object.keys(responses).sort());
+  // Resources gated on capabilities start a moment after it lands; wait until the counts stop moving.
+  await expect
+    .poll(async () => {
+      const snapshot = JSON.stringify(counts);
+      await new Promise(resolve => setTimeout(resolve, 250));
+      return snapshot === JSON.stringify(counts);
+    })
+    .toBe(true);
+  const before = {...counts};
+  hold = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  responses['/version'] = {...version, engine: {name: 'honk-live', version: '1.2.4'}};
+  const refresh = page.getByRole('button', {name: 'Refresh', exact: true});
+  await page.getByRole('button', {name: 'Refresh', exact: true}).click();
+  await expect.poll(() => Object.entries(before).every(([path, count]) => counts[path] === count + 1)).toBe(true);
+  await page.clock.fastForward(700);
+  await expect(refresh).toHaveAttribute('data-pending');
+  release();
+  await expect(page.locator('.rp-version')).toHaveText('honk-live 1.2.4');
+  await expect(refresh).not.toHaveAttribute('data-pending');
+  await expect(page.locator('.rp-toast.positive')).toContainText('Data refreshed.');
+  hold = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  await page.getByRole('button', {name: 'Refresh', exact: true}).click();
+  await expect(refresh).toHaveAttribute('data-pending');
+  await page.clock.fastForward(2100);
+  await expect(refresh).toHaveAttribute('data-pending');
+  release();
+  await expect(refresh).not.toHaveAttribute('data-pending');
+  await expect(page.locator('.rp-content').getByRole('alert')).toHaveCount(0);
+  brokenRuntime = true;
+  await page.getByRole('button', {name: 'Refresh', exact: true}).click();
+  await expect(page.locator('.rp-content').getByRole('alert')).toBeVisible();
+  await expect(refresh).not.toHaveAttribute('data-pending');
+  await expect(page.locator('.rp-toast.negative')).toContainText('Could not refresh data');
+  // It carries Copy error, so it stays until closed.
+  await page.locator('.rp-toast.negative .close').click();
+  await page.goto('/#/dns?tab=query');
+  await page.clock.fastForward(6000);
+  await expect(page.locator('.rp-toast.positive')).toHaveCount(0);
+  await page.getByRole('textbox', {name: 'Domain', exact: true}).fill('example.com');
+  await page.getByRole('button', {name: 'Query', exact: true}).click();
+  const actionError = page.locator('.rp-content').getByRole('alert');
+  await expect(actionError).toBeVisible();
+  // Said once, on the page: a failed query adds no toast of its own.
+  await expect(actionError).toContainText('Could not run the query');
+  await expect(page.locator('.rp-toast.negative')).toHaveCount(0);
+  const actionFailure = await actionError.textContent();
+  brokenRuntime = false;
+  await refresh.click();
+  await expect(refresh).not.toHaveAttribute('data-pending');
+  await expect(page.locator('.rp-toast.positive')).toContainText('Data refreshed.');
+  await expect(actionError).toHaveText(actionFailure!);
+});
+
+test('a long backend version ends in an ellipsis in the side navigation and shows whole in its popover', async ({page}) => {
+  const api = createMockApi();
+  const long = 'debug.2026.9.26.native-api.3f079c7cc94724cfa4133ff90048c0e7c22f5e6f';
+  const capabilities = await api.capabilities();
+  for (const resource of Object.values(capabilities.resources)) resource.available = false;
+  await page.setViewportSize({width: 1280, height: 800});
+  await page.addInitScript(() => localStorage.setItem('doona-api', location.origin));
+  await page.route('**/api/v1/capabilities', route => route.fulfill({json: capabilities}));
+  await page.route('**/api/v1/version', async route => route.fulfill({json: {...(await api.version()), engine: {name: 'honk', version: long}}}));
+  await page.goto('/#/activity');
+  const indicator = page.locator('.rp-side .rp-version');
+  await expect(indicator).toHaveText(`honk ${long}`);
+  const fit = await indicator.evaluate(button => {
+    const nav = button.closest('.rp-side')!;
+    const text = button.querySelector('.rp-version-text')!;
+    return {
+      navFits: nav.scrollWidth <= nav.clientWidth,
+      inside: button.getBoundingClientRect().right <= nav.getBoundingClientRect().right,
+      clipped: text.scrollWidth > text.clientWidth
+    };
+  });
+  expect(fit).toEqual({navFits: true, inside: true, clipped: true});
+  await indicator.click();
+  const heading = page.getByRole('dialog').getByRole('heading');
+  await expect(heading).toHaveText(`honk ${long}`);
+  expect(await heading.evaluate(h => h.scrollWidth <= h.clientWidth)).toBe(true);
+});

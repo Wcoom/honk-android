@@ -238,6 +238,86 @@ index 432f78d..d6eb6f5 100644
 +        Command::Clashapi => Ok(()),
      }
  }
+diff --git a/boxctl/src/resource.rs b/boxctl/src/resource.rs
+index b200b5c..43fafb1 100644
+--- a/boxctl/src/resource.rs
++++ b/boxctl/src/resource.rs
+@@ -35,6 +35,8 @@ pub(crate) fn apply(config: &Config, pid: u32) -> Result<()> {
+             Ok(detail) => applied.push(format!("memory {detail}")),
+             Err(err) => failed.push(format!("memory {err}")),
+         }
++    } else if config.bin_name == "honk" {
++        let _ = ensure_honk_unbounded_cgroup(pid);
+     }
+     if config.cgroup_blkio {
+         any_enabled = true;
+@@ -82,12 +84,32 @@ fn current_pid(config: &Config, runner: &Runner) -> Result<u32> {
+     Err(format!("service is not running: {}", config.bin_name))
+ }
+ 
++fn ensure_honk_unbounded_cgroup(pid: u32) -> Result<()> {
++    let cgroup =
++        find_cgroup_mount("memory").ok_or_else(|| "memory cgroup path not found".to_string())?;
++    let target = ensure_cgroup_target(&cgroup, "memory", &["honk"])?;
++    match cgroup.version {
++        CgroupVersion::V1 => {
++            let _ = write_value(&target.join("memory.limit_in_bytes"), "-1");
++        }
++        CgroupVersion::V2 => {
++            let _ = write_value(&target.join("memory.max"), "max");
++        }
++    }
++    write_pid(&target, pid)
++}
++
+ fn apply_memcg(config: &Config, pid: u32) -> Result<String> {
+     let limit = parse_size(&config.memcg_limit)
+         .ok_or_else(|| format!("invalid memory limit: {}", config.memcg_limit))?;
+     let cgroup =
+         find_cgroup_mount("memory").ok_or_else(|| "memory cgroup path not found".to_string())?;
+-    let target = ensure_cgroup_target(&cgroup, "memory", &["box", config.bin_name.as_str()])?;
++    let candidates: &[&str] = if config.bin_name == "honk" {
++        &["honk"]
++    } else {
++        &["box", config.bin_name.as_str()]
++    };
++    let target = ensure_cgroup_target(&cgroup, "memory", candidates)?;
+     let limit_file = match cgroup.version {
+         CgroupVersion::V1 => "memory.limit_in_bytes",
+         CgroupVersion::V2 => "memory.max",
+@@ -106,7 +128,13 @@ fn apply_blkio(config: &Config, pid: u32) -> Result<String> {
+         .or_else(|| find_cgroup_mount("blkio"))
+         .ok_or_else(|| "I/O cgroup path not found".to_string())?;
+     let weight = parse_io_weight(config.weight.trim(), cgroup.version)?;
+-    let candidates: &[&str] = if cgroup.version == CgroupVersion::V1 {
++    let candidates: &[&str] = if config.bin_name == "honk" {
++        if cgroup.version == CgroupVersion::V1 {
++            &["honk", "foreground", "top-app"]
++        } else {
++            &["honk"]
++        }
++    } else if cgroup.version == CgroupVersion::V1 {
+         &["box", "foreground", "top-app"]
+     } else {
+         &["box"]
+@@ -125,11 +153,15 @@ fn apply_blkio(config: &Config, pid: u32) -> Result<String> {
+         CgroupVersion::V1 => weight.to_string(),
+         CgroupVersion::V2 => format!("default {weight}"),
+     };
+-    if target.file_name().and_then(|name| name.to_str()) == Some("box") {
++    let dedicated = matches!(
++        target.file_name().and_then(|name| name.to_str()),
++        Some("box" | "honk")
++    );
++    if dedicated {
+         write_value(&target.join(weight_file), &weight_value)?;
+     }
+     write_pid(&target, pid)?;
+-    let detail = if target.file_name().and_then(|name| name.to_str()) == Some("box") {
++    let detail = if dedicated {
+         format!("-> {}, weight {weight}", target.display())
+     } else {
+         format!("-> {}, inherited weight", target.display())
 diff --git a/boxctl/src/service.rs b/boxctl/src/service.rs
 index 995521e..9b6a73e 100644
 --- a/boxctl/src/service.rs

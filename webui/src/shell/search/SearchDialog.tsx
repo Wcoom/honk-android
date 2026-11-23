@@ -1,0 +1,63 @@
+import {Autocomplete, ListBox, ListBoxItem, ListBoxSection, Header} from 'react-aria-components';
+import {useT} from '../../i18n';
+import {Button, ModalDialog, TextField, ErrorMessage, Loading, Empty, Toolbar} from '../../ui/ui';
+import {ItemText} from '../../ui/ItemText';
+import Close from '../../ui/icons/Close';
+import type {PageProps} from '../routes';
+import {useSearch} from './useSearch';
+
+export function SearchDialog({onClose, go}: {onClose: () => void; go: PageProps['go']}) {
+  const t = useT();
+  const {q, setQ, sections, partial, openConnections, empty, error, retry, loading, select} = useSearch(go, onClose);
+  return (
+    <ModalDialog
+      title={t('shell.search')}
+      hideTitle
+      isOpen
+      onOpenChange={open => {
+        if (!open) onClose();
+      }}
+    >
+      {/* The field and the results form one combobox: arrow keys move through results while typing continues. */}
+      <Autocomplete inputValue={q} onInputChange={setQ}>
+        <Toolbar
+          onKeyDownCapture={event => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              event.stopPropagation();
+              onClose();
+            }
+          }}
+        >
+          {/* eslint-disable-next-line jsx-a11y/no-autofocus -- focus moves into the dialog the user just opened */}
+          <TextField search label={t('shell.search')} placeholder={t('shell.shortcutSearch')} value={q} onChange={setQ} autoFocus className="rp-grow" />
+          <Button quiet icon onPress={onClose} label={t('ui.close')}>
+            <Close />
+          </Button>
+        </Toolbar>
+        {error && <ErrorMessage error={error} onRetry={retry} />}
+        {partial && (
+          <div className="rp-note" role="status">
+            {partial}
+            <Button small quiet onPress={openConnections}>
+              {t('nav.connections')}
+            </Button>
+          </div>
+        )}
+        {empty && (loading ? <Loading /> : <Empty>{t('search.none')}</Empty>)}
+        <ListBox aria-label={t('shell.search')} className="rp-results" onAction={select}>
+          {sections.map(section => (
+            <ListBoxSection key={section.id} id={section.id}>
+              <Header className="rp-sec-h">{section.title}</Header>
+              {section.items.map(item => (
+                <ListBoxItem key={item.id} id={item.id} className="rp-item plain" textValue={item.label}>
+                  <ItemText i={{...item, desc: item.description, nodeName: section.id === 'nodes'}} />
+                </ListBoxItem>
+              ))}
+            </ListBoxSection>
+          ))}
+        </ListBox>
+      </Autocomplete>
+    </ModalDialog>
+  );
+}
