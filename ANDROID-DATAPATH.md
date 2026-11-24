@@ -57,3 +57,39 @@ loop:
 3. **`zero_in_place_volatile<T>` 彻底消灭大块 `memset` 循环**：
    - 在 `honk-ebpf-common::conn` 提供 `zero_in_place_volatile<T>(ptr: *mut T)`：在编译期按对齐字宽展开为定长 `u64`/`u32`/`u16`/`u8` 的 `write_volatile(0)` 指令序列。
    - `volatile` 阻止 LLVM 将连续 store 重新合并为 `call memset`，同时不在栈上产生任何结构体字面量临时对象。
+
+## 4. `v1.0.7` 进一步根治 6.1 GKI 无 TCX 设备 `wan_egress_l3` 1M 指令超限（Issue #2）
+
+尽管 `v1.0.6` 在 6.6.118 GKI 上仅耗用 `328,888` 指令，部分 **Linux 6.1 GKI**（缺少 TCX 支持、回退到 Netlink `clsact` 且状态剪枝能力更弱）用户反馈在蜂窝 `rmnet`（L3）接口挂载 `wan_egress_l3` 时仍触发：
+
+```text
+processed 1000001 insns (limit 1000000) max_states_per_insn 53 total_states 60216 peak_states 4193
+stack depth 0+2+64+0+40+16+312+0+80+24+88+0+0+288+56+56
+```
+
+### 进一步定位的三大放大因子
+1. **静态（`LOCAL`）子程序导致按调用状态重复验证**：`wan_egress_prelude`、`do_tproxy_wan_egress_tcp_entry`、`do_tproxy_wan_egress_udp_entry` 与 `fragment::record` 为 static 子程序，6.1 Verifier 对每个 `(l3_link_h_len ∈ {0, 14})` 及分支组合重复 symbolic execution，`total_states` 膨胀至 60,216。
+2. **UDP 路径双份内联 `fast_path_decision`**：`do_tproxy_wan_egress_udp` 在缓存命中与未命中分支各内联了一整份 `fast_path_decision`，使单个 UDP 子程序膨胀至 2,835 条指令。
+3. **残余小尺寸 `memset` / `memmove` 循环**：`RedirectTuple` `[u8; 3]` 填充、`[0u8; 6]` MAC 初始化、跨 PerCpuArray 的 ETH/TCP/IPv6 拷贝（14B/20B/16B）以及 `local_udp_reply`/`BpfFibLookup`/`bpf_sock_tuple` 清零仍在热点函数内保留数次 `memset`/`memmove`。
+
+### `v1.0.7` 彻底方案与真机对比
+1. **`BTF_FUNC_GLOBAL` 函数级独立验证**：
+   - 将 `honk_wan_egress_{prelude,tcp,udp}`、`honk_lan_ingress_{prelude,tcp,udp_route}`（严格以 `(ctx: *mut __sk_buff, is_l2: u32) -> i32` 导出为 `pub unsafe extern "C" fn`）、无 `is_l2` 依赖的 `honk_lan_ingress_udp_pre(ctx: *mut __sk_buff) -> i32`（避免死参数被 LLVM 优化导致 `R2 is not a scalar`），以及 `honk_fragment_record(verdict: i32) -> i32` 升级为 `BTF_FUNC_GLOBAL`。
+   - 内核 `btf_prepare_func_args()` 对每个全局函数只独立验证一次并复用签名边界，将复杂度从**乘积**降为**线性加和**。
+2. **收敛 `do_tproxy_wan_egress_udp`**：合并缓存命中与路由未命中后的后半程调用，整条函数仅保留 1 份 `fast_path_decision`（2,835 → 1,860 指令）。
+3. **路由热路径 `memset`/`memmove` 归零**：通过 `RedirectTuple::write_from_tuples`、`flow::redirect_{identity,incarnation}_for_tuples`、`claim_udp_preparing_scratch`、定长非对齐字拷贝 `copy_unaligned_bytes` 与 `zero_mac()`，使 `wan_egress_l2/l3` 与 `lan_ingress_l2/l3` 全调用链 `memset`/`memmove`/`memcpy` 调用全部清零，最大调用链栈深进一步压低至 **416B**（`wan_egress_*`）/ **384B**（`lan_ingress_*`）。
+
+在真机 Android 16 GKI `6.6.118` 下实测全部 8 个 TC 程序的 `BPF_LOG_STATS` 对比如下：
+
+| TC 程序 | 修复前指令数 (`v1.0.6`) | 修复后指令数 (`v1.0.7`) | 降幅 | 修复前→修复后总状态 |
+| --- | ---: | ---: | ---: | ---: |
+| `wan_egress_l3` | 328,888 | **128,040** | **-61.1%** | 18,990 → **7,072** |
+| `wan_egress_l2` | 174,634 | **127,958** | -26.7% | 9,910 → **7,065** |
+| `lan_ingress_l3` | 64,031 | **40,420** | **-36.9%** | 3,419 → **2,199** |
+| `lan_ingress_l2` | 42,646 | **40,350** | -5.4% | 2,359 → **2,193** |
+| `wan_ingress_l3` | 14,807 | **13,069** | -11.7% | 664 → **608** |
+| `wan_ingress_l2` | 10,939 | **9,180** | -16.1% | 506 → **449** |
+| `lan_egress_l3` | 16,576 | **14,639** | -11.7% | 754 → **684** |
+| `lan_egress_l2` | 10,479 | **9,073** | -13.4% | 514 → **463** |
+
+可见优化后 `wan_egress_l3` 与 `wan_egress_l2` 仅相差 **82 条验证指令**（`0.06%`），L3 链路头长度分叉已不再对下游状态产生任何乘法放大效应。

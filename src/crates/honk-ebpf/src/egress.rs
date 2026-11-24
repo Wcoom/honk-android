@@ -257,7 +257,10 @@ fn fill_handoff_fresh(
         core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).outbound), outbound);
         core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).pid), pid);
         core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).dscp), dscp);
-        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).padding), [0u8; 3]);
+        let pad_ptr = core::ptr::addr_of_mut!((*r).padding) as *mut u8;
+        core::ptr::write_volatile(pad_ptr, 0u8);
+        core::ptr::write_volatile(pad_ptr.add(1), 0u8);
+        core::ptr::write_volatile(pad_ptr.add(2), 0u8);
         core::ptr::write_volatile(
             core::ptr::addr_of_mut!((*r).decision_token),
             decision_token,
@@ -280,6 +283,18 @@ fn fill_handoff_fresh(
                 }
             }
         }
+    }
+}
+
+#[inline(always)]
+fn zero_mac() -> [u8; 6] {
+    let mut mac = core::mem::MaybeUninit::<[u8; 6]>::uninit();
+    let ptr = mac.as_mut_ptr() as *mut u16;
+    unsafe {
+        core::ptr::write_volatile(ptr, 0);
+        core::ptr::write_volatile(ptr.add(1), 0);
+        core::ptr::write_volatile(ptr.add(2), 0);
+        mac.assume_init()
     }
 }
 
@@ -307,7 +322,7 @@ fn do_tproxy_wan_egress_tcp(
     let mut handoff_pname: Option<&[u8; TASK_COMM_LEN]> = None;
     let mut handoff_pid: u32 = 0;
 
-    let mut mac = [0u8; 6];
+    let mut mac = zero_mac();
 
     if fresh_publication {
         let proto = ctx.skb.protocol() as u16;
@@ -672,13 +687,17 @@ fn do_tproxy_wan_egress_udp(
     let tuples = &pkt.tuples;
     let ethh = &pkt.ethh;
     let dns = tuples.five.dst_port == 53;
-    let outbound: u8;
-    let mark: u32;
-    let must: bool;
-    let mut mac: [u8; 6] = [0; 6];
+    let mut outbound: u8 = 0;
+    let mut mark: u32 = 0;
+    let mut must: bool = false;
+    let mut mac: [u8; 6] = zero_mac();
     let mut handoff_pname: Option<&[u8; TASK_COMM_LEN]> = None;
     let mut handoff_pid: u32 = 0;
     let mut decision_token: u32 = 0;
+    let mut routing_generation: u64 = 0;
+    let mut trace_id: u32 = 0;
+    let mut direct_mark_index: u32 = u32::MAX;
+    let mut cached_hit = false;
 
     let proto = ctx.skb.protocol() as u16;
     let ip_version = if proto == ETH_P_IP.to_be() {
@@ -719,107 +738,95 @@ fn do_tproxy_wan_egress_udp(
             handoff_pname = Some(&conn_state.pname);
             handoff_pid = conn_state.pid;
             decision_token = conn_state.decision_token;
-
-            return fast_path_decision(
-                ctx,
-                link_h_len,
-                tuples,
-                ethh,
-                outbound,
-                mark,
-                must,
-                mac,
-                handoff_pname,
-                handoff_pid,
-                decision_token,
-                0,
-                conn_state.trace_id,
-                u32::MAX,
-                conn_state.incarnation,
-            );
+            trace_id = conn_state.trace_id;
+            pkt.incarnation = conn_state.incarnation;
+            cached_hit = true;
         }
     }
 
-    if let Some(pid_pname) = pid_pname_opt {
-        handoff_pname = Some(&pid_pname.pname);
-        handoff_pid = pid_pname.pid;
-    }
+    if !cached_hit {
+        if let Some(pid_pname) = pid_pname_opt {
+            handoff_pname = Some(&pid_pname.pname);
+            handoff_pid = pid_pname.pid;
+        }
 
-    let route_mac = if link_h_len == ETH_HLEN {
-        mac.copy_from_slice(&ethh.src_addr);
-        Some(&mac)
-    } else {
-        None
-    };
-    let pname = pid_pname_opt.map(|pid_pname| &pid_pname.pname);
-    crate::route::build_input(
-        &mut pkt.routing_input,
-        tuples,
-        route_mac,
-        L4ProtoType::Udp as u8,
-        ip_version,
-        true,
-    );
-    let flags = crate::maps::datapath_flags();
-    let (mut decision, generation) = match crate::route::route(
-        &mut pkt.routing_input,
-        pname,
-        flags,
-        &mut pkt.route_witness.output,
-    ) {
-        Ok(result) => result,
-        Err(_) => return Err(TC_ACT_SHOT),
-    };
-    let routing_generation = generation;
-
-    decision.apply_mode_flags(flags, tuples.five.dst_port);
-    outbound = decision.handoff_outbound();
-    mark = decision.mark;
-    must = decision.must != 0;
-    let trace_id = if outbound == OUTBOUND_BLOCK
-        || (outbound == OUTBOUND_DIRECT && mark == 0 && (!dns || must))
-    {
-        0
-    } else {
-        crate::route::capture(&mut pkt.route_witness, &tuples.five, decision_token, false)
-    };
-
-    if !is_short_lived_udp_traffic(&tuples.five) {
-        let must_u8 = must as u8;
-        let pname = pid_pname_opt.map(|pid_pname| &pid_pname.pname);
-        let pid = pid_pname_opt.map_or(0, |pid_pname| pid_pname.pid);
-        let routing_meta_flags = if outbound == OUTBOUND_DIRECT && mark == 0 {
-            ROUTING_META_FLAG_OFFLOAD
-        } else if outbound != OUTBOUND_BLOCK {
-            ROUTING_META_FLAG_WAN_USERSPACE
+        let route_mac = if link_h_len == ETH_HLEN {
+            mac.copy_from_slice(&ethh.src_addr);
+            Some(&mac)
         } else {
-            0
+            None
         };
-        let state = mark_udp_seen(
-            &tuples.five,
-            0u8,
-            Some(&outbound),
-            Some(&mark),
-            Some(&must_u8),
-            Some(&mac),
-            tuples.dscp,
-            pname,
-            pid,
-            trace_id,
-            routing_meta_flags,
+        let pname = pid_pname_opt.map(|pid_pname| &pid_pname.pname);
+        crate::route::build_input(
+            &mut pkt.routing_input,
+            tuples,
+            route_mac,
+            L4ProtoType::Udp as u8,
+            ip_version,
+            true,
         );
-        if state.is_none() {
-            if crate::maps::tuple_retiring(&tuples.five)
-                || crate::maps::CONN_STATE_MAP.get_ptr(&tuples.five).is_some()
-            {
+        let flags = crate::maps::datapath_flags();
+        let (mut decision, generation) = match crate::route::route(
+            &mut pkt.routing_input,
+            pname,
+            flags,
+            &mut pkt.route_witness.output,
+        ) {
+            Ok(result) => result,
+            Err(_) => return Err(TC_ACT_SHOT),
+        };
+        routing_generation = generation;
+
+        decision.apply_mode_flags(flags, tuples.five.dst_port);
+        outbound = decision.handoff_outbound();
+        mark = decision.mark;
+        must = decision.must != 0;
+        direct_mark_index = decision.direct_mark_index;
+        trace_id = if outbound == OUTBOUND_BLOCK
+            || (outbound == OUTBOUND_DIRECT && mark == 0 && (!dns || must))
+        {
+            0
+        } else {
+            crate::route::capture(&mut pkt.route_witness, &tuples.five, decision_token, false)
+        };
+
+        if !is_short_lived_udp_traffic(&tuples.five) {
+            let must_u8 = must as u8;
+            let pname = pid_pname_opt.map(|pid_pname| &pid_pname.pname);
+            let pid = pid_pname_opt.map_or(0, |pid_pname| pid_pname.pid);
+            let routing_meta_flags = if outbound == OUTBOUND_DIRECT && mark == 0 {
+                ROUTING_META_FLAG_OFFLOAD
+            } else if outbound != OUTBOUND_BLOCK {
+                ROUTING_META_FLAG_WAN_USERSPACE
+            } else {
+                0
+            };
+            let state = mark_udp_seen(
+                &tuples.five,
+                0u8,
+                Some(&outbound),
+                Some(&mark),
+                Some(&must_u8),
+                Some(&mac),
+                tuples.dscp,
+                pname,
+                pid,
+                trace_id,
+                routing_meta_flags,
+            );
+            if state.is_none() {
+                if crate::maps::tuple_retiring(&tuples.five)
+                    || crate::maps::CONN_STATE_MAP.get_ptr(&tuples.five).is_some()
+                {
+                    return Err(TC_ACT_SHOT);
+                }
+                if outbound == OUTBOUND_DIRECT && mark == 0 {
+                    return Err(TC_ACT_UNSPEC);
+                }
                 return Err(TC_ACT_SHOT);
             }
-            if outbound == OUTBOUND_DIRECT && mark == 0 {
-                return Err(TC_ACT_UNSPEC);
-            }
-            return Err(TC_ACT_SHOT);
+            pkt.incarnation = state.unwrap().incarnation;
         }
-        pkt.incarnation = state.unwrap().incarnation;
     }
 
     fast_path_decision(
@@ -836,7 +843,7 @@ fn do_tproxy_wan_egress_udp(
         decision_token,
         routing_generation,
         trace_id,
-        decision.direct_mark_index,
+        direct_mark_index,
         pkt.incarnation,
     )
 }
@@ -921,8 +928,8 @@ fn do_tproxy_wan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
         return Err(TC_ACT_SHOT);
     }
     match pkt.l4proto {
-        IPPROTO_TCP => Ok(WAN_CONTINUE_TCP),
-        IPPROTO_UDP => Ok(WAN_CONTINUE_UDP),
+        IPPROTO_TCP => Ok(WAN_CONTINUE_TCP as c_long),
+        IPPROTO_UDP => Ok(WAN_CONTINUE_UDP as c_long),
         _ => Ok(TC_ACT_UNSPEC),
     }
 }
@@ -932,23 +939,33 @@ fn do_tproxy_wan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
 // 这样调用链深度 = 入口 + max(前置, TCP, UDP) + 其被调者，
 // 避免 352(前置) + 296(TCP) + 56 = 704 > 512 的栈超限；
 // 子程序边界同时把 verifier 状态爆炸隔离在各自内部（指令数也降）。
-const WAN_CONTINUE_TCP: c_long = 0x1_0000;
-const WAN_CONTINUE_UDP: c_long = 0x1_0001;
+const WAN_CONTINUE_TCP: i32 = 0x1_0000;
+const WAN_CONTINUE_UDP: i32 = 0x1_0001;
 
-// 注意：BPF 子程序只能经 r0 返回一个标量；返回 `Result<c_long, c_long>`
-// 时 LLVM 会把判别式放进 r2，而 verifier 在 call 后把 r1-r5 置为不可读
-// （`R2 !read_ok`）。所以所有 inline(never) 子程序一律返回扁平化的 c_long。
+// [honk-android] 使用 BTF_FUNC_GLOBAL（extern "C" + *mut __sk_buff + u32 -> i32），
+// 让 Linux 6.1/6.6 verifier 对每个平级子程序独立验证并缓存摘要，彻底消除 L3/prelude/TCP/UDP
+// 状态笛卡尔积导致的 >1M 指令爆炸；同时统一使用标量返回值避开 `R2 !read_ok`。
+/// # Safety
+/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
+#[unsafe(no_mangle)]
 #[inline(never)]
-fn wan_egress_prelude(ctx: &TcContext, link_h_len: u32) -> c_long {
-    match do_tproxy_wan_egress(ctx, link_h_len) {
-        Ok(a) | Err(a) => a,
+pub unsafe extern "C" fn honk_wan_egress_prelude(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
+    let ctx = tc_context(ctx);
+    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
+    match do_tproxy_wan_egress(&ctx, link_h_len) {
+        Ok(a) | Err(a) => a as i32,
     }
 }
 
+/// # Safety
+/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
+#[unsafe(no_mangle)]
 #[inline(never)]
-fn do_tproxy_wan_egress_tcp_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
-    match do_tproxy_wan_egress_tcp_entry_body(ctx, link_h_len) {
-        Ok(a) | Err(a) => a,
+pub unsafe extern "C" fn honk_wan_egress_tcp(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
+    let ctx = tc_context(ctx);
+    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
+    match do_tproxy_wan_egress_tcp_entry_body(&ctx, link_h_len) {
+        Ok(a) | Err(a) => a as i32,
     }
 }
 
@@ -968,23 +985,28 @@ fn do_tproxy_wan_egress_tcp_entry_body(ctx: &TcContext, link_h_len: u32) -> Verd
     do_tproxy_wan_egress_tcp(ctx, link_h_len, pkt, &tcp_publisher)
 }
 
+/// # Safety
+/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
+#[unsafe(no_mangle)]
 #[inline(never)]
-fn do_tproxy_wan_egress_udp_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
+pub unsafe extern "C" fn honk_wan_egress_udp(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
+    let ctx = tc_context(ctx);
+    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
     let pkt = match unsafe { PKT_SCRATCH_KEY.get_ptr_mut(0) } {
         Some(ptr) => unsafe { &mut *ptr },
-        None => return TC_ACT_SHOT,
+        None => return TC_ACT_SHOT as i32,
     };
-    match do_tproxy_wan_egress_udp(ctx, link_h_len, pkt) {
-        Ok(a) | Err(a) => a,
+    match do_tproxy_wan_egress_udp(&ctx, link_h_len, pkt) {
+        Ok(a) | Err(a) => a as i32,
     }
 }
 
 #[inline(always)]
-fn wan_egress_dispatch(ctx: &TcContext, link_h_len: u32) -> Verdict {
-    match wan_egress_prelude(ctx, link_h_len) {
-        WAN_CONTINUE_TCP => Ok(do_tproxy_wan_egress_tcp_entry(ctx, link_h_len)),
-        WAN_CONTINUE_UDP => Ok(do_tproxy_wan_egress_udp_entry(ctx, link_h_len)),
-        other => Ok(other),
+fn wan_egress_dispatch(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
+    match unsafe { honk_wan_egress_prelude(ctx, is_l2) } {
+        WAN_CONTINUE_TCP => unsafe { honk_wan_egress_tcp(ctx, is_l2) },
+        WAN_CONTINUE_UDP => unsafe { honk_wan_egress_udp(ctx, is_l2) },
+        other => other,
     }
 }
 
@@ -1009,13 +1031,13 @@ pub fn lan_egress_l3(ctx: *mut __sk_buff) -> i32 {
 #[unsafe(no_mangle)]
 #[unsafe(link_section = "classifier")]
 pub fn wan_egress_l2(ctx: *mut __sk_buff) -> i32 {
-    crate::fragment::record(flatten(wan_egress_dispatch(&tc_context(ctx), 14)))
+    crate::fragment::record(wan_egress_dispatch(ctx, 1))
 }
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = "classifier")]
 pub fn wan_egress_l3(ctx: *mut __sk_buff) -> i32 {
-    let ctx = tc_context(ctx);
-    let link_h_len = crate::transport::l3_link_h_len(&ctx);
-    crate::fragment::record(flatten(wan_egress_dispatch(&ctx, link_h_len)))
+    let tc_ctx = tc_context(ctx);
+    let is_l2 = (crate::transport::l3_link_h_len(&tc_ctx) == ETH_HLEN) as u32;
+    crate::fragment::record(wan_egress_dispatch(ctx, is_l2))
 }

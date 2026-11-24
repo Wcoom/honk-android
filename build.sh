@@ -2,7 +2,7 @@
 # build.sh - 交叉编译 honk-core 到 Android (aarch64, musl 静态)
 #
 # 依赖（均为本机已装）：
-#   - rustup 工具链 1.99.1 + target aarch64-unknown-linux-musl
+#   - rustup 工具链 1.100.0 + target aarch64-unknown-linux-musl
 #   - zig（充当 musl 交叉 C/C++ 编译器，见 toolchain/）
 #   - cmake（boring-sys 用）
 #   - 预编译的 eBPF 对象（从官方 aarch64 release 提取，见 extract-ebpf.sh）
@@ -54,16 +54,16 @@ if [ -z "${HONK_DOONA_DIR:-}" ]; then
         fi
         if [ -n "$PNPM_BIN" ] && command -v node >/dev/null 2>&1; then
             if [ ! -d "$WEBUI_DIR/node_modules" ]; then
-                "$PNPM_BIN" -C "$WEBUI_DIR" install --frozen-lockfile
+                (cd "$WEBUI_DIR" && "$PNPM_BIN" install --frozen-lockfile)
             fi
             if [ ! -d "$WEBUI_DIR/apps/lite/node_modules" ]; then
-                "$PNPM_BIN" -C "$WEBUI_DIR/apps/lite" install --frozen-lockfile
+                (cd "$WEBUI_DIR/apps/lite" && "$PNPM_BIN" install --frozen-lockfile)
             fi
             if [ "${REBUILD_WEBUI:-0}" = "1" ] || [ ! -f "$WEBUI_DIR/dist/index.html" ] || [ ! -f "$WEBUI_DIR/dist/.vite/bundled-packages.json" ]; then
-                "$PNPM_BIN" -C "$WEBUI_DIR" build
+                (cd "$WEBUI_DIR" && "$PNPM_BIN" build)
             fi
             if [ "${REBUILD_WEBUI:-0}" = "1" ] || [ ! -f "$WEBUI_DIR/apps/lite/dist/index.html" ] || [ ! -f "$WEBUI_DIR/apps/lite/dist/.vite/bundled-packages.json" ]; then
-                "$PNPM_BIN" -C "$WEBUI_DIR/apps/lite" build
+                (cd "$WEBUI_DIR" && "$PNPM_BIN" -C "$WEBUI_DIR/apps/lite" build)
             fi
             STAGE_DOONA="$SRC/target/doona-embedded"
             for edition in main lite; do

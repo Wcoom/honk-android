@@ -39,8 +39,9 @@ pub fn condemned(pkt: &ParsedPacket) -> bool {
 
 /// Entry-wrapper hook: remember a first fragment's SHOT or REDIRECT, or forget
 /// the old outcome when an accepted datagram reuses its identification.
+#[unsafe(no_mangle)]
 #[inline(never)]
-pub fn record(verdict: i32) -> i32 {
+pub unsafe extern "C" fn honk_fragment_record(verdict: i32) -> i32 {
     // The caller clears fragmentation before any pre-parse early exit.
     let Some(pkt) = PKT_SCRATCH_KEY.get_ptr_mut(0) else {
         return verdict;
@@ -65,4 +66,9 @@ pub fn record(verdict: i32) -> i32 {
     };
     let _ = FRAG_VERDICT.insert(&key(pkt), &value, 0);
     verdict
+}
+
+#[inline(always)]
+pub fn record(verdict: i32) -> i32 {
+    unsafe { honk_fragment_record(verdict) }
 }

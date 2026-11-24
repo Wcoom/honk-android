@@ -5,7 +5,7 @@ use honk_ebpf_common::{
     ConnState, FlowMapValue, RedirectEntry, RedirectTuple, RoutingHandoffEntry, TuplesKey,
 };
 
-use crate::maps::{CONN_STATE_MAP, REDIRECT_TRACK, ROUTING_HANDOFF_MAP};
+use crate::maps::{CONN_STATE_MAP, REDIRECT_TRACK, ROUTING_HANDOFF_MAP, UDP_DECISION_SCRATCH_MAP};
 
 /// Copy only fixed-size, eight-byte-aligned payloads without emitting memcpy under a lock.
 #[inline(always)]
@@ -160,4 +160,24 @@ pub fn redirect_incarnation(key: &RedirectTuple) -> Option<u64> {
             (&raw const (*value).incarnation).read_volatile()
         })
     })
+}
+
+/// Build the directional redirect key in per-CPU scratch to keep the 40-byte
+/// `RedirectTuple` and its `[u8; 3]` padding off caller stack frames.
+#[inline(always)]
+pub fn redirect_identity_for_tuples(key: &TuplesKey) -> Option<AuxiliaryIdentity> {
+    let mut zero = 0u32;
+    unsafe { core::ptr::write_volatile(&mut zero, 0) };
+    let scratch = UDP_DECISION_SCRATCH_MAP.get_ptr_mut(unsafe { core::ptr::read_volatile(&zero) })?;
+    unsafe { RedirectTuple::write_from_tuples(&raw mut (*scratch).redirect_key, key) };
+    redirect_identity(unsafe { &*(&raw const (*scratch).redirect_key) })
+}
+
+#[inline(always)]
+pub fn redirect_incarnation_for_tuples(key: &TuplesKey) -> Option<u64> {
+    let mut zero = 0u32;
+    unsafe { core::ptr::write_volatile(&mut zero, 0) };
+    let scratch = UDP_DECISION_SCRATCH_MAP.get_ptr_mut(unsafe { core::ptr::read_volatile(&zero) })?;
+    unsafe { RedirectTuple::write_from_tuples(&raw mut (*scratch).redirect_key, key) };
+    redirect_incarnation(unsafe { &*(&raw const (*scratch).redirect_key) })
 }

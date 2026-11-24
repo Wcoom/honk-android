@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.0.7 (2026-11-25)
+
+### 修复 Linux 6.1 GKI 无 TCX 设备上 `wan_egress_l3` Verifier 1M 指令超限（Fixes #2）
+- **根因定位**：
+  - `wan_egress_prelude`、`do_tproxy_wan_egress_tcp_entry`、`do_tproxy_wan_egress_udp_entry` 与 `fragment::record` 原为 `LOCAL`（static）子程序；在 `wan_egress_l3` 中由 `l3_link_h_len` 引入的 `0/14` 分支会在每层 static 调用间做状态笛卡尔积叠加（Issue #2 实测在 6.1 GKI 上触及 `1,000,001 > 1,000,000`、`total_states=60216`）。
+  - `do_tproxy_wan_egress_udp` 将 `fast_path_decision` 内联了两次（缓存命中与未命中分支各一份，单函数达 2,835 条指令），且热路径上 `RedirectTuple`、IPv6/ETH/TCP 拷贝、MAC 清零与 conntrack 仍残留多处 `memset`/`memmove` 逐字节循环。
+- **核心修复**：
+  - **升级平级分发子程序为 `BTF_FUNC_GLOBAL`（`extern "C"`）**：在 `crates/honk-ebpf/src/{egress,ingress,fragment}.rs` 导出 `honk_wan_egress_{prelude,tcp,udp}`、`honk_lan_ingress_{prelude,tcp,udp_pre,udp_route}` 与 `honk_fragment_record` 为全局 BPF 函数，使 Linux 5.13+ / 6.1 / 6.6 Verifier 对每个子程序独立验证一次并缓存函数摘要，消除 L3 多链路头长度状态乘法爆炸。
+  - **合并 `fast_path_decision` 重复内联**：`honk_wan_egress_udp` 指令数由 2,835 降至 1,860（-34.4%）。
+  - **彻底清零路由路径 `memset`/`memmove`/`memcpy`**：新增 `RedirectTuple::write_from_tuples`、`flow::redirect_{identity,incarnation}_for_tuples`、`claim_udp_preparing_scratch`、定长非对齐字拷贝 `copy_unaligned_bytes` 与 volatile `zero_mac()` / `padding` 写入；全部路由 TC 函数中的 `memset`/`memmove`/`memcpy` 调用降至 **0**，`wan_egress_l2/l3` 最大调用链栈深从 `448B` 降至 `416B`（`lan_ingress_l2/l3` 降至 `384B`）。
+- **真机实测验证（Android 16 GKI `6.6.118`，`BPF_LOG_STATS`，全部 8/8 TC 程序 `LOAD OK`）**：
+  - `wan_egress_l3`：验证指令数 **`328,888 → 128,040`**（**-61.1%**），总状态 **`18,990 → 7,072`**（**-62.8%**），峰值状态 `2,785 → 1,908`，`xlated` 字节 `77,120B → 68,176B`，L3 与 L2 仅差 82 条验证指令（`128,040` vs `127,958`）。
+  - `lan_ingress_l3`：`64,031 → 40,420` 指令（**-36.9%**）；`lan_ingress_l2`：`42,646 → 40,350` 指令。
+
+### 合并上游 `daeuniverse/honk` 主线至 `v0.1.0-beta.7`（`00be4f01`）
+- **合并上游 `7cd8b13c..00be4f01` 共 9 个提交**：
+  - 支持代理链（Proxy Chain）节点语法与路径组装（`#510`）、route chain 与策略组 `exit` 字段（`#511`）及基于流隧道承载的代理链 UDP 转发（`#512`）；
+  - 修复路由规则空行解析忽略（`#535`）及安全更新 `url` 依赖至 `2.5.9`（`RUSTSEC-2026-0592`，`#534`）；
+  - 升级 workspace 工具链至 **Rust `1.100.0`**（`#533`）并收集发布 `v0.1.0-beta.7`（`#536`）；同步 Doona `webui/package.json` 版本标识至 `0.1.0-rc.7`（保留全部 Android 内存遥测与核心更新面板适配）。
+- 重新生成并校验 [`patches/honk-android.patch`](./patches/honk-android.patch)（基于 `00be4f01`，`git apply --check` 通过）。
+
 ## v1.0.6 (2026-11-24)
 
 ### 同步上游 `Zakkaus/doona` 主线至 `c7f29e3` 并接入内置 WebUI 自动构建管线

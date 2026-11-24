@@ -32,7 +32,9 @@ pub fn claim_udp_preparing(key: &TuplesKey, mac: &[u8; 6]) -> Option<u64> {
         return None;
     }
     let incarnation = allocate_flow_incarnation()?;
-    let mut state: ConnState = unsafe { core::mem::zeroed() };
+    let mut state = core::mem::MaybeUninit::<ConnState>::uninit();
+    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(state.as_mut_ptr()) };
+    let mut state = unsafe { state.assume_init() };
     state.state = UdpDecisionState::Preparing as u8;
     state.incarnation = incarnation;
     state.last_seen_ns = unsafe { bpf_ktime_get_ns() };
@@ -51,7 +53,7 @@ pub fn claim_udp_preparing(key: &TuplesKey, mac: &[u8; 6]) -> Option<u64> {
 #[inline(always)]
 pub fn claim_udp_preparing_in(
     key: &TuplesKey,
-    mac: &[u8; 6],
+    mac: Option<&[u8; 6]>,
     scratch: *mut ConnState,
 ) -> Option<u64> {
     if tuple_retiring(key) {
@@ -63,7 +65,9 @@ pub fn claim_udp_preparing_in(
     state.state = UdpDecisionState::Preparing as u8;
     state.incarnation = incarnation;
     state.last_seen_ns = unsafe { bpf_ktime_get_ns() };
-    state.mac.copy_from_slice(mac);
+    if let Some(m) = mac {
+        state.mac.copy_from_slice(m);
+    }
 
     let inserted = CONN_STATE_MAP
         .insert(
@@ -73,6 +77,12 @@ pub fn claim_udp_preparing_in(
         )
         .is_ok();
     claim_udp_preparing_finish(key, inserted, incarnation)
+}
+
+#[inline(always)]
+pub fn claim_udp_preparing_scratch(key: &TuplesKey, mac: &[u8; 6]) -> Option<u64> {
+    let output = conntrack_output()?;
+    claim_udp_preparing_in(key, Some(mac), output)
 }
 
 #[inline(always)]
@@ -328,8 +338,8 @@ fn __mark_udp_seen(
     let Some(output) = conntrack_output() else {
         return core::ptr::null_mut();
     };
-    let mac = if args.has_mac() { args.mac } else { [0; 6] };
-    let Some(incarnation) = claim_udp_preparing_in(key, &mac, output) else {
+    let mac = if args.has_mac() { Some(&args.mac) } else { None };
+    let Some(incarnation) = claim_udp_preparing_in(key, mac, output) else {
         return core::ptr::null_mut();
     };
     let has_rt = args.has_routing();

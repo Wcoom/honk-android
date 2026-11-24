@@ -1,21 +1,22 @@
 # honk-android：对上游 honk 的改动清单
 
-基线：`daeuniverse/honk` `main` 分支（提交 `7cd8b13c`，在 `v0.1.0-beta.6` / `8a7611e` 基础上同步上游至 `#526`）。
+基线：`daeuniverse/honk` `main` 分支（提交 `00be4f01`，对应上游 `v0.1.0-beta.7`）。
 
 ## 1. eBPF 数据面：适配 Android GKI 6.1+ / 6.6+ Verifier（1M 指令上限 + 512B 栈上限）
 
-- `crates/honk-ebpf-common/src/conn.rs`、`crates/honk-ebpf-common/src/routing_policy.rs`：
+- `crates/honk-ebpf-common/src/conn.rs`、`crates/honk-ebpf-common/src/lib.rs`、`crates/honk-ebpf-common/src/routing_policy.rs`：
   - 新增 `zero_in_place_volatile<T>(ptr: *mut T)`，按对齐字宽以 `write_volatile` 展开定长清零指令，彻底阻止 LLVM 将结构体清零合并成 `aya_ebpf::memset` 逐字节循环（verifier 对逐字节循环每次迭代派生新状态，在 L2/L3 多分支下会放大数十万条验证指令）。
+  - 新增 `RedirectTuple::write_from_tuples` 逐字段 volatile 直写 40B 重定向键（含 `[u8; 3]` 填充），配合 `flow::redirect_{identity,incarnation}_for_tuples` 消除栈临时量与 `memset(3)`。
   - `ParseTransportCtx::zero_in_place` 改用 `zero_in_place_volatile`。
   - `write_name_byte` 在 volatile 回读偏移后增加 `& 0x3f` 掩码，清除寄存器 `id` 别名传递，解决 Linux 6.1 Verifier 连续 UTF-8 替换写入时的死分支边界倒挂（`umin=48 > umax=45`）。
-- `crates/honk-ebpf/src/egress.rs`、`crates/honk-ebpf/src/ingress.rs`：
-  - 将 WAN egress 拆成平级子程序分派：`wan_egress_prelude`（64B 栈）、`do_tproxy_wan_egress_tcp_entry`（312B 栈）、`do_tproxy_wan_egress_udp_entry`（288B 栈），由 `wan_egress_dispatch` 平级调用；所有 `#[inline(never)]` 子程序统一返回单寄存器 `c_long`（避免 `Result<c_long, c_long>` 使用 `r2` 导致 `R2 !read_ok`）。
-  - 将 LAN ingress 同步拆成平级子程序分派：`lan_ingress_prelude`（56B 栈）、`do_tproxy_lan_ingress_tcp_entry`（208B 栈）、`lan_ingress_udp_pre_entry`（200B 栈，承载缓存查找与 `bpf_sock_tuple` + `BpfFibLookup` 本地探测）与 `do_tproxy_lan_ingress_udp_route_entry`（232B 栈，调用扁平化返回 `c_long` 的 `stage_udp_decision`），由 `lan_ingress_dispatch` 平级分派，将 `lan_ingress_l2`/`lan_ingress_l3` 全链栈深从超标的 `544B` 压降至 `448B`（修复配置热点/LAN 接口 `lan_interface` 时 GKI 6.6 Verifier 报 `combined stack size of 4 calls is 544. Too large` 的问题，Issue #1）。
-  - 新增 `fill_handoff_fresh` 逐字段 volatile 直写 `RoutingHandoffEntry`。
-- `crates/honk-ebpf/src/maps.rs`、`contrack.rs`、`contrack/tcp.rs`、`contrack/udp.rs`：
-  - `CONNTRACK_SNAPSHOT_MAP` 改为与 `FlowMapValue<ConnState>` 同布局的 `ConnSnapshotSlot`（80B），新增 `conntrack_output_flow_value` 与 `claim_udp_preparing_in`，使 `CONN_STATE_MAP.insert` 直接使用 per-CPU map 槽位而非在栈上构造 80B 的 `FlowMapValue` 临时量，将 `__mark_tcp_seen` / `__mark_udp_seen` 栈深压低 56–64B（总调用链栈深 ≤ 432B < 512B）。
-- `crates/honk-ebpf/src/transport.rs`、`route.rs`、`auxiliary.rs`、`event.rs`、`ingress.rs`：
-  - 将 `parse_slow`、`fill_tuples`、`build_input`、`evaluate_policy`、`honk_normalize_process_name`、`prep_redirect_to_control_plane`、`send_dae_event` / `send_flow_expired` 等处的 `write_bytes` / `mem::zeroed()` 全部替换为 `zero_in_place_volatile`，使 `wan_egress_l2`、`wan_egress_l3`、`lan_ingress_l2`、`lan_ingress_l3` 等全部 8 个 TC 程序在 6.6.118 上一次通过 verifier。
+- `crates/honk-ebpf/src/egress.rs`、`crates/honk-ebpf/src/ingress.rs`、`crates/honk-ebpf/src/fragment.rs`：
+  - **平级分派 + `BTF_FUNC_GLOBAL` 独立验证（Fixes #2）**：将 WAN egress 与 LAN ingress 重构为平级分派入口并导出为 `BTF_FUNC_GLOBAL` 全局 BPF 函数——`honk_wan_egress_{prelude,tcp,udp}`（64B / 288B / 264B 栈）、`honk_lan_ingress_{prelude,tcp,udp_route}`（88B / 224B / 160B 栈）、`honk_lan_ingress_udp_pre`（200B 栈，单参数 `ctx`）以及 `honk_fragment_record`（56B 栈）。在保持总调用链栈深 ≤ 416B（`wan_egress_*`）/ ≤ 384B（`lan_ingress_*`）的同时，让 Linux 6.1/6.6 Verifier 对每个全局函数仅验证一次并复用摘要，彻底消除 L3/L2 入口状态乘法爆炸（真机 GKI 6.6.118 上 `wan_egress_l3` 验证指令从 `328,888` 降至 **`128,040`**，降幅 **-61.1%**）。
+  - **合并 `fast_path_decision` 双份内联**：在 `do_tproxy_wan_egress_udp` 中统一缓存命中与路由未命中后的出口，将 `honk_wan_egress_udp` 由 2,835 指令压降至 1,860 指令。
+  - 新增 `fill_handoff_fresh`、`zero_mac()` 逐字段 volatile 直写 `RoutingHandoffEntry` 与 MAC 数组。
+- `crates/honk-ebpf/src/maps.rs`、`contrack.rs`、`contrack/tcp.rs`、`contrack/udp.rs`、`tcp_binding.rs`：
+  - `CONNTRACK_SNAPSHOT_MAP` 改为与 `FlowMapValue<ConnState>` 同布局的 `ConnSnapshotSlot`（80B），新增 `conntrack_output_flow_value`、`claim_udp_preparing_in` 与 `claim_udp_preparing_scratch`，使 `CONN_STATE_MAP.insert` 直接使用 per-CPU map 槽位而非在栈上构造 80B 的 `FlowMapValue` 临时量。
+- `crates/honk-ebpf/src/transport.rs`、`route.rs`、`auxiliary.rs`、`event.rs`：
+  - 在 `transport.rs` 新增编译期展开的 `copy_unaligned_bytes` 替换跨 map 的 ETH/TCP/UDP/IPv6 拷贝，消除 `memmove`；并将 `parse_slow`、`fill_tuples`、`build_input`、`evaluate_policy`、`honk_normalize_process_name`、`prep_redirect_to_control_plane`、`send_dae_event` / `send_flow_expired` 等处的 `write_bytes` / `mem::zeroed()` 全部替换为 `zero_in_place_volatile`，实现全部路由 TC 函数 **0 个 `memset`/`memmove`/`memcpy` 调用**，全部 8/8 TC 程序在真机上 `LOAD OK`。
 
 ## 2. Android 策略路由与默认接口探测
 

@@ -263,6 +263,30 @@ trait ParseTransportExt {
     fn fill_tuples(&self, tuples: &mut Tuples);
 }
 
+#[inline(always)]
+unsafe fn copy_unaligned_bytes<const N: usize>(dst: *mut u8, src: *const u8) {
+    let mut off = 0usize;
+    while off + 8 <= N {
+        let v = unsafe { ptr::read_unaligned(src.add(off) as *const u64) };
+        unsafe { ptr::write_unaligned(dst.add(off) as *mut u64, v) };
+        off += 8;
+    }
+    if off + 4 <= N {
+        let v = unsafe { ptr::read_unaligned(src.add(off) as *const u32) };
+        unsafe { ptr::write_unaligned(dst.add(off) as *mut u32, v) };
+        off += 4;
+    }
+    if off + 2 <= N {
+        let v = unsafe { ptr::read_unaligned(src.add(off) as *const u16) };
+        unsafe { ptr::write_unaligned(dst.add(off) as *mut u16, v) };
+        off += 2;
+    }
+    if off < N {
+        let v = unsafe { ptr::read(src.add(off)) };
+        unsafe { ptr::write(dst.add(off), v) };
+    }
+}
+
 impl ParseTransportExt for ParseTransportCtx {
     #[inline(always)]
     fn parse_slow(&mut self, ctx: &TcContext, link_h_len: u32) -> Result<(), c_long> {
@@ -661,8 +685,18 @@ impl ParseTransportExt for ParseTransportCtx {
             tuples.five.dst_ip = In6Addr::from_ipv4_bytes(self.iph.dst_addr);
             tuples.dscp = self.iph.dscp();
         } else {
-            tuples.five.src_ip = In6Addr::from_ipv6_addr(self.ipv6h.src_addr());
-            tuples.five.dst_ip = In6Addr::from_ipv6_addr(self.ipv6h.dst_addr());
+            let src_v6 = self.ipv6h.src_addr().octets();
+            let dst_v6 = self.ipv6h.dst_addr().octets();
+            unsafe {
+                copy_unaligned_bytes::<16>(
+                    tuples.five.src_ip.u6_addr8.as_mut_ptr(),
+                    src_v6.as_ptr(),
+                );
+                copy_unaligned_bytes::<16>(
+                    tuples.five.dst_ip.u6_addr8.as_mut_ptr(),
+                    dst_v6.as_ptr(),
+                );
+            }
             tuples.dscp = self.ipv6h.dscp();
         }
 
@@ -714,9 +748,20 @@ pub fn parse_packet(ctx: &TcContext, link_h_len: u32, out: &mut ParsedPacket) ->
     }
 
     // Miss-only routing scratch must not add clearing work to cached packets.
-    out.ethh = tctx.ethh;
-    out.tcph = tctx.tcph;
-    out.udph = tctx.udph;
+    unsafe {
+        copy_unaligned_bytes::<{ mem::size_of::<EthHdr>() }>(
+            ptr::from_mut(&mut out.ethh).cast::<u8>(),
+            ptr::from_ref(&tctx.ethh).cast::<u8>(),
+        );
+        copy_unaligned_bytes::<{ mem::size_of::<TcpHdr>() }>(
+            ptr::from_mut(&mut out.tcph).cast::<u8>(),
+            ptr::from_ref(&tctx.tcph).cast::<u8>(),
+        );
+        copy_unaligned_bytes::<{ mem::size_of::<UdpHdr>() }>(
+            ptr::from_mut(&mut out.udph).cast::<u8>(),
+            ptr::from_ref(&tctx.udph).cast::<u8>(),
+        );
+    }
     out.l4proto = tctx.l4proto;
     out.listener_l4proto = tctx.listener_l4proto;
     out.is_fragmented = tctx.is_fragmented;

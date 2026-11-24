@@ -183,9 +183,7 @@ fn pending_syn_publication(key: &TuplesKey, incarnation: u64) -> Publication {
     let Some(handoff) = crate::flow::handoff_identity(key) else {
         return Publication::Missing;
     };
-    let Some(redirect) =
-        crate::flow::redirect_identity(&honk_ebpf_common::RedirectTuple::from_tuples(key))
-    else {
+    let Some(redirect) = crate::flow::redirect_identity_for_tuples(key) else {
         return Publication::Missing;
     };
     let now = unsafe { bpf_ktime_get_ns() };
@@ -477,9 +475,7 @@ pub fn commit_tcp_intercept(key: &TuplesKey, syn_isn: u32, incarnation: u64) -> 
     let Some(handoff) = crate::flow::handoff_identity(key) else {
         return false;
     };
-    let Some(redirect) =
-        crate::flow::redirect_identity(&honk_ebpf_common::RedirectTuple::from_tuples(key))
-    else {
+    let Some(redirect) = crate::flow::redirect_identity_for_tuples(key) else {
         return false;
     };
     if handoff.incarnation != incarnation

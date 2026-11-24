@@ -92,12 +92,16 @@ fn publish_client_reply(key: &TuplesKey, scratch: &mut UdpDecisionScratch) {
     }
     let token = scratch.redirect.decision_token;
     let incarnation = scratch.redirect.incarnation;
-    scratch.redirect_key.dst_ip.u6_addr64 = [0, 0];
+    let dst_ip_ptr = core::ptr::addr_of_mut!(scratch.redirect_key.dst_ip.u6_addr64) as *mut u64;
+    unsafe {
+        core::ptr::write_volatile(dst_ip_ptr, 0);
+        core::ptr::write_volatile(dst_ip_ptr.add(1), 0);
+    }
     scratch.redirect_key.dst_port = 0;
     scratch.redirect.decision_token = 0;
     scratch.redirect.incarnation = 0;
     let _ = CLIENT_REPLY_TRACK.insert(&scratch.redirect_key, &scratch.redirect, 0);
-    scratch.redirect_key = RedirectTuple::from_tuples(key);
+    unsafe { RedirectTuple::write_from_tuples(&raw mut scratch.redirect_key, key) };
     scratch.redirect.decision_token = token;
     scratch.redirect.incarnation = incarnation;
 }
@@ -552,11 +556,12 @@ pub fn prep_redirect_to_control_plane(
         }
     }
 
-    let redirect_tuple = RedirectTuple::from_tuples(&tuples.five);
+    let mut redirect_tuple = core::mem::MaybeUninit::<RedirectTuple>::uninit();
+    unsafe { RedirectTuple::write_from_tuples(redirect_tuple.as_mut_ptr(), &tuples.five) };
     let now = unsafe { bpf_ktime_get_ns() };
     match redirect_needs_publish(
         &tuples.five,
-        &redirect_tuple,
+        unsafe { redirect_tuple.assume_init_ref() },
         mode,
         decision_token,
         incarnation,
@@ -576,7 +581,7 @@ pub fn prep_redirect_to_control_plane(
         return -1;
     };
     let scratch = unsafe { &mut *scratch };
-    scratch.redirect_key = redirect_tuple;
+    unsafe { RedirectTuple::write_from_tuples(&raw mut scratch.redirect_key, &tuples.five) };
     let redirect_entry = &mut scratch.redirect;
     unsafe { honk_ebpf_common::conn::zero_in_place_volatile(redirect_entry as *mut _) };
 

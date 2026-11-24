@@ -154,10 +154,11 @@ fn redirect_lan_packet_to_control_plane(
     }
 
     // Keep reverse-path framing stable and refresh cached ownership lazily.
-    let redirect_tuple = RedirectTuple::from_tuples(&pkt.tuples.five);
+    let mut redirect_tuple = core::mem::MaybeUninit::<RedirectTuple>::uninit();
+    unsafe { RedirectTuple::write_from_tuples(redirect_tuple.as_mut_ptr(), &pkt.tuples.five) };
     let write_track = redirect_needs_publish(
         &pkt.tuples.five,
-        &redirect_tuple,
+        unsafe { redirect_tuple.assume_init_ref() },
         policy,
         decision_token,
         incarnation,
@@ -172,7 +173,7 @@ fn redirect_lan_packet_to_control_plane(
             return Err(TC_ACT_SHOT);
         };
         let scratch = unsafe { &mut *scratch };
-        scratch.redirect_key = redirect_tuple;
+        unsafe { RedirectTuple::write_from_tuples(&raw mut scratch.redirect_key, &pkt.tuples.five) };
         unsafe { honk_ebpf_common::conn::zero_in_place_volatile(&mut scratch.redirect as *mut _) };
         scratch.redirect.ifindex = unsafe { (*raw_skb(ctx)).ifindex };
         scratch.redirect.smac.copy_from_slice(&pkt.ethh.src_addr);
@@ -279,7 +280,7 @@ fn stage_udp_decision_body(
         false,
     );
     let now = unsafe { bpf_ktime_get_ns() };
-    scratch.redirect_key = RedirectTuple::from_tuples(&pkt.tuples.five);
+    unsafe { RedirectTuple::write_from_tuples(&raw mut scratch.redirect_key, &pkt.tuples.five) };
 
     scratch.redirect.ifindex = unsafe { (*raw_skb(ctx)).ifindex };
     scratch.redirect.smac.copy_from_slice(&pkt.ethh.src_addr);
@@ -447,33 +448,36 @@ fn pass_through_classified(ctx: &TcContext) -> Verdict {
 /// ambiguous FIB result stays on the transparent routing path.
 #[inline(always)]
 fn wildcard_socket_destination_is_local(ctx: &TcContext, pkt: &ParsedPacket) -> bool {
-    let mut fib: BpfFibLookup = unsafe { mem::zeroed() };
-    fib.family = if pkt.ethh.ether_type == ETH_P_IP.to_be() {
+    let mut fib_buf = core::mem::MaybeUninit::<BpfFibLookup>::uninit();
+    let fib = fib_buf.as_mut_ptr();
+    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(fib) };
+    let family = if pkt.ethh.ether_type == ETH_P_IP.to_be() {
         AF_INET
     } else {
         AF_INET6
     };
-    fib.l4_protocol = pkt.l4proto;
-    fib.sport = pkt.tuples.five.src_port.to_be();
-    fib.dport = pkt.tuples.five.dst_port.to_be();
-    fib.ifindex = unsafe { (*raw_skb(ctx)).ifindex };
     unsafe {
-        fib.__bindgen_anon_1.tot_len = (*raw_skb(ctx)).len as u16;
-        if fib.family == AF_INET {
-            fib.__bindgen_anon_2.tos = pkt.tuples.dscp << 2;
-        }
-        if fib.family == AF_INET {
-            fib.__bindgen_anon_3.ipv4_src = pkt.tuples.five.src_ip.u6_addr32[3];
-            fib.__bindgen_anon_4.ipv4_dst = pkt.tuples.five.dst_ip.u6_addr32[3];
+        (*fib).family = family;
+        (*fib).l4_protocol = pkt.l4proto;
+        (*fib).sport = pkt.tuples.five.src_port.to_be();
+        (*fib).dport = pkt.tuples.five.dst_port.to_be();
+        (*fib).ifindex = (*raw_skb(ctx)).ifindex;
+        (*fib).__bindgen_anon_1.tot_len = (*raw_skb(ctx)).len as u16;
+        if family == AF_INET {
+            (*fib).__bindgen_anon_2.tos = pkt.tuples.dscp << 2;
+            (*fib).__bindgen_anon_3.ipv4_src = pkt.tuples.five.src_ip.u6_addr32[3];
+            (*fib).__bindgen_anon_4.ipv4_dst = pkt.tuples.five.dst_ip.u6_addr32[3];
         } else {
-            fib.__bindgen_anon_3.ipv6_src = pkt.tuples.five.src_ip.u6_addr32;
-            fib.__bindgen_anon_4.ipv6_dst = pkt.tuples.five.dst_ip.u6_addr32;
+            for i in 0..4 {
+                (*fib).__bindgen_anon_3.ipv6_src[i] = pkt.tuples.five.src_ip.u6_addr32[i];
+                (*fib).__bindgen_anon_4.ipv6_dst[i] = pkt.tuples.five.dst_ip.u6_addr32[i];
+            }
         }
     }
     let result = unsafe {
         bpf_fib_lookup(
             raw_skb(ctx) as *mut c_void,
-            &mut fib,
+            fib,
             mem::size_of::<BpfFibLookup>() as i32,
             0,
         )
@@ -486,14 +490,19 @@ fn wildcard_socket_destination_is_local(ctx: &TcContext, pkt: &ParsedPacket) -> 
 // 并把 UDP 本地 socket 探测（bpf_sock_tuple + BpfFibLookup，约 100B 栈）独立为
 // 叶子/平级子程序，彻底消除原单一 do_tproxy_lan_ingress(304B) +
 // stage_udp_decision(152B) + send_flow_expired(16B) 叠加到 544B > 512B 的栈超限。
-const LAN_CONTINUE_TCP: c_long = 0x1_0000;
-const LAN_CONTINUE_UDP: c_long = 0x1_0001;
-const LAN_CONTINUE_UDP_ROUTE: c_long = 0x1_0002;
+const LAN_CONTINUE_TCP: i32 = 0x1_0000;
+const LAN_CONTINUE_UDP: i32 = 0x1_0001;
+const LAN_CONTINUE_UDP_ROUTE: i32 = 0x1_0002;
 
+/// # Safety
+/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
+#[unsafe(no_mangle)]
 #[inline(never)]
-fn lan_ingress_prelude(ctx: &TcContext, link_h_len: u32) -> c_long {
-    match lan_ingress_prelude_body(ctx, link_h_len) {
-        Ok(a) | Err(a) => a,
+pub unsafe extern "C" fn honk_lan_ingress_prelude(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
+    let ctx = tc_context(ctx);
+    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
+    match lan_ingress_prelude_body(&ctx, link_h_len) {
+        Ok(a) | Err(a) => a as i32,
     }
 }
 
@@ -556,16 +565,21 @@ fn lan_ingress_prelude_body(ctx: &TcContext, link_h_len: u32) -> Verdict {
     }
 
     match pkt.l4proto {
-        IPPROTO_TCP => Ok(LAN_CONTINUE_TCP),
-        IPPROTO_UDP => Ok(LAN_CONTINUE_UDP),
+        IPPROTO_TCP => Ok(LAN_CONTINUE_TCP as c_long),
+        IPPROTO_UDP => Ok(LAN_CONTINUE_UDP as c_long),
         _ => pass_through_classified(ctx),
     }
 }
 
+/// # Safety
+/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
+#[unsafe(no_mangle)]
 #[inline(never)]
-fn do_tproxy_lan_ingress_tcp_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
-    match do_tproxy_lan_ingress_tcp(ctx, link_h_len) {
-        Ok(a) | Err(a) => a,
+pub unsafe extern "C" fn honk_lan_ingress_tcp(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
+    let ctx = tc_context(ctx);
+    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
+    match do_tproxy_lan_ingress_tcp(&ctx, link_h_len) {
+        Ok(a) | Err(a) => a as i32,
     }
 }
 
@@ -792,19 +806,24 @@ fn do_tproxy_lan_ingress_tcp(ctx: &TcContext, link_h_len: u32) -> Verdict {
 }
 
 /// Flat sibling for LAN UDP cached lookup and local non-dae socket probing.
-/// Runs as a peer of `do_tproxy_lan_ingress_udp_route_entry` under
+/// Runs as a peer of `honk_lan_ingress_udp_route` under
 /// `lan_ingress_dispatch` so `bpf_sock_tuple` + `BpfFibLookup` +
 /// `observe_local_udp_reply` never stack on top of the UDP routing /
 /// `stage_udp_decision` call chain.
+///
+/// # Safety
+/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
+#[unsafe(no_mangle)]
 #[inline(never)]
-fn lan_ingress_udp_pre_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
-    match lan_ingress_udp_pre(ctx, link_h_len) {
-        Ok(a) | Err(a) => a,
+pub unsafe extern "C" fn honk_lan_ingress_udp_pre(ctx: *mut __sk_buff) -> i32 {
+    let ctx = tc_context(ctx);
+    match lan_ingress_udp_pre(&ctx) {
+        Ok(a) | Err(a) => a as i32,
     }
 }
 
 #[inline(always)]
-fn lan_ingress_udp_pre(ctx: &TcContext, link_h_len: u32) -> Verdict {
+fn lan_ingress_udp_pre(ctx: &TcContext) -> Verdict {
     let pkt = match PKT_SCRATCH_KEY.get_ptr_mut(0) {
         Some(ptr) => unsafe { &mut *ptr },
         None => return Err(TC_ACT_SHOT),
@@ -822,7 +841,7 @@ fn lan_ingress_udp_pre(ctx: &TcContext, link_h_len: u32) -> Verdict {
         if let Some(state) =
             crate::contrack::udp::lookup_udp_available(&pkt.tuples.five).map_err(|_| TC_ACT_SHOT)?
         {
-            return cached_udp_decision(ctx, link_h_len, pkt, state);
+            return cached_udp_decision(ctx, 0, pkt, state);
         }
     }
 
@@ -831,36 +850,42 @@ fn lan_ingress_udp_pre(ctx: &TcContext, link_h_len: u32) -> Verdict {
         if crate::contrack::udp::local_udp_reply_seen(&pkt.tuples.five) {
             return pass_through_classified(ctx);
         }
-        let mut tuple: bpf_sock_tuple = unsafe { mem::zeroed() };
+        let mut tuple_buf = core::mem::MaybeUninit::<bpf_sock_tuple>::uninit();
+        let tuple = tuple_buf.as_mut_ptr();
+        unsafe { honk_ebpf_common::conn::zero_in_place_volatile(tuple) };
         let tuple_size = if pkt.ethh.ether_type == ETH_P_IP.to_be() {
             unsafe {
-                tuple.__bindgen_anon_1.ipv4.daddr = pkt.tuples.five.dst_ip.u6_addr32[3];
-                tuple.__bindgen_anon_1.ipv4.saddr = pkt.tuples.five.src_ip.u6_addr32[3];
-                tuple.__bindgen_anon_1.ipv4.dport = pkt.tuples.five.dst_port.to_be();
-                tuple.__bindgen_anon_1.ipv4.sport = pkt.tuples.five.src_port.to_be();
+                (*tuple).__bindgen_anon_1.ipv4.daddr = pkt.tuples.five.dst_ip.u6_addr32[3];
+                (*tuple).__bindgen_anon_1.ipv4.saddr = pkt.tuples.five.src_ip.u6_addr32[3];
+                (*tuple).__bindgen_anon_1.ipv4.dport = pkt.tuples.five.dst_port.to_be();
+                (*tuple).__bindgen_anon_1.ipv4.sport = pkt.tuples.five.src_port.to_be();
             }
             mem::size_of::<bpf_sock_tuple__bindgen_ty_1__bindgen_ty_1>() as u32
         } else {
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     pkt.tuples.five.dst_ip.u6_addr32.as_ptr(),
-                    tuple.__bindgen_anon_1.ipv6.daddr.as_mut_ptr(),
+                    (*tuple).__bindgen_anon_1.ipv6.daddr.as_mut_ptr(),
                     4,
                 );
                 core::ptr::copy_nonoverlapping(
                     pkt.tuples.five.src_ip.u6_addr32.as_ptr(),
-                    tuple.__bindgen_anon_1.ipv6.saddr.as_mut_ptr(),
+                    (*tuple).__bindgen_anon_1.ipv6.saddr.as_mut_ptr(),
                     4,
                 );
-                tuple.__bindgen_anon_1.ipv6.dport = pkt.tuples.five.dst_port.to_be();
-                tuple.__bindgen_anon_1.ipv6.sport = pkt.tuples.five.src_port.to_be();
+                (*tuple).__bindgen_anon_1.ipv6.dport = pkt.tuples.five.dst_port.to_be();
+                (*tuple).__bindgen_anon_1.ipv6.sport = pkt.tuples.five.src_port.to_be();
             }
             mem::size_of::<bpf_sock_tuple__bindgen_ty_1__bindgen_ty_2>() as u32
         };
 
         let param = PARAM.load();
-        if let Some(probe) =
-            sk::probe_udp_socket(ctx, &mut tuple, tuple_size, param.dae_netns_id as u64)
+        if let Some(probe) = sk::probe_udp_socket(
+            ctx,
+            unsafe { &mut *tuple },
+            tuple_size,
+            param.dae_netns_id as u64,
+        )
             && !probe.is_dae_socket
             && (!probe.is_wildcard || wildcard_socket_destination_is_local(ctx, pkt))
         {
@@ -874,13 +899,18 @@ fn lan_ingress_udp_pre(ctx: &TcContext, link_h_len: u32) -> Verdict {
         }
     }
 
-    Ok(LAN_CONTINUE_UDP_ROUTE)
+    Ok(LAN_CONTINUE_UDP_ROUTE as c_long)
 }
 
+/// # Safety
+/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
+#[unsafe(no_mangle)]
 #[inline(never)]
-fn do_tproxy_lan_ingress_udp_route_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
-    match do_tproxy_lan_ingress_udp_route(ctx, link_h_len) {
-        Ok(a) | Err(a) => a,
+pub unsafe extern "C" fn honk_lan_ingress_udp_route(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
+    let ctx = tc_context(ctx);
+    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
+    match do_tproxy_lan_ingress_udp_route(&ctx, link_h_len) {
+        Ok(a) | Err(a) => a as i32,
     }
 }
 
@@ -899,7 +929,7 @@ fn do_tproxy_lan_ingress_udp_route(ctx: &TcContext, link_h_len: u32) -> Verdict 
     let short_lived_udp = crate::contrack::is_short_lived_udp_traffic(&pkt.tuples.five);
     if !short_lived_udp {
         if let Some(incarnation) =
-            crate::contrack::udp::claim_udp_preparing(&pkt.tuples.five, &pkt.ethh.src_addr)
+            crate::contrack::udp::claim_udp_preparing_scratch(&pkt.tuples.five, &pkt.ethh.src_addr)
         {
             pkt.incarnation = incarnation;
         } else if let Some(state) = crate::contrack::udp::lookup_udp_seen(&pkt.tuples.five) {
@@ -1088,14 +1118,14 @@ fn do_tproxy_lan_ingress_udp_route(ctx: &TcContext, link_h_len: u32) -> Verdict 
 }
 
 #[inline(always)]
-fn lan_ingress_dispatch(ctx: &TcContext, link_h_len: u32) -> Verdict {
-    match lan_ingress_prelude(ctx, link_h_len) {
-        LAN_CONTINUE_TCP => Ok(do_tproxy_lan_ingress_tcp_entry(ctx, link_h_len)),
-        LAN_CONTINUE_UDP => match lan_ingress_udp_pre_entry(ctx, link_h_len) {
-            LAN_CONTINUE_UDP_ROUTE => Ok(do_tproxy_lan_ingress_udp_route_entry(ctx, link_h_len)),
-            other => Ok(other),
+fn lan_ingress_dispatch(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
+    match unsafe { honk_lan_ingress_prelude(ctx, is_l2) } {
+        LAN_CONTINUE_TCP => unsafe { honk_lan_ingress_tcp(ctx, is_l2) },
+        LAN_CONTINUE_UDP => match unsafe { honk_lan_ingress_udp_pre(ctx) } {
+            LAN_CONTINUE_UDP_ROUTE => unsafe { honk_lan_ingress_udp_route(ctx, is_l2) },
+            other => other,
         },
-        other => Ok(other),
+        other => other,
     }
 }
 
@@ -1310,15 +1340,15 @@ fn do_tproxy_dae0_ingress(ctx: &TcContext) -> Verdict {
 #[unsafe(no_mangle)]
 #[unsafe(link_section = "classifier")]
 pub fn lan_ingress_l2(ctx: *mut __sk_buff) -> i32 {
-    crate::fragment::record(flatten(lan_ingress_dispatch(&tc_context(ctx), 14)))
+    crate::fragment::record(lan_ingress_dispatch(ctx, 1))
 }
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = "classifier")]
 pub fn lan_ingress_l3(ctx: *mut __sk_buff) -> i32 {
-    let ctx = tc_context(ctx);
-    let link_h_len = crate::transport::l3_link_h_len(&ctx);
-    crate::fragment::record(flatten(lan_ingress_dispatch(&ctx, link_h_len)))
+    let tc_ctx = tc_context(ctx);
+    let is_l2 = (crate::transport::l3_link_h_len(&tc_ctx) == ETH_HLEN) as u32;
+    crate::fragment::record(lan_ingress_dispatch(ctx, is_l2))
 }
 
 #[unsafe(no_mangle)]

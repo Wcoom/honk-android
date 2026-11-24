@@ -1,8 +1,8 @@
 diff --git a/crates/honk-config/src/config.rs b/crates/honk-config/src/config.rs
-index 6f24dfb..53a9f90 100644
+index 8581046..f1beab9 100644
 --- a/crates/honk-config/src/config.rs
 +++ b/crates/honk-config/src/config.rs
-@@ -191,7 +191,9 @@ impl GlobalConfig {
+@@ -203,7 +203,9 @@ impl GlobalConfig {
      /// Process socket mark; zero retains the historical bypass mark.
      pub fn effective_so_mark(&self) -> u32 {
          if self.so_mark_from_dae == 0 {
@@ -13,7 +13,7 @@ index 6f24dfb..53a9f90 100644
          } else {
              self.so_mark_from_dae
          }
-@@ -269,9 +271,123 @@ fn interface_host_cidrs(iface: &str) -> Vec<String> {
+@@ -281,9 +283,123 @@ fn interface_host_cidrs(iface: &str) -> Vec<String> {
  }
  
  /// Interface owning the lowest-metric IPv4 default route.
@@ -175,11 +175,31 @@ index 7ea7001..cf54be8 100644
              ));
          }
          if self.password_auth && !self.secret.is_empty() {
+diff --git a/crates/honk-config/tests/validation.rs b/crates/honk-config/tests/validation.rs
+index dc3bee2..872fb20 100644
+--- a/crates/honk-config/tests/validation.rs
++++ b/crates/honk-config/tests/validation.rs
+@@ -927,11 +927,13 @@ mod routing_marks {
+ 
+     #[test]
+     fn global_marks_keep_hex_first_lexing_and_zero_effective_default() {
++        // [honk-android] effective_so_mark() defaults to DAE_BYPASS_MARK (0x1000_0000)
++        // instead of 0x100 so low 16 bits remain 0 for Android netd policy routing.
+         for (value, raw, effective) in [
+-            ("0", 0, 0x100),
++            ("0", 0, 0x1000_0000),
+             ("10", 16, 16),
+             ("0x200", 512, 512),
+-            ("zz", 0, 0x100),
++            ("zz", 0, 0x1000_0000),
+         ] {
+             let config = parse_dae_config_with_detailed_diagnostics(
+                 &format!("global {{ so_mark_from_dae: {value} }}"),
 diff --git a/crates/honk-core/src/control/bootstrap.rs b/crates/honk-core/src/control/bootstrap.rs
-index d1023e6..17856ed 100644
+index 219c2d3..0371128 100644
 --- a/crates/honk-core/src/control/bootstrap.rs
 +++ b/crates/honk-core/src/control/bootstrap.rs
-@@ -179,8 +179,23 @@ impl ControlPlane {
+@@ -185,8 +185,23 @@ impl ControlPlane {
          dns_upstream_pool.set_group_manager_snapshot(Arc::clone(&pinned_groups));
          dns_upstream_pool.set_traffic_router_snapshot(Arc::clone(&pinned_router));
          let initial_routing_plan = Arc::new(Self::compile_routing_plan(&config, &router)?);
@@ -202,14 +222,14 @@ index d1023e6..17856ed 100644
 +                }
 +            }
 +        }
-         let ebpf_arc = Arc::new(RwLock::new(ebpf));
-         let router_arc = Arc::new(RwLock::new(router));
-         let interrupt_groups = config.groups.clone();
+         pinned_groups.publish_route_health_with_udp(config.global.udp_check_dns.as_deref());
+         let snapshot = initial_route_connectivity(&initial_routing_plan, &pinned_groups);
+         publish_group_connectivity(ebpf.as_mut(), &snapshot)?;
 diff --git a/crates/honk-core/src/control/reload/transaction.rs b/crates/honk-core/src/control/reload/transaction.rs
-index 801a316..17c304c 100644
+index e565765..fdd56c9 100644
 --- a/crates/honk-core/src/control/reload/transaction.rs
 +++ b/crates/honk-core/src/control/reload/transaction.rs
-@@ -516,6 +516,8 @@ impl ControlPlane {
+@@ -588,6 +588,8 @@ impl ControlPlane {
          let bootstrap = new_config.global.bootstrap_resolver.clone();
          let direct_target = super::direct_check_addr(&bootstrap);
          let bootstrap_resolver = honk_outbound::bootstrap::BootstrapResolver::parse(&bootstrap);
@@ -218,7 +238,7 @@ index 801a316..17c304c 100644
          let new_plan = if reuse_routing_state {
              Arc::clone(&old_plan)
          } else {
-@@ -831,6 +833,7 @@ impl ControlPlane {
+@@ -937,6 +939,7 @@ impl ControlPlane {
          }
  
          honk_outbound::bootstrap::set_global(bootstrap_resolver);
@@ -311,10 +331,10 @@ index dee58e5..7e3ab64 100644
          };
          if compat_target_ready {
 diff --git a/crates/honk-core/src/dns/response.rs b/crates/honk-core/src/dns/response.rs
-index 49b5724..13f399f 100644
+index bae92db..ed9f3f4 100644
 --- a/crates/honk-core/src/dns/response.rs
 +++ b/crates/honk-core/src/dns/response.rs
-@@ -233,7 +233,7 @@ fn visit_message(
+@@ -240,7 +240,7 @@ fn visit_message(
          let qclass = read_u16(response, name_end + 2)?;
          if let Some((expected_name, expected_type, expected_class)) =
              expected.as_mut().and_then(Iterator::next)
@@ -520,10 +540,10 @@ index 8b75537..0784a5e 100644
              .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
          commit.apply_to(&mut self.bound_interfaces)
 diff --git a/crates/honk-core/src/ebpf/mod.rs b/crates/honk-core/src/ebpf/mod.rs
-index 5281031..df58606 100644
+index 79cbd25..c3df191 100644
 --- a/crates/honk-core/src/ebpf/mod.rs
 +++ b/crates/honk-core/src/ebpf/mod.rs
-@@ -592,7 +592,7 @@ pub trait EbpfBackend: Send + Sync {
+@@ -597,7 +597,7 @@ pub trait EbpfBackend: Send + Sync {
      fn commit_interface_bindings(
          &mut self,
          commit: interface::BindingCommit,
@@ -1969,10 +1989,10 @@ index adad0a8..c940b20 100644
          .expect("a configured interface never fails startup");
      let mut config = honk_config::Config::default();
 diff --git a/crates/honk-core/src/lib.rs b/crates/honk-core/src/lib.rs
-index 146372c..1372745 100644
+index f555c09..ee5849b 100644
 --- a/crates/honk-core/src/lib.rs
 +++ b/crates/honk-core/src/lib.rs
-@@ -82,6 +82,18 @@ pub const REVISION: &str = env!("HONK_REVISION");
+@@ -152,6 +152,18 @@ pub const REVISION: &str = env!("HONK_REVISION");
  /// The target triple this binary was built for.
  pub const TARGET: &str = env!("HONK_TARGET");
  
@@ -1991,7 +2011,7 @@ index 146372c..1372745 100644
  use clap::Parser;
  use honk_config::Config;
  use honk_config::diagnostic::{
-@@ -232,10 +244,14 @@ pub struct Cli {
+@@ -302,10 +314,14 @@ pub struct Cli {
      #[command(subcommand)]
      pub command: Option<ClashCommand>,
  
@@ -2008,7 +2028,7 @@ index 146372c..1372745 100644
      /// Append operational logs to this path, overriding `global.log_file`
      #[arg(long, value_name = "PATH")]
      pub log_file: Option<PathBuf>,
-@@ -250,7 +266,7 @@ pub struct Cli {
+@@ -320,7 +336,7 @@ pub struct Cli {
      pub bpf_pin_root: PathBuf,
  
      /// Run in debug mode with verbose logging
@@ -2017,7 +2037,7 @@ index 146372c..1372745 100644
      pub debug: bool,
  
      /// Omit timestamps from console log lines, for journald or another
-@@ -262,13 +278,19 @@ pub struct Cli {
+@@ -332,13 +348,19 @@ pub struct Cli {
      #[arg(long)]
      pub mock_ebpf: bool,
  
@@ -2039,7 +2059,7 @@ index 146372c..1372745 100644
      pub data_dir: PathBuf,
  }
  
-@@ -325,7 +347,7 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
+@@ -395,7 +417,7 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
              }
          }
          ClashCommand::Reload => {
@@ -2048,7 +2068,7 @@ index 146372c..1372745 100644
              println!("Reload requested for honk-core process {pid}");
          }
          ClashCommand::Mode { mode } => {
-@@ -369,6 +391,11 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
+@@ -439,6 +461,11 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
                      &config.global.bootstrap_resolver,
                  ),
              );
@@ -2060,7 +2080,7 @@ index 146372c..1372745 100644
              let target_node = config
                  .nodes
                  .iter()
-@@ -398,7 +425,216 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
+@@ -473,7 +500,216 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
      Ok(())
  }
  
@@ -2278,7 +2298,7 @@ index 146372c..1372745 100644
  
  fn publish_instance_pid(file: &mut std::fs::File) -> anyhow::Result<()> {
      use std::io::Write;
-@@ -540,7 +776,7 @@ fn instance_lock(mock_mode: bool) -> anyhow::Result<Option<nix::fcntl::Flock<std
+@@ -615,7 +851,7 @@ fn instance_lock(mock_mode: bool) -> anyhow::Result<Option<nix::fcntl::Flock<std
      }
      // /run, not the bpffs pin root, which rejects regular files.
      acquire_instance_lock(
@@ -2287,7 +2307,7 @@ index 146372c..1372745 100644
          std::time::Duration::from_secs(240),
      )
      .map(Some)
-@@ -761,7 +997,7 @@ async fn abort_startup(
+@@ -836,7 +1072,7 @@ async fn abort_startup(
      error
  }
  
@@ -2296,7 +2316,7 @@ index 146372c..1372745 100644
      #[cfg(feature = "native-api")]
      let started_at = std::time::SystemTime::now();
      #[cfg(feature = "native-api")]
-@@ -777,12 +1013,39 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+@@ -852,12 +1088,39 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
          cli.store == ConfigStore::File,
          "--store db needs the native-api feature"
      );
@@ -2336,7 +2356,7 @@ index 146372c..1372745 100644
          #[cfg(feature = "native-api")]
          let mut config = if cli.store == ConfigStore::Db {
              // DbStore needs an absolute, lexically normal entry; a missing -c
-@@ -813,7 +1076,21 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+@@ -888,7 +1151,21 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
          );
          #[cfg(not(feature = "dns-syslog"))]
          audit::validate_config(&config.global)?;
@@ -2359,7 +2379,7 @@ index 146372c..1372745 100644
          let (runtime_data_dir, data_dir_creation_error) =
              prepare_runtime_data_dir(&requested_data_dir)?;
          #[cfg(feature = "native-api")]
-@@ -1004,9 +1281,18 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+@@ -1079,9 +1356,18 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
      honk_outbound::bootstrap::set_global(honk_outbound::bootstrap::BootstrapResolver::parse(
          &config.global.bootstrap_resolver,
      ));
@@ -2378,7 +2398,7 @@ index 146372c..1372745 100644
  
      #[cfg(feature = "native-api")]
      if let Some(database) = database.as_mut() {
-@@ -1096,6 +1382,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+@@ -1161,6 +1447,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
      } else {
          #[cfg(feature = "ebpf")]
          {
@@ -2387,7 +2407,7 @@ index 146372c..1372745 100644
              // PARAM.dae0_ifindex must describe the pair before eBPF load.
              let (guard, dae0_setup) = daens::create_dae0_link()?;
              info!(
-@@ -1124,6 +1412,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
+@@ -1189,6 +1477,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                  &config.global.wan_interface,
                  &degradations,
                  ebpf::interface::read_topology,
@@ -2395,11 +2415,10 @@ index 146372c..1372745 100644
              )
              .await?;
              interface_handoff = Some(handoff);
-@@ -1991,4 +2280,90 @@ mod startup_lifecycle_tests {
-         assert!(rendered.contains("node ID duplicates another node"));
+@@ -2057,6 +2346,92 @@ mod startup_lifecycle_tests {
          assert!(!rendered.contains("configuration validation failed"));
      }
-+
+ 
 +    #[cfg(target_os = "linux")]
 +    #[test]
 +    fn dedicated_cgroup_migrates_from_root_cgroup2_and_avoids_occupied_primary() {
@@ -2485,7 +2504,10 @@ index 146372c..1372745 100644
 +            "5150\n"
 +        );
 +    }
- }
++
+     #[tokio::test]
+     async fn delay_without_a_url_refuses_a_chain() {
+         let front = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
 diff --git a/crates/honk-core/src/main.rs b/crates/honk-core/src/main.rs
 index 8a0ac31..fc64a11 100644
 --- a/crates/honk-core/src/main.rs
@@ -5087,7 +5109,7 @@ index 2bfd333..d6598ea 100644
  const _: () = {
      use aya_ebpf_bindings::bindings::bpf_spin_lock;
 diff --git a/crates/honk-ebpf-common/src/lib.rs b/crates/honk-ebpf-common/src/lib.rs
-index 5855b2f..496ec9a 100644
+index 5855b2f..4ad2377 100644
 --- a/crates/honk-ebpf-common/src/lib.rs
 +++ b/crates/honk-ebpf-common/src/lib.rs
 @@ -212,7 +212,10 @@ pub const fn extract_nfqueue_token(mark: u32) -> Option<u32> {
@@ -5102,6 +5124,34 @@ index 5855b2f..496ec9a 100644
  pub const MAX_OUTBOUNDS: u32 = 256;
  
  // Rust struct with a memory layout identical to the C struct.
+@@ -455,6 +458,27 @@ impl RedirectTuple {
+         }
+     }
+ 
++    /// Write directional key fields in-place with volatile stores so eBPF
++    /// call sites avoid LLVM-emitted `memset` on `[u8; 3]` padding.
++    #[inline(always)]
++    pub unsafe fn write_from_tuples(dst: *mut Self, tuples: &crate::redirect_need::TuplesKey) {
++        unsafe {
++            let s = core::ptr::addr_of_mut!((*dst).src_ip) as *mut u64;
++            core::ptr::write_volatile(s, tuples.src_ip.u6_addr64[0]);
++            core::ptr::write_volatile(s.add(1), tuples.src_ip.u6_addr64[1]);
++            let d = core::ptr::addr_of_mut!((*dst).dst_ip) as *mut u64;
++            core::ptr::write_volatile(d, tuples.dst_ip.u6_addr64[0]);
++            core::ptr::write_volatile(d.add(1), tuples.dst_ip.u6_addr64[1]);
++            core::ptr::write_volatile(core::ptr::addr_of_mut!((*dst).src_port), tuples.src_port);
++            core::ptr::write_volatile(core::ptr::addr_of_mut!((*dst).dst_port), tuples.dst_port);
++            core::ptr::write_volatile(core::ptr::addr_of_mut!((*dst).l4proto), tuples.l4proto);
++            let pad = core::ptr::addr_of_mut!((*dst).padding) as *mut u8;
++            core::ptr::write_volatile(pad, 0);
++            core::ptr::write_volatile(pad.add(1), 0);
++            core::ptr::write_volatile(pad.add(2), 0);
++        }
++    }
++
+     /// Build the opposite-direction key for a reply packet.
+     #[inline(always)]
+     pub const fn reverse(self) -> Self {
 diff --git a/crates/honk-ebpf-common/src/routing_policy.rs b/crates/honk-ebpf-common/src/routing_policy.rs
 index a0c8a10..f18945b 100644
 --- a/crates/honk-ebpf-common/src/routing_policy.rs
@@ -5119,12 +5169,49 @@ index a0c8a10..f18945b 100644
          unsafe { *output.as_mut_ptr().add(offset) = byte };
      }
 diff --git a/crates/honk-ebpf/src/auxiliary.rs b/crates/honk-ebpf/src/auxiliary.rs
-index 61379e6..863fdcc 100644
+index 61379e6..23a3856 100644
 --- a/crates/honk-ebpf/src/auxiliary.rs
 +++ b/crates/honk-ebpf/src/auxiliary.rs
-@@ -578,7 +578,7 @@ pub fn prep_redirect_to_control_plane(
+@@ -92,12 +92,16 @@ fn publish_client_reply(key: &TuplesKey, scratch: &mut UdpDecisionScratch) {
+     }
+     let token = scratch.redirect.decision_token;
+     let incarnation = scratch.redirect.incarnation;
+-    scratch.redirect_key.dst_ip.u6_addr64 = [0, 0];
++    let dst_ip_ptr = core::ptr::addr_of_mut!(scratch.redirect_key.dst_ip.u6_addr64) as *mut u64;
++    unsafe {
++        core::ptr::write_volatile(dst_ip_ptr, 0);
++        core::ptr::write_volatile(dst_ip_ptr.add(1), 0);
++    }
+     scratch.redirect_key.dst_port = 0;
+     scratch.redirect.decision_token = 0;
+     scratch.redirect.incarnation = 0;
+     let _ = CLIENT_REPLY_TRACK.insert(&scratch.redirect_key, &scratch.redirect, 0);
+-    scratch.redirect_key = RedirectTuple::from_tuples(key);
++    unsafe { RedirectTuple::write_from_tuples(&raw mut scratch.redirect_key, key) };
+     scratch.redirect.decision_token = token;
+     scratch.redirect.incarnation = incarnation;
+ }
+@@ -552,11 +556,12 @@ pub fn prep_redirect_to_control_plane(
+         }
+     }
+ 
+-    let redirect_tuple = RedirectTuple::from_tuples(&tuples.five);
++    let mut redirect_tuple = core::mem::MaybeUninit::<RedirectTuple>::uninit();
++    unsafe { RedirectTuple::write_from_tuples(redirect_tuple.as_mut_ptr(), &tuples.five) };
+     let now = unsafe { bpf_ktime_get_ns() };
+     match redirect_needs_publish(
+         &tuples.five,
+-        &redirect_tuple,
++        unsafe { redirect_tuple.assume_init_ref() },
+         mode,
+         decision_token,
+         incarnation,
+@@ -576,9 +581,9 @@ pub fn prep_redirect_to_control_plane(
+         return -1;
+     };
      let scratch = unsafe { &mut *scratch };
-     scratch.redirect_key = redirect_tuple;
+-    scratch.redirect_key = redirect_tuple;
++    unsafe { RedirectTuple::write_from_tuples(&raw mut scratch.redirect_key, &tuples.five) };
      let redirect_entry = &mut scratch.redirect;
 -    unsafe { core::ptr::write_bytes(redirect_entry, 0, 1) };
 +    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(redirect_entry as *mut _) };
@@ -5187,10 +5274,21 @@ index 8d7680c..156808f 100644
  
  #[inline(always)]
 diff --git a/crates/honk-ebpf/src/contrack/tcp.rs b/crates/honk-ebpf/src/contrack/tcp.rs
-index 53a5f76..6af01f8 100644
+index 53a5f76..25e93a4 100644
 --- a/crates/honk-ebpf/src/contrack/tcp.rs
 +++ b/crates/honk-ebpf/src/contrack/tcp.rs
-@@ -341,7 +341,7 @@ fn publish_fresh_tcp(
+@@ -183,9 +183,7 @@ fn pending_syn_publication(key: &TuplesKey, incarnation: u64) -> Publication {
+     let Some(handoff) = crate::flow::handoff_identity(key) else {
+         return Publication::Missing;
+     };
+-    let Some(redirect) =
+-        crate::flow::redirect_identity(&honk_ebpf_common::RedirectTuple::from_tuples(key))
+-    else {
++    let Some(redirect) = crate::flow::redirect_identity_for_tuples(key) else {
+         return Publication::Missing;
+     };
+     let now = unsafe { bpf_ktime_get_ns() };
+@@ -341,7 +339,7 @@ fn publish_fresh_tcp(
          return core::ptr::null_mut();
      }
      let new_state = unsafe { &mut *output };
@@ -5199,7 +5297,7 @@ index 53a5f76..6af01f8 100644
      new_state.incarnation = incarnation;
      new_state.tcp_syn_isn = args.tcp_syn_isn;
      new_state.state = TcpState::TcpStateActive as u8;
-@@ -370,7 +370,11 @@ fn publish_fresh_tcp(
+@@ -370,7 +368,11 @@ fn publish_fresh_tcp(
      } else if expected_incarnation != 0 {
          return core::ptr::null_mut();
      } else if CONN_STATE_MAP
@@ -5212,11 +5310,31 @@ index 53a5f76..6af01f8 100644
          .is_ok()
      {
          occupancy_add(OCCUPANCY_INSERTS);
+@@ -473,9 +475,7 @@ pub fn commit_tcp_intercept(key: &TuplesKey, syn_isn: u32, incarnation: u64) ->
+     let Some(handoff) = crate::flow::handoff_identity(key) else {
+         return false;
+     };
+-    let Some(redirect) =
+-        crate::flow::redirect_identity(&honk_ebpf_common::RedirectTuple::from_tuples(key))
+-    else {
++    let Some(redirect) = crate::flow::redirect_identity_for_tuples(key) else {
+         return false;
+     };
+     if handoff.incarnation != incarnation
 diff --git a/crates/honk-ebpf/src/contrack/udp.rs b/crates/honk-ebpf/src/contrack/udp.rs
-index 8ce1cf8..fbca5e4 100644
+index 8ce1cf8..63e9c90 100644
 --- a/crates/honk-ebpf/src/contrack/udp.rs
 +++ b/crates/honk-ebpf/src/contrack/udp.rs
-@@ -38,10 +38,46 @@ pub fn claim_udp_preparing(key: &TuplesKey, mac: &[u8; 6]) -> Option<u64> {
+@@ -32,16 +32,62 @@ pub fn claim_udp_preparing(key: &TuplesKey, mac: &[u8; 6]) -> Option<u64> {
+         return None;
+     }
+     let incarnation = allocate_flow_incarnation()?;
+-    let mut state: ConnState = unsafe { core::mem::zeroed() };
++    let mut state = core::mem::MaybeUninit::<ConnState>::uninit();
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(state.as_mut_ptr()) };
++    let mut state = unsafe { state.assume_init() };
+     state.state = UdpDecisionState::Preparing as u8;
+     state.incarnation = incarnation;
      state.last_seen_ns = unsafe { bpf_ktime_get_ns() };
      state.mac.copy_from_slice(mac);
  
@@ -5236,7 +5354,7 @@ index 8ce1cf8..fbca5e4 100644
 +#[inline(always)]
 +pub fn claim_udp_preparing_in(
 +    key: &TuplesKey,
-+    mac: &[u8; 6],
++    mac: Option<&[u8; 6]>,
 +    scratch: *mut ConnState,
 +) -> Option<u64> {
 +    if tuple_retiring(key) {
@@ -5248,7 +5366,9 @@ index 8ce1cf8..fbca5e4 100644
 +    state.state = UdpDecisionState::Preparing as u8;
 +    state.incarnation = incarnation;
 +    state.last_seen_ns = unsafe { bpf_ktime_get_ns() };
-+    state.mac.copy_from_slice(mac);
++    if let Some(m) = mac {
++        state.mac.copy_from_slice(m);
++    }
 +
 +    let inserted = CONN_STATE_MAP
 +        .insert(
@@ -5261,12 +5381,18 @@ index 8ce1cf8..fbca5e4 100644
 +}
 +
 +#[inline(always)]
++pub fn claim_udp_preparing_scratch(key: &TuplesKey, mac: &[u8; 6]) -> Option<u64> {
++    let output = conntrack_output()?;
++    claim_udp_preparing_in(key, Some(mac), output)
++}
++
++#[inline(always)]
 +fn claim_udp_preparing_finish(key: &TuplesKey, inserted: bool, incarnation: u64) -> Option<u64> {
 +    if inserted {
          occupancy_add(OCCUPANCY_INSERTS);
          return Some(incarnation);
      }
-@@ -122,7 +158,7 @@ pub fn populate_udp_conn_state(
+@@ -122,7 +168,7 @@ pub fn populate_udp_conn_state(
      decision_token: u32,
      incarnation: u64,
  ) {
@@ -5275,12 +5401,14 @@ index 8ce1cf8..fbca5e4 100644
      conn.state = state as u8;
      conn.decision_token = decision_token;
      conn.incarnation = incarnation;
-@@ -293,12 +329,12 @@ fn __mark_udp_seen(
+@@ -292,13 +338,13 @@ fn __mark_udp_seen(
+     let Some(output) = conntrack_output() else {
          return core::ptr::null_mut();
      };
-     let mac = if args.has_mac() { args.mac } else { [0; 6] };
+-    let mac = if args.has_mac() { args.mac } else { [0; 6] };
 -    let Some(incarnation) = claim_udp_preparing(key, &mac) else {
-+    let Some(incarnation) = claim_udp_preparing_in(key, &mac, output) else {
++    let mac = if args.has_mac() { Some(&args.mac) } else { None };
++    let Some(incarnation) = claim_udp_preparing_in(key, mac, output) else {
          return core::ptr::null_mut();
      };
      let has_rt = args.has_routing();
@@ -5291,10 +5419,10 @@ index 8ce1cf8..fbca5e4 100644
      new_state.is_wan_ingress_direction = (is_wan_ingress_direction != 0) as u8;
      new_state.state = UdpDecisionState::None as u8;
 diff --git a/crates/honk-ebpf/src/egress.rs b/crates/honk-ebpf/src/egress.rs
-index fcd9b3d..ff202ee 100644
+index fcd9b3d..f8c51b3 100644
 --- a/crates/honk-ebpf/src/egress.rs
 +++ b/crates/honk-ebpf/src/egress.rs
-@@ -215,6 +215,74 @@ pub fn do_tproxy_lan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -215,6 +215,89 @@ pub fn do_tproxy_lan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
      Ok(TC_ACT_UNSPEC)
  }
  
@@ -5340,7 +5468,10 @@ index fcd9b3d..ff202ee 100644
 +        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).outbound), outbound);
 +        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).pid), pid);
 +        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).dscp), dscp);
-+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*r).padding), [0u8; 3]);
++        let pad_ptr = core::ptr::addr_of_mut!((*r).padding) as *mut u8;
++        core::ptr::write_volatile(pad_ptr, 0u8);
++        core::ptr::write_volatile(pad_ptr.add(1), 0u8);
++        core::ptr::write_volatile(pad_ptr.add(2), 0u8);
 +        core::ptr::write_volatile(
 +            core::ptr::addr_of_mut!((*r).decision_token),
 +            decision_token,
@@ -5366,10 +5497,31 @@ index fcd9b3d..ff202ee 100644
 +    }
 +}
 +
++#[inline(always)]
++fn zero_mac() -> [u8; 6] {
++    let mut mac = core::mem::MaybeUninit::<[u8; 6]>::uninit();
++    let ptr = mac.as_mut_ptr() as *mut u16;
++    unsafe {
++        core::ptr::write_volatile(ptr, 0);
++        core::ptr::write_volatile(ptr.add(1), 0);
++        core::ptr::write_volatile(ptr.add(2), 0);
++        mac.assume_init()
++    }
++}
++
  /// WAN egress TCP handler: route new connections and cache the decision;
  /// for established flows, reuse the cached routing.
  #[inline(always)]
-@@ -438,22 +506,29 @@ fn do_tproxy_wan_egress_tcp(
+@@ -239,7 +322,7 @@ fn do_tproxy_wan_egress_tcp(
+     let mut handoff_pname: Option<&[u8; TASK_COMM_LEN]> = None;
+     let mut handoff_pid: u32 = 0;
+ 
+-    let mut mac = [0u8; 6];
++    let mut mac = zero_mac();
+ 
+     if fresh_publication {
+         let proto = ctx.skb.protocol() as u16;
+@@ -438,22 +521,29 @@ fn do_tproxy_wan_egress_tcp(
              return Err(TC_ACT_SHOT);
          };
          // WAN inlining shares its bounded stack with the conntrack subprograms.
@@ -5414,7 +5566,7 @@ index fcd9b3d..ff202ee 100644
          crate::auxiliary::publish_handoff(&tuples.five, unsafe { &mut *scratch }, true)
              .map_err(|_| TC_ACT_SHOT)?;
          if !crate::contrack::tcp::commit_tcp_intercept(
-@@ -552,26 +627,28 @@ fn fast_path_decision(
+@@ -552,26 +642,28 @@ fn fast_path_decision(
                  increment_bpf_stat(BpfStatsKey::RoutingHandoffInsertFailure);
                  return Err(TC_ACT_SHOT);
              };
@@ -5459,7 +5611,225 @@ index fcd9b3d..ff202ee 100644
              if let Err(error) =
                  crate::auxiliary::publish_handoff(&tuples.five, unsafe { &mut *scratch }, false)
              {
-@@ -767,6 +844,9 @@ fn do_tproxy_wan_egress_udp(
+@@ -595,13 +687,17 @@ fn do_tproxy_wan_egress_udp(
+     let tuples = &pkt.tuples;
+     let ethh = &pkt.ethh;
+     let dns = tuples.five.dst_port == 53;
+-    let outbound: u8;
+-    let mark: u32;
+-    let must: bool;
+-    let mut mac: [u8; 6] = [0; 6];
++    let mut outbound: u8 = 0;
++    let mut mark: u32 = 0;
++    let mut must: bool = false;
++    let mut mac: [u8; 6] = zero_mac();
+     let mut handoff_pname: Option<&[u8; TASK_COMM_LEN]> = None;
+     let mut handoff_pid: u32 = 0;
+     let mut decision_token: u32 = 0;
++    let mut routing_generation: u64 = 0;
++    let mut trace_id: u32 = 0;
++    let mut direct_mark_index: u32 = u32::MAX;
++    let mut cached_hit = false;
+ 
+     let proto = ctx.skb.protocol() as u16;
+     let ip_version = if proto == ETH_P_IP.to_be() {
+@@ -642,107 +738,95 @@ fn do_tproxy_wan_egress_udp(
+             handoff_pname = Some(&conn_state.pname);
+             handoff_pid = conn_state.pid;
+             decision_token = conn_state.decision_token;
+-
+-            return fast_path_decision(
+-                ctx,
+-                link_h_len,
+-                tuples,
+-                ethh,
+-                outbound,
+-                mark,
+-                must,
+-                mac,
+-                handoff_pname,
+-                handoff_pid,
+-                decision_token,
+-                0,
+-                conn_state.trace_id,
+-                u32::MAX,
+-                conn_state.incarnation,
+-            );
++            trace_id = conn_state.trace_id;
++            pkt.incarnation = conn_state.incarnation;
++            cached_hit = true;
+         }
+     }
+ 
+-    if let Some(pid_pname) = pid_pname_opt {
+-        handoff_pname = Some(&pid_pname.pname);
+-        handoff_pid = pid_pname.pid;
+-    }
+-
+-    let route_mac = if link_h_len == ETH_HLEN {
+-        mac.copy_from_slice(&ethh.src_addr);
+-        Some(&mac)
+-    } else {
+-        None
+-    };
+-    let pname = pid_pname_opt.map(|pid_pname| &pid_pname.pname);
+-    crate::route::build_input(
+-        &mut pkt.routing_input,
+-        tuples,
+-        route_mac,
+-        L4ProtoType::Udp as u8,
+-        ip_version,
+-        true,
+-    );
+-    let flags = crate::maps::datapath_flags();
+-    let (mut decision, generation) = match crate::route::route(
+-        &mut pkt.routing_input,
+-        pname,
+-        flags,
+-        &mut pkt.route_witness.output,
+-    ) {
+-        Ok(result) => result,
+-        Err(_) => return Err(TC_ACT_SHOT),
+-    };
+-    let routing_generation = generation;
+-
+-    decision.apply_mode_flags(flags, tuples.five.dst_port);
+-    outbound = decision.handoff_outbound();
+-    mark = decision.mark;
+-    must = decision.must != 0;
+-    let trace_id = if outbound == OUTBOUND_BLOCK
+-        || (outbound == OUTBOUND_DIRECT && mark == 0 && (!dns || must))
+-    {
+-        0
+-    } else {
+-        crate::route::capture(&mut pkt.route_witness, &tuples.five, decision_token, false)
+-    };
++    if !cached_hit {
++        if let Some(pid_pname) = pid_pname_opt {
++            handoff_pname = Some(&pid_pname.pname);
++            handoff_pid = pid_pname.pid;
++        }
+ 
+-    if !is_short_lived_udp_traffic(&tuples.five) {
+-        let must_u8 = must as u8;
+-        let pname = pid_pname_opt.map(|pid_pname| &pid_pname.pname);
+-        let pid = pid_pname_opt.map_or(0, |pid_pname| pid_pname.pid);
+-        let routing_meta_flags = if outbound == OUTBOUND_DIRECT && mark == 0 {
+-            ROUTING_META_FLAG_OFFLOAD
+-        } else if outbound != OUTBOUND_BLOCK {
+-            ROUTING_META_FLAG_WAN_USERSPACE
++        let route_mac = if link_h_len == ETH_HLEN {
++            mac.copy_from_slice(&ethh.src_addr);
++            Some(&mac)
+         } else {
+-            0
++            None
+         };
+-        let state = mark_udp_seen(
+-            &tuples.five,
+-            0u8,
+-            Some(&outbound),
+-            Some(&mark),
+-            Some(&must_u8),
+-            Some(&mac),
+-            tuples.dscp,
+-            pname,
+-            pid,
+-            trace_id,
+-            routing_meta_flags,
++        let pname = pid_pname_opt.map(|pid_pname| &pid_pname.pname);
++        crate::route::build_input(
++            &mut pkt.routing_input,
++            tuples,
++            route_mac,
++            L4ProtoType::Udp as u8,
++            ip_version,
++            true,
+         );
+-        if state.is_none() {
+-            if crate::maps::tuple_retiring(&tuples.five)
+-                || crate::maps::CONN_STATE_MAP.get_ptr(&tuples.five).is_some()
+-            {
++        let flags = crate::maps::datapath_flags();
++        let (mut decision, generation) = match crate::route::route(
++            &mut pkt.routing_input,
++            pname,
++            flags,
++            &mut pkt.route_witness.output,
++        ) {
++            Ok(result) => result,
++            Err(_) => return Err(TC_ACT_SHOT),
++        };
++        routing_generation = generation;
++
++        decision.apply_mode_flags(flags, tuples.five.dst_port);
++        outbound = decision.handoff_outbound();
++        mark = decision.mark;
++        must = decision.must != 0;
++        direct_mark_index = decision.direct_mark_index;
++        trace_id = if outbound == OUTBOUND_BLOCK
++            || (outbound == OUTBOUND_DIRECT && mark == 0 && (!dns || must))
++        {
++            0
++        } else {
++            crate::route::capture(&mut pkt.route_witness, &tuples.five, decision_token, false)
++        };
++
++        if !is_short_lived_udp_traffic(&tuples.five) {
++            let must_u8 = must as u8;
++            let pname = pid_pname_opt.map(|pid_pname| &pid_pname.pname);
++            let pid = pid_pname_opt.map_or(0, |pid_pname| pid_pname.pid);
++            let routing_meta_flags = if outbound == OUTBOUND_DIRECT && mark == 0 {
++                ROUTING_META_FLAG_OFFLOAD
++            } else if outbound != OUTBOUND_BLOCK {
++                ROUTING_META_FLAG_WAN_USERSPACE
++            } else {
++                0
++            };
++            let state = mark_udp_seen(
++                &tuples.five,
++                0u8,
++                Some(&outbound),
++                Some(&mark),
++                Some(&must_u8),
++                Some(&mac),
++                tuples.dscp,
++                pname,
++                pid,
++                trace_id,
++                routing_meta_flags,
++            );
++            if state.is_none() {
++                if crate::maps::tuple_retiring(&tuples.five)
++                    || crate::maps::CONN_STATE_MAP.get_ptr(&tuples.five).is_some()
++                {
++                    return Err(TC_ACT_SHOT);
++                }
++                if outbound == OUTBOUND_DIRECT && mark == 0 {
++                    return Err(TC_ACT_UNSPEC);
++                }
+                 return Err(TC_ACT_SHOT);
+             }
+-            if outbound == OUTBOUND_DIRECT && mark == 0 {
+-                return Err(TC_ACT_UNSPEC);
+-            }
+-            return Err(TC_ACT_SHOT);
++            pkt.incarnation = state.unwrap().incarnation;
+         }
+-        pkt.incarnation = state.unwrap().incarnation;
+     }
+ 
+     fast_path_decision(
+@@ -759,7 +843,7 @@ fn do_tproxy_wan_egress_udp(
+         decision_token,
+         routing_generation,
+         trace_id,
+-        decision.direct_mark_index,
++        direct_mark_index,
+         pkt.incarnation,
+     )
+ }
+@@ -767,6 +851,9 @@ fn do_tproxy_wan_egress_udp(
  /// WAN egress entry point: parse the packet first so the verifier accepts
  /// direct `__sk_buff` field access, skip non-localhost traffic, then dispatch
  /// to the TCP or UDP handler.
@@ -5469,13 +5839,13 @@ index fcd9b3d..ff202ee 100644
  #[inline(always)]
  fn do_tproxy_wan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
      let scratch_key: u32 = 0;
-@@ -840,18 +920,71 @@ fn do_tproxy_wan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -840,18 +927,86 @@ fn do_tproxy_wan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
      if pkt.l4proto != IPPROTO_TCP && crate::contrack::tuple_unavailable(&pkt.tuples.five) {
          return Err(TC_ACT_SHOT);
      }
 +    match pkt.l4proto {
-+        IPPROTO_TCP => Ok(WAN_CONTINUE_TCP),
-+        IPPROTO_UDP => Ok(WAN_CONTINUE_UDP),
++        IPPROTO_TCP => Ok(WAN_CONTINUE_TCP as c_long),
++        IPPROTO_UDP => Ok(WAN_CONTINUE_UDP as c_long),
 +        _ => Ok(TC_ACT_UNSPEC),
 +    }
 +}
@@ -5485,23 +5855,33 @@ index fcd9b3d..ff202ee 100644
 +// 这样调用链深度 = 入口 + max(前置, TCP, UDP) + 其被调者，
 +// 避免 352(前置) + 296(TCP) + 56 = 704 > 512 的栈超限；
 +// 子程序边界同时把 verifier 状态爆炸隔离在各自内部（指令数也降）。
-+const WAN_CONTINUE_TCP: c_long = 0x1_0000;
-+const WAN_CONTINUE_UDP: c_long = 0x1_0001;
++const WAN_CONTINUE_TCP: i32 = 0x1_0000;
++const WAN_CONTINUE_UDP: i32 = 0x1_0001;
 +
-+// 注意：BPF 子程序只能经 r0 返回一个标量；返回 `Result<c_long, c_long>`
-+// 时 LLVM 会把判别式放进 r2，而 verifier 在 call 后把 r1-r5 置为不可读
-+// （`R2 !read_ok`）。所以所有 inline(never) 子程序一律返回扁平化的 c_long。
++// [honk-android] 使用 BTF_FUNC_GLOBAL（extern "C" + *mut __sk_buff + u32 -> i32），
++// 让 Linux 6.1/6.6 verifier 对每个平级子程序独立验证并缓存摘要，彻底消除 L3/prelude/TCP/UDP
++// 状态笛卡尔积导致的 >1M 指令爆炸；同时统一使用标量返回值避开 `R2 !read_ok`。
++/// # Safety
++/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
++#[unsafe(no_mangle)]
 +#[inline(never)]
-+fn wan_egress_prelude(ctx: &TcContext, link_h_len: u32) -> c_long {
-+    match do_tproxy_wan_egress(ctx, link_h_len) {
-+        Ok(a) | Err(a) => a,
++pub unsafe extern "C" fn honk_wan_egress_prelude(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
++    let ctx = tc_context(ctx);
++    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
++    match do_tproxy_wan_egress(&ctx, link_h_len) {
++        Ok(a) | Err(a) => a as i32,
 +    }
 +}
 +
++/// # Safety
++/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
++#[unsafe(no_mangle)]
 +#[inline(never)]
-+fn do_tproxy_wan_egress_tcp_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
-+    match do_tproxy_wan_egress_tcp_entry_body(ctx, link_h_len) {
-+        Ok(a) | Err(a) => a,
++pub unsafe extern "C" fn honk_wan_egress_tcp(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
++    let ctx = tc_context(ctx);
++    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
++    match do_tproxy_wan_egress_tcp_entry_body(&ctx, link_h_len) {
++        Ok(a) | Err(a) => a as i32,
 +    }
 +}
 +
@@ -5526,41 +5906,48 @@ index fcd9b3d..ff202ee 100644
 -        IPPROTO_TCP => do_tproxy_wan_egress_tcp(ctx, link_h_len, pkt, &tcp_publisher),
 -        IPPROTO_UDP => do_tproxy_wan_egress_udp(ctx, link_h_len, pkt),
 -        _ => Ok(TC_ACT_UNSPEC),
++/// # Safety
++/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
++#[unsafe(no_mangle)]
 +#[inline(never)]
-+fn do_tproxy_wan_egress_udp_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
++pub unsafe extern "C" fn honk_wan_egress_udp(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
++    let ctx = tc_context(ctx);
++    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
 +    let pkt = match unsafe { PKT_SCRATCH_KEY.get_ptr_mut(0) } {
 +        Some(ptr) => unsafe { &mut *ptr },
-+        None => return TC_ACT_SHOT,
++        None => return TC_ACT_SHOT as i32,
 +    };
-+    match do_tproxy_wan_egress_udp(ctx, link_h_len, pkt) {
-+        Ok(a) | Err(a) => a,
++    match do_tproxy_wan_egress_udp(&ctx, link_h_len, pkt) {
++        Ok(a) | Err(a) => a as i32,
 +    }
 +}
 +
 +#[inline(always)]
-+fn wan_egress_dispatch(ctx: &TcContext, link_h_len: u32) -> Verdict {
-+    match wan_egress_prelude(ctx, link_h_len) {
-+        WAN_CONTINUE_TCP => Ok(do_tproxy_wan_egress_tcp_entry(ctx, link_h_len)),
-+        WAN_CONTINUE_UDP => Ok(do_tproxy_wan_egress_udp_entry(ctx, link_h_len)),
-+        other => Ok(other),
++fn wan_egress_dispatch(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
++    match unsafe { honk_wan_egress_prelude(ctx, is_l2) } {
++        WAN_CONTINUE_TCP => unsafe { honk_wan_egress_tcp(ctx, is_l2) },
++        WAN_CONTINUE_UDP => unsafe { honk_wan_egress_udp(ctx, is_l2) },
++        other => other,
      }
  }
  
-@@ -876,7 +1009,7 @@ pub fn lan_egress_l3(ctx: *mut __sk_buff) -> i32 {
+@@ -876,13 +1031,13 @@ pub fn lan_egress_l3(ctx: *mut __sk_buff) -> i32 {
  #[unsafe(no_mangle)]
  #[unsafe(link_section = "classifier")]
  pub fn wan_egress_l2(ctx: *mut __sk_buff) -> i32 {
 -    crate::fragment::record(flatten(do_tproxy_wan_egress(&tc_context(ctx), 14)))
-+    crate::fragment::record(flatten(wan_egress_dispatch(&tc_context(ctx), 14)))
++    crate::fragment::record(wan_egress_dispatch(ctx, 1))
  }
  
  #[unsafe(no_mangle)]
-@@ -884,5 +1017,5 @@ pub fn wan_egress_l2(ctx: *mut __sk_buff) -> i32 {
+ #[unsafe(link_section = "classifier")]
  pub fn wan_egress_l3(ctx: *mut __sk_buff) -> i32 {
-     let ctx = tc_context(ctx);
-     let link_h_len = crate::transport::l3_link_h_len(&ctx);
+-    let ctx = tc_context(ctx);
+-    let link_h_len = crate::transport::l3_link_h_len(&ctx);
 -    crate::fragment::record(flatten(do_tproxy_wan_egress(&ctx, link_h_len)))
-+    crate::fragment::record(flatten(wan_egress_dispatch(&ctx, link_h_len)))
++    let tc_ctx = tc_context(ctx);
++    let is_l2 = (crate::transport::l3_link_h_len(&tc_ctx) == ETH_HLEN) as u32;
++    crate::fragment::record(wan_egress_dispatch(ctx, is_l2))
  }
 diff --git a/crates/honk-ebpf/src/event.rs b/crates/honk-ebpf/src/event.rs
 index f06c4b7..8fb946a 100644
@@ -5584,8 +5971,69 @@ index f06c4b7..8fb946a 100644
          reservation.assume_init_mut()
      };
      event.timestamp = now;
+diff --git a/crates/honk-ebpf/src/flow.rs b/crates/honk-ebpf/src/flow.rs
+index 0a450a3..924e1a3 100644
+--- a/crates/honk-ebpf/src/flow.rs
++++ b/crates/honk-ebpf/src/flow.rs
+@@ -5,7 +5,7 @@ use honk_ebpf_common::{
+     ConnState, FlowMapValue, RedirectEntry, RedirectTuple, RoutingHandoffEntry, TuplesKey,
+ };
+ 
+-use crate::maps::{CONN_STATE_MAP, REDIRECT_TRACK, ROUTING_HANDOFF_MAP};
++use crate::maps::{CONN_STATE_MAP, REDIRECT_TRACK, ROUTING_HANDOFF_MAP, UDP_DECISION_SCRATCH_MAP};
+ 
+ /// Copy only fixed-size, eight-byte-aligned payloads without emitting memcpy under a lock.
+ #[inline(always)]
+@@ -161,3 +161,23 @@ pub fn redirect_incarnation(key: &RedirectTuple) -> Option<u64> {
+         })
+     })
+ }
++
++/// Build the directional redirect key in per-CPU scratch to keep the 40-byte
++/// `RedirectTuple` and its `[u8; 3]` padding off caller stack frames.
++#[inline(always)]
++pub fn redirect_identity_for_tuples(key: &TuplesKey) -> Option<AuxiliaryIdentity> {
++    let mut zero = 0u32;
++    unsafe { core::ptr::write_volatile(&mut zero, 0) };
++    let scratch = UDP_DECISION_SCRATCH_MAP.get_ptr_mut(unsafe { core::ptr::read_volatile(&zero) })?;
++    unsafe { RedirectTuple::write_from_tuples(&raw mut (*scratch).redirect_key, key) };
++    redirect_identity(unsafe { &*(&raw const (*scratch).redirect_key) })
++}
++
++#[inline(always)]
++pub fn redirect_incarnation_for_tuples(key: &TuplesKey) -> Option<u64> {
++    let mut zero = 0u32;
++    unsafe { core::ptr::write_volatile(&mut zero, 0) };
++    let scratch = UDP_DECISION_SCRATCH_MAP.get_ptr_mut(unsafe { core::ptr::read_volatile(&zero) })?;
++    unsafe { RedirectTuple::write_from_tuples(&raw mut (*scratch).redirect_key, key) };
++    redirect_incarnation(unsafe { &*(&raw const (*scratch).redirect_key) })
++}
+diff --git a/crates/honk-ebpf/src/fragment.rs b/crates/honk-ebpf/src/fragment.rs
+index 934a226..3d55539 100644
+--- a/crates/honk-ebpf/src/fragment.rs
++++ b/crates/honk-ebpf/src/fragment.rs
+@@ -39,8 +39,9 @@ pub fn condemned(pkt: &ParsedPacket) -> bool {
+ 
+ /// Entry-wrapper hook: remember a first fragment's SHOT or REDIRECT, or forget
+ /// the old outcome when an accepted datagram reuses its identification.
++#[unsafe(no_mangle)]
+ #[inline(never)]
+-pub fn record(verdict: i32) -> i32 {
++pub unsafe extern "C" fn honk_fragment_record(verdict: i32) -> i32 {
+     // The caller clears fragmentation before any pre-parse early exit.
+     let Some(pkt) = PKT_SCRATCH_KEY.get_ptr_mut(0) else {
+         return verdict;
+@@ -66,3 +67,8 @@ pub fn record(verdict: i32) -> i32 {
+     let _ = FRAG_VERDICT.insert(&key(pkt), &value, 0);
+     verdict
+ }
++
++#[inline(always)]
++pub fn record(verdict: i32) -> i32 {
++    unsafe { honk_fragment_record(verdict) }
++}
 diff --git a/crates/honk-ebpf/src/ingress.rs b/crates/honk-ebpf/src/ingress.rs
-index 5053942..e69fb5c 100644
+index 5053942..e3a9ce0 100644
 --- a/crates/honk-ebpf/src/ingress.rs
 +++ b/crates/honk-ebpf/src/ingress.rs
 @@ -132,7 +132,7 @@ fn redirect_lan_packet_to_control_plane(
@@ -5597,16 +6045,32 @@ index 5053942..e69fb5c 100644
          handoff.last_seen_ns = now;
          handoff.routing_generation = if routing_generation != 0 {
              routing_generation
-@@ -173,7 +173,7 @@ fn redirect_lan_packet_to_control_plane(
+@@ -154,10 +154,11 @@ fn redirect_lan_packet_to_control_plane(
+     }
+ 
+     // Keep reverse-path framing stable and refresh cached ownership lazily.
+-    let redirect_tuple = RedirectTuple::from_tuples(&pkt.tuples.five);
++    let mut redirect_tuple = core::mem::MaybeUninit::<RedirectTuple>::uninit();
++    unsafe { RedirectTuple::write_from_tuples(redirect_tuple.as_mut_ptr(), &pkt.tuples.five) };
+     let write_track = redirect_needs_publish(
+         &pkt.tuples.five,
+-        &redirect_tuple,
++        unsafe { redirect_tuple.assume_init_ref() },
+         policy,
+         decision_token,
+         incarnation,
+@@ -172,8 +173,8 @@ fn redirect_lan_packet_to_control_plane(
+             return Err(TC_ACT_SHOT);
          };
          let scratch = unsafe { &mut *scratch };
-         scratch.redirect_key = redirect_tuple;
+-        scratch.redirect_key = redirect_tuple;
 -        unsafe { ptr::write_bytes(&mut scratch.redirect, 0, 1) };
++        unsafe { RedirectTuple::write_from_tuples(&raw mut scratch.redirect_key, &pkt.tuples.five) };
 +        unsafe { honk_ebpf_common::conn::zero_in_place_volatile(&mut scratch.redirect as *mut _) };
          scratch.redirect.ifindex = unsafe { (*raw_skb(ctx)).ifindex };
          scratch.redirect.smac.copy_from_slice(&pkt.ethh.src_addr);
          scratch.redirect.dmac.copy_from_slice(&pkt.ethh.dst_addr);
-@@ -232,12 +232,26 @@ fn client_reply_entry(pkt: &ParsedPacket, mut key: RedirectTuple) -> Option<Redi
+@@ -232,12 +233,26 @@ fn client_reply_entry(pkt: &ParsedPacket, mut key: RedirectTuple) -> Option<Redi
  }
  
  /// Publish all token-bound auxiliary state before exposing Pending to followers.
@@ -5633,7 +6097,7 @@ index 5053942..e69fb5c 100644
  ) -> Verdict {
      let routing_meta = RoutingMeta {
          raw: routing_meta_raw,
-@@ -250,7 +264,7 @@ fn stage_udp_decision(
+@@ -250,7 +265,7 @@ fn stage_udp_decision(
          return Err(TC_ACT_SHOT);
      };
      unsafe {
@@ -5642,7 +6106,69 @@ index 5053942..e69fb5c 100644
      }
      let scratch = unsafe { &mut *scratch_ptr };
      let Some(decision_token) = crate::contrack::udp::allocate_udp_decision_token(&pkt.tuples.five)
-@@ -467,10 +481,24 @@ fn wildcard_socket_destination_is_local(ctx: &TcContext, pkt: &ParsedPacket) ->
+@@ -265,7 +280,7 @@ fn stage_udp_decision(
+         false,
+     );
+     let now = unsafe { bpf_ktime_get_ns() };
+-    scratch.redirect_key = RedirectTuple::from_tuples(&pkt.tuples.five);
++    unsafe { RedirectTuple::write_from_tuples(&raw mut scratch.redirect_key, &pkt.tuples.five) };
+ 
+     scratch.redirect.ifindex = unsafe { (*raw_skb(ctx)).ifindex };
+     scratch.redirect.smac.copy_from_slice(&pkt.ethh.src_addr);
+@@ -433,33 +448,36 @@ fn pass_through_classified(ctx: &TcContext) -> Verdict {
+ /// ambiguous FIB result stays on the transparent routing path.
+ #[inline(always)]
+ fn wildcard_socket_destination_is_local(ctx: &TcContext, pkt: &ParsedPacket) -> bool {
+-    let mut fib: BpfFibLookup = unsafe { mem::zeroed() };
+-    fib.family = if pkt.ethh.ether_type == ETH_P_IP.to_be() {
++    let mut fib_buf = core::mem::MaybeUninit::<BpfFibLookup>::uninit();
++    let fib = fib_buf.as_mut_ptr();
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(fib) };
++    let family = if pkt.ethh.ether_type == ETH_P_IP.to_be() {
+         AF_INET
+     } else {
+         AF_INET6
+     };
+-    fib.l4_protocol = pkt.l4proto;
+-    fib.sport = pkt.tuples.five.src_port.to_be();
+-    fib.dport = pkt.tuples.five.dst_port.to_be();
+-    fib.ifindex = unsafe { (*raw_skb(ctx)).ifindex };
+     unsafe {
+-        fib.__bindgen_anon_1.tot_len = (*raw_skb(ctx)).len as u16;
+-        if fib.family == AF_INET {
+-            fib.__bindgen_anon_2.tos = pkt.tuples.dscp << 2;
+-        }
+-        if fib.family == AF_INET {
+-            fib.__bindgen_anon_3.ipv4_src = pkt.tuples.five.src_ip.u6_addr32[3];
+-            fib.__bindgen_anon_4.ipv4_dst = pkt.tuples.five.dst_ip.u6_addr32[3];
++        (*fib).family = family;
++        (*fib).l4_protocol = pkt.l4proto;
++        (*fib).sport = pkt.tuples.five.src_port.to_be();
++        (*fib).dport = pkt.tuples.five.dst_port.to_be();
++        (*fib).ifindex = (*raw_skb(ctx)).ifindex;
++        (*fib).__bindgen_anon_1.tot_len = (*raw_skb(ctx)).len as u16;
++        if family == AF_INET {
++            (*fib).__bindgen_anon_2.tos = pkt.tuples.dscp << 2;
++            (*fib).__bindgen_anon_3.ipv4_src = pkt.tuples.five.src_ip.u6_addr32[3];
++            (*fib).__bindgen_anon_4.ipv4_dst = pkt.tuples.five.dst_ip.u6_addr32[3];
+         } else {
+-            fib.__bindgen_anon_3.ipv6_src = pkt.tuples.five.src_ip.u6_addr32;
+-            fib.__bindgen_anon_4.ipv6_dst = pkt.tuples.five.dst_ip.u6_addr32;
++            for i in 0..4 {
++                (*fib).__bindgen_anon_3.ipv6_src[i] = pkt.tuples.five.src_ip.u6_addr32[i];
++                (*fib).__bindgen_anon_4.ipv6_dst[i] = pkt.tuples.five.dst_ip.u6_addr32[i];
++            }
+         }
+     }
+     let result = unsafe {
+         bpf_fib_lookup(
+             raw_skb(ctx) as *mut c_void,
+-            &mut fib,
++            fib,
+             mem::size_of::<BpfFibLookup>() as i32,
+             0,
+         )
+@@ -467,10 +485,29 @@ fn wildcard_socket_destination_is_local(ctx: &TcContext, pkt: &ParsedPacket) ->
      result == BPF_FIB_LKUP_RET_NOT_FWDED as c_long
  }
  
@@ -5653,15 +6179,20 @@ index 5053942..e69fb5c 100644
 +// 并把 UDP 本地 socket 探测（bpf_sock_tuple + BpfFibLookup，约 100B 栈）独立为
 +// 叶子/平级子程序，彻底消除原单一 do_tproxy_lan_ingress(304B) +
 +// stage_udp_decision(152B) + send_flow_expired(16B) 叠加到 544B > 512B 的栈超限。
-+const LAN_CONTINUE_TCP: c_long = 0x1_0000;
-+const LAN_CONTINUE_UDP: c_long = 0x1_0001;
-+const LAN_CONTINUE_UDP_ROUTE: c_long = 0x1_0002;
++const LAN_CONTINUE_TCP: i32 = 0x1_0000;
++const LAN_CONTINUE_UDP: i32 = 0x1_0001;
++const LAN_CONTINUE_UDP_ROUTE: i32 = 0x1_0002;
 +
++/// # Safety
++/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
++#[unsafe(no_mangle)]
  #[inline(never)]
 -fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
-+fn lan_ingress_prelude(ctx: &TcContext, link_h_len: u32) -> c_long {
-+    match lan_ingress_prelude_body(ctx, link_h_len) {
-+        Ok(a) | Err(a) => a,
++pub unsafe extern "C" fn honk_lan_ingress_prelude(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
++    let ctx = tc_context(ctx);
++    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
++    match lan_ingress_prelude_body(&ctx, link_h_len) {
++        Ok(a) | Err(a) => a as i32,
 +    }
 +}
 +
@@ -5670,22 +6201,27 @@ index 5053942..e69fb5c 100644
      let scratch_key: u32 = 0;
      let pkt = match PKT_SCRATCH_KEY.get_ptr_mut(scratch_key) {
          Some(ptr) => unsafe { &mut *ptr },
-@@ -526,8 +554,30 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -526,8 +563,35 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
      {
          return Err(TC_ACT_SHOT);
      }
 +
 +    match pkt.l4proto {
-+        IPPROTO_TCP => Ok(LAN_CONTINUE_TCP),
-+        IPPROTO_UDP => Ok(LAN_CONTINUE_UDP),
++        IPPROTO_TCP => Ok(LAN_CONTINUE_TCP as c_long),
++        IPPROTO_UDP => Ok(LAN_CONTINUE_UDP as c_long),
 +        _ => pass_through_classified(ctx),
 +    }
 +}
 +
++/// # Safety
++/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
++#[unsafe(no_mangle)]
 +#[inline(never)]
-+fn do_tproxy_lan_ingress_tcp_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
-+    match do_tproxy_lan_ingress_tcp(ctx, link_h_len) {
-+        Ok(a) | Err(a) => a,
++pub unsafe extern "C" fn honk_lan_ingress_tcp(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
++    let ctx = tc_context(ctx);
++    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
++    match do_tproxy_lan_ingress_tcp(&ctx, link_h_len) {
++        Ok(a) | Err(a) => a as i32,
 +    }
 +}
 +
@@ -5702,7 +6238,7 @@ index 5053942..e69fb5c 100644
          // Before any conn/aux element exists, so a rejected flood leaves no state behind.
          if crate::new_flow_limit::exceeded(&pkt.tuples.five.src_ip) {
              return Err(TC_ACT_SHOT);
-@@ -538,7 +588,7 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -538,7 +602,7 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
          pkt.incarnation = tcp_publisher.incarnation;
      }
  
@@ -5711,7 +6247,7 @@ index 5053942..e69fb5c 100644
          let tcp_state = crate::contrack::tcp::mark_tcp_seen(
              &pkt.tuples.five,
              &pkt.tcph,
-@@ -569,7 +619,6 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -569,7 +633,6 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
  
          let outbound = unsafe { tcp_state.meta.data.outbound };
          let mark = unsafe { tcp_state.meta.data.mark };
@@ -5719,7 +6255,7 @@ index 5053942..e69fb5c 100644
          let must = unsafe { tcp_state.meta.data.must };
          if pkt.tuples.five.dst_port == 53 && outbound == OUTBOUND_BLOCK {
              return Err(TC_ACT_SHOT);
-@@ -601,26 +650,173 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -601,86 +664,228 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
      if PARAM.load().padding2 & 1 != 0 {
          info!(ctx, target: "honk", "lan new flow: l4proto={} sport={} dport={}", pkt.l4proto, pkt.tuples.five.src_port, pkt.tuples.five.dst_port);
      }
@@ -5880,19 +6416,24 @@ index 5053942..e69fb5c 100644
 +}
 +
 +/// Flat sibling for LAN UDP cached lookup and local non-dae socket probing.
-+/// Runs as a peer of `do_tproxy_lan_ingress_udp_route_entry` under
++/// Runs as a peer of `honk_lan_ingress_udp_route` under
 +/// `lan_ingress_dispatch` so `bpf_sock_tuple` + `BpfFibLookup` +
 +/// `observe_local_udp_reply` never stack on top of the UDP routing /
 +/// `stage_udp_decision` call chain.
++///
++/// # Safety
++/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
++#[unsafe(no_mangle)]
 +#[inline(never)]
-+fn lan_ingress_udp_pre_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
-+    match lan_ingress_udp_pre(ctx, link_h_len) {
-+        Ok(a) | Err(a) => a,
++pub unsafe extern "C" fn honk_lan_ingress_udp_pre(ctx: *mut __sk_buff) -> i32 {
++    let ctx = tc_context(ctx);
++    match lan_ingress_udp_pre(&ctx) {
++        Ok(a) | Err(a) => a as i32,
 +    }
 +}
 +
 +#[inline(always)]
-+fn lan_ingress_udp_pre(ctx: &TcContext, link_h_len: u32) -> Verdict {
++fn lan_ingress_udp_pre(ctx: &TcContext) -> Verdict {
 +    let pkt = match PKT_SCRATCH_KEY.get_ptr_mut(0) {
 +        Some(ptr) => unsafe { &mut *ptr },
 +        None => return Err(TC_ACT_SHOT),
@@ -5908,7 +6449,10 @@ index 5053942..e69fb5c 100644
          // Refusal is not a miss: expired/Preparing tuples never reach probing
          // or new-flow publication.
          if let Some(state) =
-@@ -630,24 +826,8 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+             crate::contrack::udp::lookup_udp_available(&pkt.tuples.five).map_err(|_| TC_ACT_SHOT)?
+         {
+-            return cached_udp_decision(ctx, link_h_len, pkt, state);
++            return cached_udp_decision(ctx, 0, pkt, state);
          }
      }
  
@@ -5934,17 +6478,72 @@ index 5053942..e69fb5c 100644
          if crate::contrack::udp::local_udp_reply_seen(&pkt.tuples.five) {
              return pass_through_classified(ctx);
          }
-@@ -694,15 +874,30 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+-        let mut tuple: bpf_sock_tuple = unsafe { mem::zeroed() };
++        let mut tuple_buf = core::mem::MaybeUninit::<bpf_sock_tuple>::uninit();
++        let tuple = tuple_buf.as_mut_ptr();
++        unsafe { honk_ebpf_common::conn::zero_in_place_volatile(tuple) };
+         let tuple_size = if pkt.ethh.ether_type == ETH_P_IP.to_be() {
+             unsafe {
+-                tuple.__bindgen_anon_1.ipv4.daddr = pkt.tuples.five.dst_ip.u6_addr32[3];
+-                tuple.__bindgen_anon_1.ipv4.saddr = pkt.tuples.five.src_ip.u6_addr32[3];
+-                tuple.__bindgen_anon_1.ipv4.dport = pkt.tuples.five.dst_port.to_be();
+-                tuple.__bindgen_anon_1.ipv4.sport = pkt.tuples.five.src_port.to_be();
++                (*tuple).__bindgen_anon_1.ipv4.daddr = pkt.tuples.five.dst_ip.u6_addr32[3];
++                (*tuple).__bindgen_anon_1.ipv4.saddr = pkt.tuples.five.src_ip.u6_addr32[3];
++                (*tuple).__bindgen_anon_1.ipv4.dport = pkt.tuples.five.dst_port.to_be();
++                (*tuple).__bindgen_anon_1.ipv4.sport = pkt.tuples.five.src_port.to_be();
+             }
+             mem::size_of::<bpf_sock_tuple__bindgen_ty_1__bindgen_ty_1>() as u32
+         } else {
+             unsafe {
+                 core::ptr::copy_nonoverlapping(
+                     pkt.tuples.five.dst_ip.u6_addr32.as_ptr(),
+-                    tuple.__bindgen_anon_1.ipv6.daddr.as_mut_ptr(),
++                    (*tuple).__bindgen_anon_1.ipv6.daddr.as_mut_ptr(),
+                     4,
+                 );
+                 core::ptr::copy_nonoverlapping(
+                     pkt.tuples.five.src_ip.u6_addr32.as_ptr(),
+-                    tuple.__bindgen_anon_1.ipv6.saddr.as_mut_ptr(),
++                    (*tuple).__bindgen_anon_1.ipv6.saddr.as_mut_ptr(),
+                     4,
+                 );
+-                tuple.__bindgen_anon_1.ipv6.dport = pkt.tuples.five.dst_port.to_be();
+-                tuple.__bindgen_anon_1.ipv6.sport = pkt.tuples.five.src_port.to_be();
++                (*tuple).__bindgen_anon_1.ipv6.dport = pkt.tuples.five.dst_port.to_be();
++                (*tuple).__bindgen_anon_1.ipv6.sport = pkt.tuples.five.src_port.to_be();
+             }
+             mem::size_of::<bpf_sock_tuple__bindgen_ty_1__bindgen_ty_2>() as u32
+         };
+ 
+         let param = PARAM.load();
+-        if let Some(probe) =
+-            sk::probe_udp_socket(ctx, &mut tuple, tuple_size, param.dae_netns_id as u64)
++        if let Some(probe) = sk::probe_udp_socket(
++            ctx,
++            unsafe { &mut *tuple },
++            tuple_size,
++            param.dae_netns_id as u64,
++        )
+             && !probe.is_dae_socket
+             && (!probe.is_wildcard || wildcard_socket_destination_is_local(ctx, pkt))
+         {
+@@ -694,17 +899,37 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
          }
      }
  
-+    Ok(LAN_CONTINUE_UDP_ROUTE)
++    Ok(LAN_CONTINUE_UDP_ROUTE as c_long)
 +}
 +
++/// # Safety
++/// `ctx` must be a valid TC `__sk_buff` context pointer passed by the kernel verifier.
++#[unsafe(no_mangle)]
 +#[inline(never)]
-+fn do_tproxy_lan_ingress_udp_route_entry(ctx: &TcContext, link_h_len: u32) -> c_long {
-+    match do_tproxy_lan_ingress_udp_route(ctx, link_h_len) {
-+        Ok(a) | Err(a) => a,
++pub unsafe extern "C" fn honk_lan_ingress_udp_route(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
++    let ctx = tc_context(ctx);
++    let link_h_len = if is_l2 != 0 { ETH_HLEN } else { 0 };
++    match do_tproxy_lan_ingress_udp_route(&ctx, link_h_len) {
++        Ok(a) | Err(a) => a as i32,
 +    }
 +}
 +
@@ -5968,9 +6567,12 @@ index 5053942..e69fb5c 100644
 +    let short_lived_udp = crate::contrack::is_short_lived_udp_traffic(&pkt.tuples.five);
 +    if !short_lived_udp {
          if let Some(incarnation) =
-             crate::contrack::udp::claim_udp_preparing(&pkt.tuples.five, &pkt.ethh.src_addr)
+-            crate::contrack::udp::claim_udp_preparing(&pkt.tuples.five, &pkt.ethh.src_addr)
++            crate::contrack::udp::claim_udp_preparing_scratch(&pkt.tuples.five, &pkt.ethh.src_addr)
          {
-@@ -714,11 +909,13 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+             pkt.incarnation = incarnation;
+         } else if let Some(state) = crate::contrack::udp::lookup_udp_seen(&pkt.tuples.five) {
+@@ -714,11 +939,13 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
          }
      }
  
@@ -5987,7 +6589,7 @@ index 5053942..e69fb5c 100644
      let route_mac = if link_h_len == ETH_HLEN {
          Some(&pkt.ethh.src_addr)
      } else {
-@@ -728,7 +925,7 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -728,7 +955,7 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
          &mut pkt.routing_input,
          &pkt.tuples,
          route_mac,
@@ -5996,7 +6598,7 @@ index 5053942..e69fb5c 100644
          ip_version,
          false,
      );
-@@ -741,7 +938,7 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -741,7 +968,7 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
          Ok(result) => result,
          Err(_error) => {
              error!(ctx, target: "honk", "lan_ingress route fail: {}", _error);
@@ -6005,7 +6607,7 @@ index 5053942..e69fb5c 100644
                  crate::contrack::udp::abort_udp_preparing(&pkt.tuples.five, pkt.incarnation, 0);
              }
              return Err(TC_ACT_SHOT);
-@@ -754,9 +951,6 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -754,9 +981,6 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
      let must = decision.must as u8;
      let domain_final = decision.domain_final != 0;
  
@@ -6015,7 +6617,7 @@ index 5053942..e69fb5c 100644
      let offload_direct = pkt.tuples.five.dst_port != 53
          && must == 0
          && outbound != OUTBOUND_BLOCK
-@@ -771,38 +965,12 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -771,38 +995,12 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
      };
  
      pkt.trace_id = 0;
@@ -6058,7 +6660,7 @@ index 5053942..e69fb5c 100644
          let unresolved_direct = outbound == OUTBOUND_DIRECT && !offload_direct;
          let control_plane_routing = outbound == OUTBOUND_CONTROL_PLANE_ROUTING;
          let preliminary_proxy = outbound != OUTBOUND_DIRECT
-@@ -820,18 +988,21 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -820,18 +1018,21 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
  
          if stage_required && flags & DATAPATH_FLAG_NFQ_ENABLED != 0 {
              let current_nfq_flags = crate::maps::datapath_flags();
@@ -6088,7 +6690,7 @@ index 5053942..e69fb5c 100644
          }
  
          if !offload_direct && !(outbound == OUTBOUND_DIRECT && must != 0) {
-@@ -865,16 +1036,6 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -865,16 +1066,6 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
          }
      }
  
@@ -6105,7 +6707,7 @@ index 5053942..e69fb5c 100644
      if pkt.tuples.five.dst_port == 53 && outbound == OUTBOUND_BLOCK {
          return Err(TC_ACT_SHOT);
      }
-@@ -886,14 +1047,8 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -886,14 +1077,8 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
          ctx.skb.set_mark(mark | CLASSIFIED_MARK);
          return Err(TC_ACT_OK);
      }
@@ -6122,7 +6724,7 @@ index 5053942..e69fb5c 100644
      }
      // Direct bypasses the health gate; block and proxy outbounds do not.
      if outbound != OUTBOUND_DIRECT
-@@ -902,7 +1057,7 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -902,7 +1087,7 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
          return Err(TC_ACT_SHOT);
      }
      let redirect_must = if outbound == OUTBOUND_BLOCK { 0 } else { must };
@@ -6131,7 +6733,7 @@ index 5053942..e69fb5c 100644
          // Non-host Ethernet traffic may be bridged without inet prerouting, even before
          // an interface watcher has installed the destination port's egress fence.
          if link_h_len != 0 && unsafe { (*raw_skb(ctx)).pkt_type } != 0 {
-@@ -916,7 +1071,7 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -916,7 +1101,7 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
              return Err(TC_ACT_SHOT);
          }
      }
@@ -6140,7 +6742,7 @@ index 5053942..e69fb5c 100644
          ctx,
          link_h_len,
          pkt,
-@@ -924,13 +1079,24 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
+@@ -924,13 +1109,24 @@ fn do_tproxy_lan_ingress(ctx: &TcContext, link_h_len: u32) -> Verdict {
              crate::contrack::build_routing_meta(meta_outbound, mark, redirect_must, pkt.tuples.dscp)
                  .raw
          },
@@ -6156,33 +6758,35 @@ index 5053942..e69fb5c 100644
 +}
 +
 +#[inline(always)]
-+fn lan_ingress_dispatch(ctx: &TcContext, link_h_len: u32) -> Verdict {
-+    match lan_ingress_prelude(ctx, link_h_len) {
-+        LAN_CONTINUE_TCP => Ok(do_tproxy_lan_ingress_tcp_entry(ctx, link_h_len)),
-+        LAN_CONTINUE_UDP => match lan_ingress_udp_pre_entry(ctx, link_h_len) {
-+            LAN_CONTINUE_UDP_ROUTE => Ok(do_tproxy_lan_ingress_udp_route_entry(ctx, link_h_len)),
-+            other => Ok(other),
++fn lan_ingress_dispatch(ctx: *mut __sk_buff, is_l2: u32) -> i32 {
++    match unsafe { honk_lan_ingress_prelude(ctx, is_l2) } {
++        LAN_CONTINUE_TCP => unsafe { honk_lan_ingress_tcp(ctx, is_l2) },
++        LAN_CONTINUE_UDP => match unsafe { honk_lan_ingress_udp_pre(ctx) } {
++            LAN_CONTINUE_UDP_ROUTE => unsafe { honk_lan_ingress_udp_route(ctx, is_l2) },
++            other => other,
 +        },
-+        other => Ok(other),
++        other => other,
 +    }
  }
  
  // #[inline(never)]: shared by wan_ingress_l2/l3. Shallow call chain
-@@ -1144,7 +1310,7 @@ fn do_tproxy_dae0_ingress(ctx: &TcContext) -> Verdict {
+@@ -1144,15 +1340,15 @@ fn do_tproxy_dae0_ingress(ctx: &TcContext) -> Verdict {
  #[unsafe(no_mangle)]
  #[unsafe(link_section = "classifier")]
  pub fn lan_ingress_l2(ctx: *mut __sk_buff) -> i32 {
 -    crate::fragment::record(flatten(do_tproxy_lan_ingress(&tc_context(ctx), 14)))
-+    crate::fragment::record(flatten(lan_ingress_dispatch(&tc_context(ctx), 14)))
++    crate::fragment::record(lan_ingress_dispatch(ctx, 1))
  }
  
  #[unsafe(no_mangle)]
-@@ -1152,7 +1318,7 @@ pub fn lan_ingress_l2(ctx: *mut __sk_buff) -> i32 {
+ #[unsafe(link_section = "classifier")]
  pub fn lan_ingress_l3(ctx: *mut __sk_buff) -> i32 {
-     let ctx = tc_context(ctx);
-     let link_h_len = crate::transport::l3_link_h_len(&ctx);
+-    let ctx = tc_context(ctx);
+-    let link_h_len = crate::transport::l3_link_h_len(&ctx);
 -    crate::fragment::record(flatten(do_tproxy_lan_ingress(&ctx, link_h_len)))
-+    crate::fragment::record(flatten(lan_ingress_dispatch(&ctx, link_h_len)))
++    let tc_ctx = tc_context(ctx);
++    let is_l2 = (crate::transport::l3_link_h_len(&tc_ctx) == ETH_HLEN) as u32;
++    crate::fragment::record(lan_ingress_dispatch(ctx, is_l2))
  }
  
  #[unsafe(no_mangle)]
@@ -6497,11 +7101,100 @@ index 3a05487..2c1eab2 100644
      input.src_ip = *tuples.five.src_ip.as_bytes();
      input.dst_ip = *tuples.five.dst_ip.as_bytes();
      input.src_port = tuples.five.src_port as u32;
+diff --git a/crates/honk-ebpf/src/tcp_binding.rs b/crates/honk-ebpf/src/tcp_binding.rs
+index b960466..609c53a 100644
+--- a/crates/honk-ebpf/src/tcp_binding.rs
++++ b/crates/honk-ebpf/src/tcp_binding.rs
+@@ -6,7 +6,7 @@
+ //! CONFIG_BPF_EVENTS and in-kernel BTF.
+ 
+ use crate::ctx::raw_skb;
+-use crate::flow::{handoff_incarnation, handoff_snapshot, redirect_incarnation};
++use crate::flow::{handoff_incarnation, handoff_snapshot};
+ use crate::maps::{
+     CONN_STATE_MAP, CONNTRACK_ARGS_MAP, PARAM, TCP_SOCKET_BINDING, increment_bpf_stat,
+     tuple_retiring,
+@@ -31,7 +31,6 @@ use aya_ebpf_bindings::{
+ };
+ use core::{mem, ptr};
+ use honk_ebpf_common::{
+-    RedirectTuple,
+     conn::{BpfStatsKey, TCP_CONN_STATE_ESTABLISHED_TIMEOUT_NS, TCP_SYN_ORIGINAL_INTERCEPT},
+     dae_ip::In6Addr,
+     redirect_need::{TCP_BINDING_CHILD, TcpSocketBinding, TuplesKey},
+@@ -87,7 +86,7 @@ fn valid_proof(binding: &TcpSocketBinding, tuples: &TuplesKey, isn: u32) -> bool
+     owned
+         && !tuple_retiring(tuples)
+         && handoff_incarnation(tuples) == Some(incarnation)
+-        && redirect_incarnation(&RedirectTuple::from_tuples(tuples)) == Some(incarnation)
++        && crate::flow::redirect_incarnation_for_tuples(tuples) == Some(incarnation)
+ }
+ 
+ /// Scalar decision: 0 absent, reserved top values for fresh/refuse, otherwise
+@@ -160,7 +159,7 @@ pub fn native_syn_owner(ctx: &TcContext, tuples: &TuplesKey, isn: u32) -> u64 {
+         mem::align_of::<bpf_sock_tuple>() <= mem::align_of::<crate::contrack::ConntrackArgs>()
+     );
+     let tuple = scratch.cast::<bpf_sock_tuple>();
+-    unsafe { ptr::write_bytes(tuple, 0, 1) };
++    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(tuple) };
+     let size = if tuples.src_ip.is_v4_mapped() {
+         unsafe {
+             (*tuple).__bindgen_anon_1.ipv4.saddr = tuples.src_ip.u6_addr32[3];
+@@ -171,8 +170,16 @@ pub fn native_syn_owner(ctx: &TcContext, tuples: &TuplesKey, isn: u32) -> u64 {
+         mem::size_of::<bpf_sock_tuple__bindgen_ty_1__bindgen_ty_1>() as u32
+     } else {
+         unsafe {
+-            (*tuple).__bindgen_anon_1.ipv6.saddr = tuples.src_ip.u6_addr32;
+-            (*tuple).__bindgen_anon_1.ipv6.daddr = tuples.dst_ip.u6_addr32;
++            for i in 0..4 {
++                core::ptr::write_volatile(
++                    (*tuple).__bindgen_anon_1.ipv6.saddr.as_mut_ptr().add(i),
++                    tuples.src_ip.u6_addr32[i],
++                );
++                core::ptr::write_volatile(
++                    (*tuple).__bindgen_anon_1.ipv6.daddr.as_mut_ptr().add(i),
++                    tuples.dst_ip.u6_addr32[i],
++                );
++            }
+             (*tuple).__bindgen_anon_1.ipv6.sport = tuples.src_port.to_be();
+             (*tuple).__bindgen_anon_1.ipv6.dport = tuples.dst_port.to_be();
+         }
 diff --git a/crates/honk-ebpf/src/transport.rs b/crates/honk-ebpf/src/transport.rs
-index f3f8510..ecb1991 100644
+index f3f8510..61fb9c7 100644
 --- a/crates/honk-ebpf/src/transport.rs
 +++ b/crates/honk-ebpf/src/transport.rs
-@@ -270,6 +270,7 @@ impl ParseTransportExt for ParseTransportCtx {
+@@ -263,6 +263,30 @@ trait ParseTransportExt {
+     fn fill_tuples(&self, tuples: &mut Tuples);
+ }
+ 
++#[inline(always)]
++unsafe fn copy_unaligned_bytes<const N: usize>(dst: *mut u8, src: *const u8) {
++    let mut off = 0usize;
++    while off + 8 <= N {
++        let v = unsafe { ptr::read_unaligned(src.add(off) as *const u64) };
++        unsafe { ptr::write_unaligned(dst.add(off) as *mut u64, v) };
++        off += 8;
++    }
++    if off + 4 <= N {
++        let v = unsafe { ptr::read_unaligned(src.add(off) as *const u32) };
++        unsafe { ptr::write_unaligned(dst.add(off) as *mut u32, v) };
++        off += 4;
++    }
++    if off + 2 <= N {
++        let v = unsafe { ptr::read_unaligned(src.add(off) as *const u16) };
++        unsafe { ptr::write_unaligned(dst.add(off) as *mut u16, v) };
++        off += 2;
++    }
++    if off < N {
++        let v = unsafe { ptr::read(src.add(off)) };
++        unsafe { ptr::write(dst.add(off), v) };
++    }
++}
++
+ impl ParseTransportExt for ParseTransportCtx {
+     #[inline(always)]
+     fn parse_slow(&mut self, ctx: &TcContext, link_h_len: u32) -> Result<(), c_long> {
+@@ -270,6 +294,7 @@ impl ParseTransportExt for ParseTransportCtx {
          let mut offset = 0u32;
          let mut ret: c_long;
  
@@ -6509,7 +7202,7 @@ index f3f8510..ecb1991 100644
          if link_h_len == ETH_HLEN {
              ret = unsafe {
                  bpf_skb_load_bytes(
-@@ -284,48 +285,9 @@ impl ParseTransportExt for ParseTransportCtx {
+@@ -284,48 +309,9 @@ impl ParseTransportExt for ParseTransportCtx {
              }
              offset += mem::size_of::<EthHdr>() as u32;
          } else {
@@ -6558,7 +7251,7 @@ index f3f8510..ecb1991 100644
          if self.ethh.ether_type == ETH_P_IP.to_be() {
              ret = unsafe {
                  bpf_skb_load_bytes(
-@@ -526,13 +488,11 @@ impl ParseTransportExt for ParseTransportCtx {
+@@ -526,13 +512,11 @@ impl ParseTransportExt for ParseTransportCtx {
          let data_end = ctx.data_end() as *const u8;
          let mut offset = 0u32;
  
@@ -6577,7 +7270,7 @@ index f3f8510..ecb1991 100644
  
          if link_h_len == ETH_HLEN {
              let eth_ptr = data as *const EthHdr;
-@@ -693,7 +653,7 @@ impl ParseTransportExt for ParseTransportCtx {
+@@ -693,7 +677,7 @@ impl ParseTransportExt for ParseTransportCtx {
  
      #[inline(always)]
      fn fill_tuples(&self, tuples: &mut Tuples) {
@@ -6586,6 +7279,51 @@ index f3f8510..ecb1991 100644
          tuples.five.l4proto = self.l4proto;
  
          if self.iph.version() == 4 {
+@@ -701,8 +685,18 @@ impl ParseTransportExt for ParseTransportCtx {
+             tuples.five.dst_ip = In6Addr::from_ipv4_bytes(self.iph.dst_addr);
+             tuples.dscp = self.iph.dscp();
+         } else {
+-            tuples.five.src_ip = In6Addr::from_ipv6_addr(self.ipv6h.src_addr());
+-            tuples.five.dst_ip = In6Addr::from_ipv6_addr(self.ipv6h.dst_addr());
++            let src_v6 = self.ipv6h.src_addr().octets();
++            let dst_v6 = self.ipv6h.dst_addr().octets();
++            unsafe {
++                copy_unaligned_bytes::<16>(
++                    tuples.five.src_ip.u6_addr8.as_mut_ptr(),
++                    src_v6.as_ptr(),
++                );
++                copy_unaligned_bytes::<16>(
++                    tuples.five.dst_ip.u6_addr8.as_mut_ptr(),
++                    dst_v6.as_ptr(),
++                );
++            }
+             tuples.dscp = self.ipv6h.dscp();
+         }
+ 
+@@ -754,9 +748,20 @@ pub fn parse_packet(ctx: &TcContext, link_h_len: u32, out: &mut ParsedPacket) ->
+     }
+ 
+     // Miss-only routing scratch must not add clearing work to cached packets.
+-    out.ethh = tctx.ethh;
+-    out.tcph = tctx.tcph;
+-    out.udph = tctx.udph;
++    unsafe {
++        copy_unaligned_bytes::<{ mem::size_of::<EthHdr>() }>(
++            ptr::from_mut(&mut out.ethh).cast::<u8>(),
++            ptr::from_ref(&tctx.ethh).cast::<u8>(),
++        );
++        copy_unaligned_bytes::<{ mem::size_of::<TcpHdr>() }>(
++            ptr::from_mut(&mut out.tcph).cast::<u8>(),
++            ptr::from_ref(&tctx.tcph).cast::<u8>(),
++        );
++        copy_unaligned_bytes::<{ mem::size_of::<UdpHdr>() }>(
++            ptr::from_mut(&mut out.udph).cast::<u8>(),
++            ptr::from_ref(&tctx.udph).cast::<u8>(),
++        );
++    }
+     out.l4proto = tctx.l4proto;
+     out.listener_l4proto = tctx.listener_l4proto;
+     out.is_fragmented = tctx.is_fragmented;
 diff --git a/crates/honk-outbound/src/bootstrap.rs b/crates/honk-outbound/src/bootstrap.rs
 index bea4447..56d1653 100644
 --- a/crates/honk-outbound/src/bootstrap.rs

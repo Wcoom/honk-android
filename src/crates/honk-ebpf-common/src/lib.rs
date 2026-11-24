@@ -458,6 +458,27 @@ impl RedirectTuple {
         }
     }
 
+    /// Write directional key fields in-place with volatile stores so eBPF
+    /// call sites avoid LLVM-emitted `memset` on `[u8; 3]` padding.
+    #[inline(always)]
+    pub unsafe fn write_from_tuples(dst: *mut Self, tuples: &crate::redirect_need::TuplesKey) {
+        unsafe {
+            let s = core::ptr::addr_of_mut!((*dst).src_ip) as *mut u64;
+            core::ptr::write_volatile(s, tuples.src_ip.u6_addr64[0]);
+            core::ptr::write_volatile(s.add(1), tuples.src_ip.u6_addr64[1]);
+            let d = core::ptr::addr_of_mut!((*dst).dst_ip) as *mut u64;
+            core::ptr::write_volatile(d, tuples.dst_ip.u6_addr64[0]);
+            core::ptr::write_volatile(d.add(1), tuples.dst_ip.u6_addr64[1]);
+            core::ptr::write_volatile(core::ptr::addr_of_mut!((*dst).src_port), tuples.src_port);
+            core::ptr::write_volatile(core::ptr::addr_of_mut!((*dst).dst_port), tuples.dst_port);
+            core::ptr::write_volatile(core::ptr::addr_of_mut!((*dst).l4proto), tuples.l4proto);
+            let pad = core::ptr::addr_of_mut!((*dst).padding) as *mut u8;
+            core::ptr::write_volatile(pad, 0);
+            core::ptr::write_volatile(pad.add(1), 0);
+            core::ptr::write_volatile(pad.add(2), 0);
+        }
+    }
+
     /// Build the opposite-direction key for a reply packet.
     #[inline(always)]
     pub const fn reverse(self) -> Self {

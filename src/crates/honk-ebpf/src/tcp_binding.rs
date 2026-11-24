@@ -6,7 +6,7 @@
 //! CONFIG_BPF_EVENTS and in-kernel BTF.
 
 use crate::ctx::raw_skb;
-use crate::flow::{handoff_incarnation, handoff_snapshot, redirect_incarnation};
+use crate::flow::{handoff_incarnation, handoff_snapshot};
 use crate::maps::{
     CONN_STATE_MAP, CONNTRACK_ARGS_MAP, PARAM, TCP_SOCKET_BINDING, increment_bpf_stat,
     tuple_retiring,
@@ -31,7 +31,6 @@ use aya_ebpf_bindings::{
 };
 use core::{mem, ptr};
 use honk_ebpf_common::{
-    RedirectTuple,
     conn::{BpfStatsKey, TCP_CONN_STATE_ESTABLISHED_TIMEOUT_NS, TCP_SYN_ORIGINAL_INTERCEPT},
     dae_ip::In6Addr,
     redirect_need::{TCP_BINDING_CHILD, TcpSocketBinding, TuplesKey},
@@ -87,7 +86,7 @@ fn valid_proof(binding: &TcpSocketBinding, tuples: &TuplesKey, isn: u32) -> bool
     owned
         && !tuple_retiring(tuples)
         && handoff_incarnation(tuples) == Some(incarnation)
-        && redirect_incarnation(&RedirectTuple::from_tuples(tuples)) == Some(incarnation)
+        && crate::flow::redirect_incarnation_for_tuples(tuples) == Some(incarnation)
 }
 
 /// Scalar decision: 0 absent, reserved top values for fresh/refuse, otherwise
@@ -160,7 +159,7 @@ pub fn native_syn_owner(ctx: &TcContext, tuples: &TuplesKey, isn: u32) -> u64 {
         mem::align_of::<bpf_sock_tuple>() <= mem::align_of::<crate::contrack::ConntrackArgs>()
     );
     let tuple = scratch.cast::<bpf_sock_tuple>();
-    unsafe { ptr::write_bytes(tuple, 0, 1) };
+    unsafe { honk_ebpf_common::conn::zero_in_place_volatile(tuple) };
     let size = if tuples.src_ip.is_v4_mapped() {
         unsafe {
             (*tuple).__bindgen_anon_1.ipv4.saddr = tuples.src_ip.u6_addr32[3];
@@ -171,8 +170,16 @@ pub fn native_syn_owner(ctx: &TcContext, tuples: &TuplesKey, isn: u32) -> u64 {
         mem::size_of::<bpf_sock_tuple__bindgen_ty_1__bindgen_ty_1>() as u32
     } else {
         unsafe {
-            (*tuple).__bindgen_anon_1.ipv6.saddr = tuples.src_ip.u6_addr32;
-            (*tuple).__bindgen_anon_1.ipv6.daddr = tuples.dst_ip.u6_addr32;
+            for i in 0..4 {
+                core::ptr::write_volatile(
+                    (*tuple).__bindgen_anon_1.ipv6.saddr.as_mut_ptr().add(i),
+                    tuples.src_ip.u6_addr32[i],
+                );
+                core::ptr::write_volatile(
+                    (*tuple).__bindgen_anon_1.ipv6.daddr.as_mut_ptr().add(i),
+                    tuples.dst_ip.u6_addr32[i],
+                );
+            }
             (*tuple).__bindgen_anon_1.ipv6.sport = tuples.src_port.to_be();
             (*tuple).__bindgen_anon_1.ipv6.dport = tuples.dst_port.to_be();
         }
