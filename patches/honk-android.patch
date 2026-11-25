@@ -196,10 +196,10 @@ index dc3bee2..872fb20 100644
              let config = parse_dae_config_with_detailed_diagnostics(
                  &format!("global {{ so_mark_from_dae: {value} }}"),
 diff --git a/crates/honk-core/src/control/bootstrap.rs b/crates/honk-core/src/control/bootstrap.rs
-index 219c2d3..0371128 100644
+index 55c041a..a6d13d4 100644
 --- a/crates/honk-core/src/control/bootstrap.rs
 +++ b/crates/honk-core/src/control/bootstrap.rs
-@@ -185,8 +185,23 @@ impl ControlPlane {
+@@ -183,8 +183,23 @@ impl ControlPlane {
          dns_upstream_pool.set_group_manager_snapshot(Arc::clone(&pinned_groups));
          dns_upstream_pool.set_traffic_router_snapshot(Arc::clone(&pinned_router));
          let initial_routing_plan = Arc::new(Self::compile_routing_plan(&config, &router)?);
@@ -226,10 +226,10 @@ index 219c2d3..0371128 100644
          let snapshot = initial_route_connectivity(&initial_routing_plan, &pinned_groups);
          publish_group_connectivity(ebpf.as_mut(), &snapshot)?;
 diff --git a/crates/honk-core/src/control/reload/transaction.rs b/crates/honk-core/src/control/reload/transaction.rs
-index e565765..fdd56c9 100644
+index 1c7370d..7e75cbe 100644
 --- a/crates/honk-core/src/control/reload/transaction.rs
 +++ b/crates/honk-core/src/control/reload/transaction.rs
-@@ -588,6 +588,8 @@ impl ControlPlane {
+@@ -590,6 +590,8 @@ impl ControlPlane {
          let bootstrap = new_config.global.bootstrap_resolver.clone();
          let direct_target = super::direct_check_addr(&bootstrap);
          let bootstrap_resolver = honk_outbound::bootstrap::BootstrapResolver::parse(&bootstrap);
@@ -238,7 +238,7 @@ index e565765..fdd56c9 100644
          let new_plan = if reuse_routing_state {
              Arc::clone(&old_plan)
          } else {
-@@ -937,6 +939,7 @@ impl ControlPlane {
+@@ -947,6 +949,7 @@ impl ControlPlane {
          }
  
          honk_outbound::bootstrap::set_global(bootstrap_resolver);

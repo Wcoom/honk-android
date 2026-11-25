@@ -27,7 +27,7 @@ gh run download <run-id> -n alpine-recipe -D install/alpine
 ```
 
 Before submitting the Gentoo and Nix recipes, generate the Gentoo `Manifest` with
-`ebuild doona-0.1.0_rc6.ebuild manifest` and replace both Nix `lib.fakeHash` values using `SHA256SUMS`.
+`ebuild doona-0.1.0_rc7.ebuild manifest` and replace both Nix `lib.fakeHash` values using `SHA256SUMS`.
 
 The release workflow builds Alpine and OpenWrt 25.12 apk packages from the APKBUILD and the OpenWrt Makefile, using the
 archives of the same run instead of the download URLs: `tools/package-alpine.sh` runs `abuild` in an Alpine 3.24
@@ -35,27 +35,31 @@ container and `tools/package-openwrt.sh` runs the OpenWrt 25.12 SDK. Either scri
 the usage line at the top of each gives the `docker run` command.
 The Gentoo template keeps the existing `metadata.xml`; no version-specific metadata change is needed.
 
+The Alpine, Gentoo, Nix and OpenWrt recipes retain the licence metadata for the pinned GPL-3.0-only rc.7 archives.
+When pointed at a newer release, they declare AGPL-3.0-only for the combined work and retain the GPL-3.0-only
+contribution licence.
+
 ## Version spellings
 
-The recipes use tag `v0.1.0-rc.6`. Release assets keep the upstream version without the tag's `v`;
+The recipes use tag `v0.1.0-rc.7`. Release assets keep the upstream version without the tag's `v`;
 package metadata follows each package manager's ordering rules. The same names and versions apply to `doona-fonts` and
 `doona-precompressed`, which the deb names `doona-web-fonts` and `doona-web-precompressed`.
 
 | Format                                | `doona` asset                                 | Version in package or recipe                     |
 | ------------------------------------- | --------------------------------------------- | ------------------------------------------------ |
-| Program archive                       | `doona-0.1.0-rc.6.tar.gz`                     | n/a                                              |
-| Fonts archive                         | `doona-fonts-0.1.0-rc.6.tar.gz`               | n/a                                              |
-| Precompressed archive                 | `doona-precompressed-0.1.0-rc.6.tar.gz`       | n/a                                              |
-| Debian                                | `doona-web_0.1.0-rc.6-1_all.deb`              | `0.1.0~rc.6-1`                                   |
-| RPM                                   | `doona-0.1.0-rc.6-1.noarch.rpm`               | Version `0.1.0~rc.6`, Release `1`                |
-| OpenWrt ipk (24.10 and earlier, opkg) | `doona_0.1.0-rc.6-1_all.ipk`                  | `0.1.0~rc.6-1`                                   |
-| OpenWrt apk (25.12, apk-tools 3)      | `doona-0.1.0_rc6-r1.apk`                      | `0.1.0_rc6-r1`                                   |
-| Alpine apk                            | `doona-0.1.0-rc.6-r0.alpine.apk`              | `0.1.0_rc6-r0`                                   |
+| Program archive                       | `doona-0.1.0-rc.7.tar.gz`                     | n/a                                              |
+| Fonts archive                         | `doona-fonts-0.1.0-rc.7.tar.gz`               | n/a                                              |
+| Precompressed archive                 | `doona-precompressed-0.1.0-rc.7.tar.gz`       | n/a                                              |
+| Debian                                | `doona-web_0.1.0-rc.7-1_all.deb`              | `0.1.0~rc.7-1`                                   |
+| RPM                                   | `doona-0.1.0-rc.7-1.noarch.rpm`               | Version `0.1.0~rc.7`, Release `1`                |
+| OpenWrt ipk (24.10 and earlier, opkg) | `doona_0.1.0-rc.7-1_all.ipk`                  | `0.1.0~rc.7-1`                                   |
+| OpenWrt apk (25.12, apk-tools 3)      | `doona-0.1.0_rc7-r1.apk`                      | `0.1.0_rc7-r1`                                   |
+| Alpine apk                            | `doona-0.1.0-rc.7-r0.alpine.apk`              | `0.1.0_rc7-r0`                                   |
 | Arch                                  | `doona-0.1.0rc5-1-any.pkg.tar.zst`            | pkgver `0.1.0rc5`, pkgrel `1`, default epoch `0` |
-| Alpine APKBUILD                       | Download the three archives above             | pkgver `0.1.0_rc6`, pkgrel `0`                   |
-| Gentoo ebuild                         | Download the program and fonts archives above | PV `0.1.0_rc6`                                   |
-| OpenWrt Makefile                      | Download the three archives above             | PKG_VERSION `0.1.0_rc6`, PKG_RELEASE `1`         |
-| Nix recipe                            | Download the program and fonts archives above | `0.1.0-rc.6`                                     |
+| Alpine APKBUILD                       | Download the three archives above             | pkgver `0.1.0_rc7`, pkgrel `0`                   |
+| Gentoo ebuild                         | Download the program and fonts archives above | PV `0.1.0_rc7`                                   |
+| OpenWrt Makefile                      | Download the three archives above             | PKG_VERSION `0.1.0_rc7`, PKG_RELEASE `1`         |
+| Nix recipe                            | Download the program and fonts archives above | `0.1.0-rc.7`                                     |
 
 The beta binary recipes were last exercised against a local `pnpm package` build: `abuild -r` in an Alpine 3.22
 container, the OpenWrt SDK for 24.10 (ipk) and 25.12 (apk), and nfpm 2.47 for deb, rpm, ipk and Arch, each
@@ -65,7 +69,7 @@ The ebuild keywords the architectures listed in `KEYWORDS`; only amd64 was exerc
 Replace placeholder hashes and generate the required checksums or manifests before submission.
 
 The overlay's `AGENTS.md` governs the ebuild's submission: commit with `pkgdev commit --scan false --signoff`
-under the subject `net-proxy/doona: new package, add 0.1.0_rc6`, keep the `Manifest` in the same commit, and add
+under the subject `net-proxy/doona: new package, add 0.1.0_rc7`, keep the `Manifest` in the same commit, and add
 a `.github/workflows/overlay.toml` entry in `category/package` order. The SemVer prerelease tag maps onto the
 ebuild's pre-release version with this overlay rule:
 
@@ -85,9 +89,9 @@ as its own commit before the package.
 
 The release workflow runs `tools/package.sh --git-version` to produce the program and fonts archives in the table.
 The program archive has `index.html`, assets, `LICENSE`, `LICENSES/`, `NOTICE`, `README.md` and
-`THIRD-PARTY-NOTICES.txt` at its root. `LICENSES/` holds the Apache-2.0, OFL-1.1 and GitHub logo texts; `NOTICE` links
-the Creative Commons licences; `THIRD-PARTY-NOTICES.txt` carries the licence texts of the npm packages compiled into the
-build, printing each distinct text once under the packages and copyright lines it covers. The archive has no
+`THIRD-PARTY-NOTICES.txt` at its root. `LICENSES/` holds the Apache-2.0, OFL-1.1, GPL-3.0-only contribution and GitHub logo texts;
+`NOTICE` links the Creative Commons licences. `THIRD-PARTY-NOTICES.txt` carries the licence texts of the npm packages
+compiled into the build, printing each distinct text once under the packages and copyright lines it covers. The archive has no
 `CHANGELOG.md`: the deb, rpm, pacman and ipk packages take it from the repository, and the recipes that build from the
 archive alone leave it out. The separate font
 archive has a `fonts/` directory containing the Vite-bundled [Fontsource subsets](../docs/fonts.md), `OFL.txt` and `README`. OpenWrt and Alpine unpack these into

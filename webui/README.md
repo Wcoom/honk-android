@@ -14,7 +14,7 @@
 
 </div>
 
-doona 是用於監控代理流量、管理節點、群組、規則與組態的靜態 Web 介面。使用時需要正在運作且已啟用原生 API 的 [honk](https://github.com/daeuniverse/honk) 後端；目前不支援 dae。
+doona 是用於監控代理流量、管理節點、群組、規則與組態的靜態 Web 介面。使用時需要正在運作且已啟用原生 API 的 [honk](https://github.com/daeuniverse/honk) 或 [dae](https://github.com/daeuniverse/dae)（v2.1.2 起）後端，dae 的設定方式見[原生 API 文件](https://github.com/daeuniverse/dae/blob/main/docs/zh/configuration/api.md)。
 
 ![顯示流量圖表與狀態卡片的活動頁](https://daeuniverse.org/doona/screenshots/zh-TW/activity-light.webp)
 
@@ -86,7 +86,7 @@ doona 是用於監控代理流量、管理節點、群組、規則與組態的�
 
 ## 兩個版本
 
-在 0.1.0-rc.6 中，doona lite 是仍在測試的預覽版，頁面與行為可能繼續變動。兩者連線同一個 honk，使用相同的管理員憑證。
+在 0.1.0-rc.7 中，doona lite 是仍在測試的預覽版，頁面與行為可能繼續變動。兩者連線同一個 honk，使用相同的管理員憑證。
 
 | 項目       | 標準版                             | doona lite（預覽版）     |
 | ---------- | ---------------------------------- | ------------------------ |
@@ -120,7 +120,7 @@ honk 負責代理流量；支援的協定、傳輸方式與限制見 [honk 節�
 
 ## 最新版本
 
-[0.1.0-rc.6](CHANGELOG.md) 共 13 項更新：新增 4 項、變更 4 項、修正 5 項。
+[0.1.0-rc.7](CHANGELOG.md) 共 21 項更新：新增 3 項、修正 17 項、內部調整 1 項。
 
 本版在「新增節點」對話框加入「手動」分頁，新增節點時可同時加入群組。手動選擇的策略群組也能折疊，群組成員會標示所屬訂閱，說明連結改為開啟 daeuniverse.org 上的手冊。Dark Reader 不再重新著色 doona，指向設定或卡片的連結會捲動到目標，頁面骨架也與載入後的版面一致。
 
@@ -146,4 +146,7 @@ lite 的獨立相依套件安裝與建置指令見[開發](https://daeuniverse.o
 
 ## 授權與致謝
 
-[GPL-3.0-only](LICENSE)。[Noto Sans TC 與 SC](docs/fonts.md) 由 Fontsource npm 套件提供，版權歸 Adobe 所有，採用 [Open Font License](LICENSES/OFL-1.1.txt)。[NOTICE](NOTICE) 註明 Adobe Spectrum 圖示（Apache-2.0）。
+doona 採用 [AGPL-3.0-only](LICENSE) 授權。
+若向使用者提供修改版（包括透過網路提供），就必須向這些使用者提供取得對應原始碼的途徑。
+
+[Noto Sans TC 與 SC](docs/fonts.md) 由 Fontsource npm 套件提供，版權歸 Adobe 所有，採用 [Open Font License](LICENSES/OFL-1.1.txt)。[NOTICE](NOTICE) 註明 Adobe Spectrum 圖示（Apache-2.0）。

@@ -1,6 +1,6 @@
 # honk-android：对上游 honk 的改动清单
 
-基线：`daeuniverse/honk` `main` 分支（提交 `00be4f01`，对应上游 `v0.1.0-beta.7`）。
+基线：`daeuniverse/honk` `main` 分支（提交 `4ce5272f`，位于上游 `v0.1.0-beta.7` 之后 9 个提交）。
 
 ## 1. eBPF 数据面：适配 Android GKI 6.1+ / 6.6+ Verifier（1M 指令上限 + 512B 栈上限）
 
@@ -67,5 +67,5 @@
 - `crates/honk-core/src/ebpf/real/{programs.rs,observation.rs}`：
   - `ProgramLoader::try_object()` 改为 `try_lock_for(5ms)`，`observe_backend()` 在 `programs` 仍为 `DatapathCheck::Unknown` 时保持未确认而不误判为 `DatapathObservationError::Hooks`，消除并发轮询 `/api/v1/runtime` 与 `/api/v1/datapath` 时偶发的 `hook_observation_incomplete`。
 - `crates/honk-core/src/native_api/{core_update.rs,handlers.rs,types.rs}`、`crates/honk-core/src/{main.rs,native_api.rs}` 与 `webui/`：
-  - 同步 `Zakkaus/doona` 主线至 `c7f29e3` 并接入 [`build.sh`](./build.sh) 自动内嵌标准版与 Lite 版 WebUI。
+  - 同步 `Zakkaus/doona` 主线至 `0ed10b6`（含代理链管理、策略组出口节点编辑及内存/核心更新扩展）并接入 [`build.sh`](./build.sh) 自动内嵌标准版与 Lite 版 WebUI。
   - 新增 `GET/POST /api/v1/x-honk/core/update`，支持检测 `Wcoom/honk-android` GitHub Releases、下载 `honk-android-arm64` 与 `SHA256SUMS.txt`、校验 SHA-256 与 ARM64 ELF64 头并原子替换后分离重启（复用 `record_startup_args()`）；同步适配 Doona 标准版/Lite 版核心更新卡片与 `BoxProxy Honk` 客户端内更新源。

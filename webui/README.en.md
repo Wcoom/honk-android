@@ -14,7 +14,7 @@
 
 </div>
 
-doona is a static web UI for monitoring proxy traffic and managing nodes, groups, rules and configuration. It requires a running [honk](https://github.com/daeuniverse/honk) backend with the native API enabled; dae is not supported yet.
+doona is a static web UI for monitoring proxy traffic and managing nodes, groups, rules and configuration. It requires a running [honk](https://github.com/daeuniverse/honk) or [dae](https://github.com/daeuniverse/dae) (v2.1.2 or later) backend with the native API enabled. For dae, see its [native API guide](https://github.com/daeuniverse/dae/blob/main/docs/en/configuration/api.md).
 
 ![Activity dashboard with traffic charts and status cards](https://daeuniverse.org/doona/screenshots/en/activity-light.webp)
 
@@ -86,7 +86,7 @@ Available features depend on the backend’s capabilities and configuration; see
 
 ## Two editions
 
-doona lite is a preview in testing in 0.1.0-rc.6; its pages and behaviour may change. Both editions connect to the same honk with the same administrator credentials.
+doona lite is a preview in testing in 0.1.0-rc.7; its pages and behaviour may change. Both editions connect to the same honk with the same administrator credentials.
 
 | Area               | Standard edition                                          | doona lite (preview)                               |
 | ------------------ | --------------------------------------------------------- | -------------------------------------------------- |
@@ -120,7 +120,7 @@ honk handles proxying; see the [honk node reference](https://github.com/daeunive
 
 ## Latest release
 
-[0.1.0-rc.6](CHANGELOG.md) has 13 entries: 4 additions, 4 changes and 5 fixes.
+[0.1.0-rc.7](CHANGELOG.md) has 21 entries: 3 additions, 17 fixes and 1 internal update.
 
 This release adds a Manual tab to the Add node dialog, and new nodes can join groups in the same step. Manual policy groups fold, group members name their subscription, and help links open the manual on daeuniverse.org. Dark Reader no longer recolours doona, links into a setting or card scroll to their target, and page skeletons match the loaded pages.
 
@@ -146,4 +146,7 @@ Report interface problems and ask questions in [doona issues](https://github.com
 
 ## License and credits
 
-[GPL-3.0-only](LICENSE). [Noto Sans TC and SC](docs/fonts.md), bundled from Fontsource npm packages, are copyright Adobe and licensed under the [Open Font License](LICENSES/OFL-1.1.txt); [NOTICE](NOTICE) credits the Adobe Spectrum icons (Apache-2.0).
+doona is licensed under [AGPL-3.0-only](LICENSE).
+If you provide a modified version to users, including over a network, you must offer them its corresponding source code.
+
+[Noto Sans TC and SC](docs/fonts.md), bundled from Fontsource npm packages, are copyright Adobe and licensed under the [Open Font License](LICENSES/OFL-1.1.txt); [NOTICE](NOTICE) credits the Adobe Spectrum icons (Apache-2.0).
