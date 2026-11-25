@@ -37,7 +37,7 @@
 | `honk-android-arm64` | 静态链接 `aarch64-unknown-linux-musl` 的 `honk-core`（支持 GKI 6.1+ / 6.6+，合并上游 `4ce5272f`，含全策略组空闲探活暂停、Hysteria2 端口跳跃别名合并、独立 cgroup 内存遥测、核心在线更新与 Doona `0ed10b6` 前端） |
 | `boxctl-android-arm64` | 适配 `honk` 核心、`ebpf` 模式、`boot` 自启、独立 `/honk` cgroup 与 `com.boxproxy.honk` 共存目录的静态 `boxctl` |
 | `BoxProxy-honk-arm64.apk` | 基于官方新版 BoxProxy (`26.11.23.aa98568` / `v214`) 适配，独立包名 **`com.boxproxy.honk`**（`BoxProxy Honk`），内置 `Honk` 核心更新源并完整对接独立开机自启脚本 `/data/adb/service.d/boxproxy-honk.sh`，可与官方原版 BoxProxy 直接共存安装 |
-| `config.example.dae` | 脱敏后的 Android 推荐配置模板 |
+| `config.example.dae` | 脱敏后的 Android 全功能 7 源融合分流配置模板（含去广告、WebRTC 防泄漏、大陆 App/域名/IPv4+IPv6 直连及 `Wcoom/honk-rules-dat` 云端自动拉取） |
 | `SHA256SUMS.txt` | 所有发布产物的 SHA-256 校验值 |
 
 ---

@@ -1,9 +1,18 @@
-# Honk for Android 正式版推荐配置模板（已完全脱敏）
+# Honk for Android 全功能 7 源融合分流配置模板（已完全脱敏）
+#
+# 特性：
+# - 配套云端 7 源融合去重规则库 Wcoom/honk-rules-dat（MetaCubeX + blackmatrix7 + Surfing/AWAvenue
+#   + Hackl0us + ispip.clang.cn IPv6 + X-Shelby + IPinfo Lite CN），每天 00:00 / 12:00 CST 自动构建
+# - 大陆 App / 域名 / IPv4+IPv6 直连，大陆外服务精细分组代理，广告/劫持/HttpDNS 拦截，WebRTC 拒连防泄漏
+# - 已针对 Android eBPF 32767 指令跳转上限优化 pname 紧凑前缀（单配置建议保持 <=24 个 pname 模式）
 #
 # 使用方式：
-# 1. 在 node { ... } 中填入你的节点链接，或在 subscription { ... } 中填入订阅地址；
-# 2. 按需在 dns.upstream { ... } 中替换为你的 DoH / DoH3 / DoT 地址；
-# 3. 将本文件复制为 /data/user/0/com.boxproxy.honk/files/box/honk/config.dae 并在 BoxProxy Honk 中启用。
+# 1. 在 node { ... } 中替换为你的真实节点，或取消注释 subscription { ... } 填入订阅链接；
+# 2. 按需在 dns.upstream { ... } 中替换为自建 DoH / DoH3 / DoT 地址；
+# 3. 首次部署请将配套 geosite.dat 与 geoip.dat 放入 global.data_dir 目录：
+#      https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/geosite.dat
+#      https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/geoip.dat
+# 4. 将本文件复制为 /data/user/0/com.boxproxy.honk/files/box/honk/config.dae 并在 BoxProxy Honk 中启用。
 
 global {
   tproxy_port: 12345
@@ -31,53 +40,258 @@ global {
 
 # 可选：订阅配置（取消注释并替换为你的订阅链接）
 # subscription {
-#   my_sub: 'https://example.com/your-subscription-url'
+#   my_sub: 'https://example.com/your-subscription-url' {
+#     interval: 86400s
+#     route: direct
+#   }
 # }
 
 node {
-  # 示例节点（请替换为实际节点链接）
-  'example-vless': 'vless://00000000-0000-0000-0000-000000000000@example.com:443?encryption=none&security=tls&type=ws&sni=example.com&path=%2Fws'
-  'example-anytls': 'anytls://your-password@example.com:443/?sni=example.com'
+  # 示例节点（请替换为实际节点链接；保留地区命名便于下方地区策略组自动归类）
+  '🇭🇰 Hong Kong 01': 'anytls://your-password@hk.example.com:443/?sni=hk.example.com'
+  '🇹🇼 Taiwan 01': 'anytls://your-password@tw.example.com:443/?sni=tw.example.com'
+  '🇸🇬 Singapore 01': 'anytls://your-password@sg.example.com:443/?sni=sg.example.com'
+  '🇯🇵 Japan 01': 'anytls://your-password@jp.example.com:443/?sni=jp.example.com'
+  '🇺🇸 USA 01': 'anytls://your-password@us.example.com:443/?sni=us.example.com'
+  # 自建 VLESS + XHTTP (CDN) 节点示例
+  '🌐 Example CDN': 'vless://00000000-0000-0000-0000-000000000000@cdn.example.com:443?encryption=none&security=tls&type=xhttp&sni=cdn.example.com&host=cdn.example.com&fp=chrome&alpn=h2&path=%2Fapi%2Fv1%2Fstream&mode=stream-one'
 }
 
 group {
-  # 智能综合评分策略组
-  Auto {
+  # ── 通用自动策略组 ─────────────────────────────────────────────────────
+  智能策略 / ALL {
     policy: score
     filter: !name('direct', 'block')
   }
-  # 最低延迟策略组
-  UrlTest {
+  延迟最低 {
     policy: urltest
     filter: !name('direct', 'block')
   }
-  # 故障转移策略组
-  Fallback {
+  故障转移 {
     policy: fallback
     filter: !name('direct', 'block')
   }
-  # 手动选择策略组
-  Select {
+  负载均衡 {
+    policy: loadbalance
+    filter: !name('direct', 'block')
+  }
+
+  # ── 地区自动优选组（按节点名正则自动归类）────────────────────────────
+  香港节点 {
+    policy: score
+    filter: name(regex: '(港|HK|hk|Hong Kong|HongKong|hongkong)')
+  }
+  台湾节点 {
+    policy: score
+    filter: name(regex: '(台|新北|彰化|TW|Taiwan)')
+  }
+  狮城节点 {
+    policy: score
+    filter: name(regex: '(新加坡|坡|狮城|SG|Singapore)')
+  }
+  日本节点 {
+    policy: score
+    filter: name(regex: '(日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)')
+  }
+  美国节点 {
+    policy: score
+    filter: name(regex: '(美|波特兰|达拉斯|俄勒冈|凤凰城|费利蒙|硅谷|拉斯维加斯|洛杉矶|圣何塞|圣克拉拉|西雅图|芝加哥|America|US|United States)')
+  }
+
+  # ── 手动与主控出口组 ───────────────────────────────────────────────────
+  手动选择 {
     policy: select
     filter: !name('direct', 'block')
   }
-  # 主出站策略组
-  Proxy {
+  总模式 {
     policy: select
-    filter: group('Auto', 'UrlTest', 'Fallback', 'Select')
+    filter: group('智能策略 / ALL', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '延迟最低', '故障转移', '负载均衡', '手动选择')
     filter: name('direct', 'block')
-    default: Auto
+    default: '智能策略 / ALL'
   }
-  Domestic {
+
+  # ── 基础分流与拦截控制组 ───────────────────────────────────────────────
+  国内直连名单 {
     policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
     filter: name('direct', 'block')
-    filter: group('Proxy')
     default: direct
   }
-  AdBlock {
+  海外代理名单 {
     policy: select
-    filter: name('block', 'direct')
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  广告拦截 {
+    policy: select
+    filter: name('direct', 'block')
     default: block
+  }
+  WebRTC {
+    policy: select
+    filter: name('direct', 'block')
+    default: block
+  }
+  DNS连接 {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+
+  # ── 常用大陆应用独立策略组（默认直连，按需切节点）────────────────────
+  抖音 {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: direct
+  }
+  小红书 {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: direct
+  }
+  哔哩哔哩 {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: direct
+  }
+
+  # ── 常用海外服务独立策略组（默认跟随总模式）──────────────────────────
+  OpenAI {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  AI {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  GitHub {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Emby {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  PikPak {
+    policy: select
+    filter: group('总模式', '海外代理名单')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  E-hentai {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Pixiv {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Discord {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  TikTok {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Twitter(X) {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Telegram {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  GoogleFCM {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  YouTube {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Google {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Instagram {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Netflix {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Spotify {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Steam {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Apple {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Microsoft {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  Facebook {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
+  }
+  漏网之鱼 {
+    policy: select
+    filter: group('总模式', '智能策略 / ALL', '延迟最低', '故障转移', '负载均衡', '香港节点', '台湾节点', '狮城节点', '日本节点', '美国节点', '手动选择')
+    filter: name('direct', 'block')
+    default: '总模式'
   }
 }
 
@@ -85,19 +299,23 @@ dns {
   ipversion_prefer: 4
   optimistic_cache: true
   upstream {
-    # 公共加密 DNS 示例（可替换为自定义 DoH / DoH3 / DoT 地址）
-    alidns_doh: 'https://dns.alidns.com/dns-query' -> direct
-    dnspod_doh: 'https://doh.pub/dns-query' -> direct
-    cloudflare_doh: 'https://cloudflare-dns.com/dns-query' -> Proxy
+    # 公共加密 DNS（IP 直连免 bootstrap；可按需替换为自建 DoH / h3:// DoH3 / tls:// DoT）
+    alidns_doh: 'https://223.5.5.5/dns-query?tls_server_name=dns.alidns.com' -> direct
+    dnspod_doh: 'https://1.12.12.12/dns-query?tls_server_name=doh.pub' -> direct
+    alidns_dot: 'tls://223.5.5.5:853?tls_server_name=dns.alidns.com' -> direct
     bootstrap_udp: 'udp://223.5.5.5:53' -> direct
+    google_doh: 'https://8.8.8.8/dns-query?tls_server_name=dns.google' -> 总模式
   }
   routing {
     request {
-      # DNS 服务器域名与节点域名走直连 Bootstrap 解析，避免回环
+      # 屏蔽 HTTPS/SVCB 记录（返回 NODATA），避免 Cloudflare ECH 外层 SNI 错配
+      qtype(https) -> reject
+      # 若使用域名形式的节点服务器或自建 DoH/DoT，请将对应主域名加入下方直连 bootstrap，防止解析回环
       qname(suffix:alidns.com, suffix:doh.pub) -> bootstrap_udp
-      qname(geosite:private, suffix:lan, suffix:localdomain, suffix:localhost, suffix:local, suffix:home.arpa) -> asis
-      qname(geosite:cn, geosite:geolocation-cn, geosite:apple-cn, geosite:googlefcm) -> alidns_doh
-      fallback: cloudflare_doh
+      qname(geosite:private, suffix:lan, suffix:localdomain, suffix:example, suffix:invalid, suffix:localhost, suffix:test, suffix:local, suffix:home.arpa) -> asis
+      # 国内及融合白名单域名走国内加密 DNS，其余海外域名走代理 DoH
+      qname(geosite:merged-lan, geosite:surfing-direct, geosite:merged-cn-mirror, geosite:merged-bilibili, geosite:merged-douyin, geosite:merged-xiaohongshu, geosite:merged-chinamedia, geosite:merged-cn, geosite:merged-googlefcm) -> alidns_doh
+      fallback: google_doh
     }
     response {
       fallback: accept
@@ -106,23 +324,96 @@ dns {
 }
 
 routing {
-  # 放行 Android USB 共享网络（rndis0/ncm0/usb0）及其内置 dnsmasq，避免劫持热点流量
+  # 1) USB 热点免劫持 + 私网/局域网/NTP/Surfing IMS 放行（!dport(53) 保留透明 DNS 接管）
   pname('dnsmasq') -> direct(must)
   sip(192.168.42.0/24) -> direct(must)
+  dip(geoip:private, geoip:merged-lan-ip, 100.64.0.0/10, 224.0.0.0/4, 255.255.255.255/32) && !dport(53) -> direct(must)
+  domain(geosite:merged-lan, geosite:surfing-direct) -> direct
 
-  # 局域网 / 私有地址 / 组播直连（排除 53 端口以保证 honk DNS 拦截生效）
-  dip(geoip:private, 100.64.0.0/10, 224.0.0.0/4, 255.255.255.255/32) && !dport(53) -> direct(must)
-  domain(geosite:private) -> direct
+  # 2) Play 下载 CDN 直连修正 + Google 核心域名代理 + WebRTC 拒连防泄漏
+  domain(suffix:xn--ngstr-lra8j.com, suffix:gvt1.com) -> direct
+  domain(suffix:google.com, suffix:googleapis.com, suffix:googleusercontent.com, suffix:gstatic.com, suffix:ggpht.com) -> Google
+  domain(geosite:merged-webrtc) -> WebRTC
+  dip(geoip:merged-webrtc-ip) -> WebRTC
+  dport(19302, 3478, 5349, 10000, 5350) -> WebRTC
 
-  # 广告拦截
-  domain(geosite:category-ads-all) -> AdBlock
+  # 3) 广告 / 运营商劫持 / HttpDNS 拦截（MetaCubeX + Surfing AWAvenue + bm7 AdvertisingLite/Hijacking/BlockHttpDNS）
+  domain(geosite:merged-ads) -> 广告拦截
+  dip(geoip:merged-ads-ip) -> 广告拦截
 
-  # 国内域名与 IP 直连
-  domain(geosite:cn, geosite:geolocation-cn, geosite:apple-cn, geosite:google-cn) -> Domestic
-  dip(geoip:cn) -> Domestic
+  # 4) 大陆内 App 与高优先级国内直连（置于海外规则之前；均按 15 字节内前缀编写以适配 Android eBPF 指令上限）
+  pname('com.ss.android.') -> 抖音
+  domain(geosite:merged-douyin) -> 抖音
+  pname('com.xingin.xhs') -> 小红书
+  domain(geosite:merged-xiaohongshu) -> 小红书
+  pname('tv.danmaku.bili') -> 哔哩哔哩
+  domain(geosite:merged-bilibili) -> 哔哩哔哩
 
-  # 其余流量走代理
-  fallback: Proxy
+  # 紧凑前缀覆盖主流大陆 App（不含 Chrome 等通用浏览器；其余大陆 App 由 merged-cn + geoip:cn 自动直连）
+  pname('com.tencent.', 'com.eg.android', 'com.taobao.', 'com.jingdong', 'com.xunmeng', 'com.sankuai', 'com.sdu.didi', 'com.autonavi', 'com.baidu.', 'com.deepseek', 'com.alibaba', 'com.heytap.', 'com.oplus.', 'com.coloros.') -> 国内直连名单
+
+  # 跨国大厂国内镜像 / 游戏国内下载 CDN / PT / 国内影音直连
+  domain(geosite:merged-cn-mirror, geosite:merged-chinamedia) -> 国内直连名单
+
+  # 5) 大陆外专属服务与常见海外 App → 代理策略组
+  pname('com.pikcloud.pi') -> PikPak
+  domain(geosite:merged-pikpak) -> PikPak
+  domain(geosite:merged-openai) -> OpenAI
+  domain(geosite:merged-ai) -> AI
+  pname('com.openai.chat') -> AI
+  domain(geosite:merged-github) -> GitHub
+  domain(geosite:merged-emby) -> Emby
+  pname('com.mb.android') -> Emby
+  domain(geosite:merged-ehentai) -> E-hentai
+  domain(geosite:merged-pixiv) -> Pixiv
+  domain(geosite:merged-discord) -> Discord
+  domain(geosite:merged-tiktok) -> TikTok
+  domain(geosite:merged-twitter) -> Twitter(X)
+  pname('com.twitter.and') -> Twitter(X)
+  domain(geosite:merged-telegram) -> Telegram
+  pname('org.telegram.me') -> Telegram
+  domain(geosite:merged-googlefcm) -> GoogleFCM
+  domain(geosite:merged-youtube) -> YouTube
+  domain(geosite:merged-google) -> Google
+  pname('com.instagram.a') -> Instagram
+  domain(geosite:merged-instagram) -> Instagram
+  domain(geosite:merged-netflix) -> Netflix
+  domain(geosite:merged-spotify) -> Spotify
+  domain(geosite:merged-steam) -> Steam
+  domain(geosite:merged-apple) -> Apple
+  domain(geosite:merged-microsoft) -> Microsoft
+  domain(geosite:merged-facebook) -> Facebook
+
+  # 其余全面覆盖的大陆外服务（港台亚洲媒体/海外流媒体/开发学术/社交/国际游戏/支付加密/海外云）→ 海外代理名单
+  domain(geosite:merged-asianmedia, geosite:merged-media-other, geosite:merged-dev-other, geosite:merged-social-other, geosite:merged-games-other, geosite:merged-tech-other) -> 海外代理名单
+
+  # 6) 大陆全量域名直连（7 源融合去重，已扣减强海外核心域）
+  domain(geosite:merged-cn) -> 国内直连名单
+
+  # 7) 海外全量域名代理（已扣减大陆及前序专属桶冗余）
+  domain(geosite:merged-overseas) -> 海外代理名单
+
+  # 8) GeoIP 精细分流（置于域名规则之后，确保 SNI 嗅探优先）
+  dip(geoip:merged-telegram-ip) -> Telegram
+  dip(geoip:merged-twitter-ip) -> Twitter(X)
+  dip(geoip:merged-openai-ip) -> OpenAI
+  dip(geoip:merged-ai-ip) -> AI
+  dip(geoip:merged-youtube-ip) -> YouTube
+  dip(geoip:merged-googlefcm-ip) -> GoogleFCM
+  dip(geoip:merged-google-ip) -> Google
+  dip(geoip:merged-netflix-ip) -> Netflix
+  dip(geoip:merged-spotify-ip) -> Spotify
+  dip(geoip:merged-facebook-ip) -> Facebook
+  dip(geoip:merged-apple-ip) -> Apple
+  dip(geoip:merged-ehentai-ip) -> E-hentai
+  dip(geoip:merged-asianmedia-ip, geoip:merged-overseas-ip) -> 海外代理名单
+  dip(geoip:merged-bilibili-ip) -> 哔哩哔哩
+  # 7 源超网聚合去重的大陆 IPv4 + IPv6（MetaCubeX + Hackl0us + X-Shelby + clang IPv6 + IPinfo Lite CN + bm7）
+  dip(geoip:cn) -> 国内直连名单
+
+  # 9) DoT 端口 853 与最终兜底（未命中大陆规则一律走节点）
+  dport(853) -> DNS连接
+  fallback: 漏网之鱼
 }
 
 experimental {
@@ -146,9 +437,16 @@ experimental {
   }
 }
 
+# 指向云端 Wcoom/honk-rules-dat 的 release 直链分支（HTTP 200 无 302 重定向；honk 不跟随 302）；
+# GitHub Actions 每天北京时间 00:00 / 12:00 自动融合 7 源并更新；Android 端 honk 按 UTC 计算 cron，
+# 20 4,16 * * * 对应北京时间 12:20 与 00:20（另带随机抖动），自动拉取并校验 .sha256sum。
 assets {
   geodata {
-    geosite: 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat'
-    geoip: 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat'
+    geosite: 'https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/geosite.dat'
+    geoip: 'https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/geoip.dat'
+    route: 总模式
+    auto_update: true
+    cron: '20 4,16 * * *'
+    checksum: true
   }
 }

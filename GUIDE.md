@@ -20,10 +20,10 @@
 
 正式版发布包已包含所有核心成品（`honk-android-arm64`、`boxctl-android-arm64`、`BoxProxy-honk-arm64.apk`、`config.example.dae`），你只需要额外准备以下 2 样东西：
 
-1. **地理数据库**（路由分流必需）：
-   - `geoip.dat`
-   - `geosite.dat`
-   - 可从常见开源规则项目（如 `Loyalsoldier/v2ray-rules-dat`）下载，或直接复用你手机上原有代理工具里的同款文件（部署后也可直接在 Doona 面板一键在线更新）。
+1. **地理数据库**（路由分流必需，与默认模板 `config.example.dae` 的 7 源规则分组配套）：
+   - `geosite.dat`：https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/geosite.dat
+   - `geoip.dat`：https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/geoip.dat
+   - 来自配套开源自动构建仓库 **[Wcoom/honk-rules-dat](https://github.com/Wcoom/honk-rules-dat)**（每天北京时间 00:00 / 12:00 自动融合 MetaCubeX + blackmatrix7 + Surfing/AWAvenue + Hackl0us + clang IPv6 + X-Shelby + IPinfo Lite CN 并去重发布；模板已默认开启云端直链自动拉取与 `.sha256sum` 校验）。
 2. **你的代理节点或订阅链接**（支持 VLESS / AnyTLS / Trojan / Shadowsocks / Hysteria2 / TUIC / VMess 等常见协议）。
 
 ---
@@ -66,7 +66,7 @@ adb install apk/BoxProxy-honk-arm64.apk
      }
      ```
 2. **（可选）替换 DNS 上游**：
-   - 模板默认使用阿里 DoH（国内）+ Cloudflare DoH（海外）。
+   - 模板默认使用阿里 DoH（国内直连）+ Google DoH（海外经代理），并默认开启去广告、WebRTC 拒连防泄漏、大陆 App/域名/IPv4+IPv6 直连与海外精细分组。
    - 如果你有自定义 DoH / DoH3 (`h3://...`) / DoT (`tls://...:853`)，直接修改 `dns.upstream` 块即可，并记得把你的 DNS 服务器主域名加入 `qname(...) -> bootstrap_udp` 与 `routing` 中的直连规则，避免回环。
 3. **保留 Android 关键项（不要删）**：
    - `wan_interface: auto`：自动跟踪 5G 蜂窝与 Wi-Fi 切换，自动重挂 eBPF。

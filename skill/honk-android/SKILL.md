@@ -78,9 +78,9 @@ EOF
        - `native_api { enabled: true listen: '127.0.0.1:9527' allow_anonymous_loopback: true config_write: true ui: 'embedded' }` (powers BoxProxy Honk's Home WebUI -> full-feature native Doona panel).
        - `cache_file { enabled: true store_dns: true }`.
      - `assets`:
-       - `geodata { geosite: 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat' geoip: 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat' }`.
+       - `geodata { geosite: 'https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/geosite.dat' geoip: 'https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/geoip.dat' route: 总模式 auto_update: true cron: '20 4,16 * * *' checksum: true }` (note: `honk` intentionally does not follow HTTP 302 redirects, so use `raw.githubusercontent.com/.../release/...` direct HTTP 200 URLs rather than GitHub `/releases/download/...`; Android `honk` evaluates cron in UTC so `20 4,16 * * *` equals 12:20 / 00:20 CST).
 2. **Locate `geoip.dat` & `geosite.dat`**:
-   - Check if they already exist on the device (e.g., `/data/user/0/com.boxproxy.honk/files/box/honk/data/` or `/data/user/0/com.boxproxy.box/files/box/mihomo/`) or on the host; copy them into `/data/user/0/com.boxproxy.honk/files/box/honk/data/`.
+   - Download the matching 7-source merged geodata files from `https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/{geosite,geoip}.dat` (required for `merged-*` rules in `config/config.example.dae`), or copy existing compatible files into `/data/user/0/com.boxproxy.honk/files/box/honk/data/`.
 
 ### Phase 4: Deploy & Start `honk`
 
