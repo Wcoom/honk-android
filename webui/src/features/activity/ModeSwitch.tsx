@@ -18,7 +18,10 @@ type ModeCardsModel = {
   targetText: string;
   writable: boolean;
   dirty: boolean;
+  modeDirty?: boolean;
+  targetDirty?: boolean;
   incomplete: boolean;
+  targetIncomplete?: boolean;
   status: string;
   readOnly: boolean;
   reason?: EngineReason;
@@ -31,25 +34,43 @@ type ModeCardsModel = {
   pick: (mode: string) => void;
   pickTarget: (target: string) => void;
   apply: () => void;
+  applyMode?: () => void;
+  applyTarget?: () => void;
 };
 
-export function ModeApply({model: vm}: {model: Pick<ModeCardsModel, 'mode' | 'modes' | 'writable' | 'dirty' | 'incomplete' | 'busy' | 'apply'>}) {
+type ApplyScope = 'mode' | 'global' | 'both';
+
+export function ModeApply({
+  model: vm,
+  scope = 'both'
+}: {
+  model: Pick<
+    ModeCardsModel,
+    'mode' | 'modes' | 'writable' | 'dirty' | 'modeDirty' | 'targetDirty' | 'incomplete' | 'targetIncomplete' | 'busy' | 'apply' | 'applyMode' | 'applyTarget'
+  >;
+  scope?: ApplyScope;
+}) {
   const t = useT();
   const [asking, setAsking] = useState<string | null>(null);
+  const dirty = scope === 'mode' ? (vm.modeDirty ?? vm.dirty) : scope === 'global' ? (vm.targetDirty ?? vm.dirty) : vm.dirty;
+  const incomplete = scope === 'global' ? (vm.targetIncomplete ?? vm.incomplete) : vm.incomplete;
+  const confirmMode = scope === 'global' ? 'global' : vm.mode;
+  const submit = scope === 'mode' ? (vm.applyMode ?? vm.apply) : scope === 'global' ? (vm.applyTarget ?? vm.apply) : vm.apply;
+  const confirmLabel = vm.modes.find(([id]) => id === asking)?.[1] ?? (asking === 'global' ? t('mode.global') : '');
   return vm.writable ? (
     <>
-      <Button accent isDisabled={!vm.dirty || vm.incomplete} isPending={vm.busy} onPress={() => (vm.mode === 'rule' ? vm.apply() : setAsking(vm.mode))}>
+      <Button accent isDisabled={!dirty || incomplete} isPending={vm.busy} onPress={() => (confirmMode === 'rule' ? submit() : setAsking(confirmMode))}>
         {t('config.save')}
       </Button>
       <ConfirmDialog
-        title={t('act.modeConfirm', {mode: vm.modes.find(([id]) => id === asking)?.[1] ?? ''})}
+        title={t('act.modeConfirm', {mode: confirmLabel})}
         confirmLabel={t('config.save')}
         isOpen={asking !== null}
-        isDisabled={vm.busy || !vm.dirty || vm.incomplete || asking !== vm.mode}
+        isDisabled={vm.busy || !dirty || incomplete || asking !== confirmMode}
         onCancel={() => setAsking(null)}
         onConfirm={() => {
           setAsking(null);
-          vm.apply();
+          submit();
         }}
       >
         <p className="rp-label">{t(asking === 'direct' ? 'act.modeDirectHelp' : 'act.modeGlobalHelp')}</p>
@@ -59,7 +80,7 @@ export function ModeApply({model: vm}: {model: Pick<ModeCardsModel, 'mode' | 'mo
 }
 
 // The mode choice with its apply action, or why it cannot change: Activity's mode card and the widget panel share it.
-export function ModeSwitch({model: vm, fill}: {model: ModeCardsModel; fill?: boolean}) {
+export function ModeSwitch({model: vm, fill, scope = 'mode'}: {model: ModeCardsModel; fill?: boolean; scope?: ApplyScope}) {
   const t = useT();
   useEffect(() => {
     if (vm.readOnly) preloadHint();
@@ -68,7 +89,7 @@ export function ModeSwitch({model: vm, fill}: {model: ModeCardsModel; fill?: boo
     <span className="rp-cluster">
       <Segmented label={t('act.mode')} value={vm.mode} onChange={vm.pick} isDisabled={vm.busy || !vm.writable} items={vm.modes} fill={fill} />
       {vm.writable ? (
-        <ModeApply model={vm} />
+        <ModeApply model={vm} scope={scope} />
       ) : vm.readOnly ? (
         <PopoverDialog
           label={t('act.modeWhyReadOnly')}
@@ -107,7 +128,7 @@ export function ModeCards({model: vm, part}: {model: ModeCardsModel; part?: 'mod
           aria-label={t('act.mode')}
           tile={{icon: <Shuffle />, tint: 3, kind: 'control'}}
           reason={vm.reasons.mode}
-          aside={<ModeSwitch model={vm} />}
+          aside={<ModeSwitch model={vm} scope="mode" />}
         />
       )}
       {part !== 'mode' && (
@@ -128,7 +149,7 @@ export function ModeCards({model: vm, part}: {model: ModeCardsModel; part?: 'mod
               >
                 <WidestLabel labels={vm.targets.map(target => target.label)}>{vm.targetText}</WidestLabel>
               </ChoiceMenu>
-              <ModeApply model={vm} />
+              <ModeApply model={vm} scope="global" />
             </span>
           }
         />

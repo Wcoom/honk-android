@@ -138,16 +138,22 @@ it('tones the latency tile like the nodes table, by speed', () => {
   expect(nodeView(nodes, 'jp-01', t).latencyClass).toBe('rp-big');
 });
 
-it('stages global targets without changing the current mode and detects an unchanged selection', () => {
+it('keeps outbound mode and global outbound independent and detects unchanged selections', () => {
   const {groups} = nodeFixtures(0);
-  const staged = modeView({mode: 'rule'}, {mode: 'global', target: 'auto'}, groups, true, true, t);
-  expect(staged).toMatchObject({mode: 'global', target: 'auto', dirty: true});
+  // Remembering a global target while in rule mode does not switch outbound mode to global or dirty mode apply.
+  const remembered = modeView({mode: 'rule'}, null, groups, true, true, t, true, undefined, 'auto');
+  expect(remembered).toMatchObject({mode: 'rule', target: 'auto', modeDirty: false, targetDirty: false, dirty: false, incomplete: false});
+  // Staging global mode uses the remembered global target without forcing a separate target draft.
+  const stagedMode = modeView({mode: 'rule'}, {mode: 'global'}, groups, true, true, t, true, undefined, 'auto');
+  expect(stagedMode).toMatchObject({mode: 'global', target: 'auto', modeDirty: true, targetDirty: false, dirty: true, incomplete: false});
+  // Changing the global target while already in global mode dirties only the global target, not the mode control.
+  const stagedTarget = modeView({mode: 'global', target: 'proxy'}, {target: 'auto'}, groups, true, true, t);
+  expect(stagedTarget).toMatchObject({mode: 'global', target: 'auto', modeDirty: false, targetDirty: true, dirty: true, incomplete: false});
   expect(modeView({mode: 'global', target: 'proxy'}, {mode: 'global', target: 'proxy'}, groups, true, true, t).dirty).toBe(false);
   expect(modeView({mode: 'rule'}, null, [], false, false, t).targetText).toBe('—');
   expect(modeView({mode: 'global', target: 'proxy'}, {mode: 'direct'}, groups, false, true, t)).toMatchObject({mode: 'global', target: 'proxy', dirty: false});
-  const targetless = modeView({mode: 'rule'}, {mode: 'global', target: ''}, [], true, true, t);
-  expect(targetless).toMatchObject({dirty: true, incomplete: true});
-  expect(staged.incomplete).toBe(false);
+  const targetless = modeView({mode: 'rule'}, {mode: 'global'}, [], true, true, t);
+  expect(targetless).toMatchObject({modeDirty: true, targetDirty: false, dirty: true, incomplete: true});
 });
 
 it('explains a read-only mode with the overview text when configuration writes are off', () => {

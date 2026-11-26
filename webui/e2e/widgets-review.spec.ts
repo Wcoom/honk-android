@@ -127,28 +127,17 @@ for (const host of ['panel', 'dashboard'] as const) {
         return boxes;
       };
       const idleBoxes = await line();
+      // In rule mode, changing Global outbound keeps outbound mode in rule and writes no config change.
       await target.click();
       await page.getByRole('searchbox', {name: 'Filter outbounds', exact: true}).fill('gaming');
       await page.getByRole('menuitemradio', {name: 'gaming', exact: true}).click();
       await expect(target).toContainText('gaming');
       expect(backend.requests.filter(request => request.method() !== 'GET')).toHaveLength(0);
-      await expect(apply).toBeEnabled();
+      await expect(apply).toBeDisabled();
+      expect(readMode((await backend.api.config()).sources.find(source => source.kind === 'main')!.content!)).toEqual({mode: 'rule'});
       // Another outbound moves nothing: the picker keeps its width and Apply its place.
       expect(await line()).toEqual(idleBoxes);
       expect((await widget.boundingBox())!.height).toBe(before.height);
-      await apply.click();
-      await page.getByRole('alertdialog', {name: 'Apply Global mode?'}).getByRole('button', {name: 'Apply', exact: true}).click();
-      await expect
-        .poll(async () => readMode((await backend.api.config()).sources.find(source => source.kind === 'main')!.content!))
-        .toEqual({
-          mode: 'global',
-          target: 'gaming'
-        });
-      await expect(apply).toBeVisible();
-      await expect(apply).toBeDisabled();
-      expect(await line()).toEqual(idleBoxes);
-      expect((await widget.boundingBox())!.height).toBe(before.height);
-      expect(backend.requests.filter(request => request.method() === 'PUT' && request.url().includes('/config/sources/'))).toHaveLength(1);
       if (host === 'panel' && width === 390) {
         await page.getByRole('dialog').getByRole('button', {name: 'Close', exact: true}).click();
       }

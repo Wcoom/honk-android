@@ -29,6 +29,8 @@ export const storageKeys = {
   ringsPrefix: 'doona-rings-',
   connectionsView: 'doona-connections-view',
   activityGroup: 'doona-activity-group',
+  // Each backend's preferred global outbound, kept independently of the active outbound mode.
+  globalOutbound: 'doona-global-outbound',
   // Each backend's policy groups folded or opened against their default; see features/policies/folds.ts.
   policyFolds: 'doona-policy-folds',
   // Whether the node grids list only available nodes, for every group; see features/policies/aliveOnly.ts.

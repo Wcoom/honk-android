@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.9 (2026-11-27)
+
+### 合并上游 `daeuniverse/honk` 主线至 `2a23ce87`
+- **合并上游 `4ce5272f..2a23ce87` 共 2 个提交**：
+  - **内存占用与 TLS/中继缓冲深度优化（`#547`）**：
+    - 已扩容的 TCP 复制中继缓冲区在刷写完毕并空闲 60–120 秒后原地缩容回 `8 KiB`，并在收到 EOF 排空前即时释放，显著降低长连接场景下 Android 常驻内存；
+    - 跨 DoT/DoH DNS 与 HTTP 探活共享 BoringSSL TLS 上下文，将 ECH 发现缓存上界限制为 256 条，修剪 TCP 嗅探负缓存时回收超大底层容器，并新增可选 `jemalloc-stats` Cargo 特性；
+    - 同步上游 Alpine 3.24 原生 musl 构建脚本与文档更新（`honk-android` 本地交叉编译管线 [`build.sh`](./build.sh) 保持独立兼容）。
+  - **仅在 Linux 目标编译 `libsystemd`（`#532`）**：将 `libsystemd` 移入 `[target.'cfg(target_os = "linux")'.dependencies]`。
+### 内嵌 Doona WebUI 改进
+- **全局出站独立持久化与独立保存**：将「活动」页与小组件中的「全局出站（`doona-global-outbound`）」拆分为与当前出站模式解耦的独立配置，支持独立选择与保存/应用全局出站目标，补齐中英文多语言提示与对应前端单元测试。
+- 内嵌 WebUI 上游基线保持对齐 `Zakkaus/doona` `0ed10b6`（`main` 最新）；完整保留 `v1.0.7` 的 GKI 6.1/6.6 eBPF `BTF_FUNC_GLOBAL` 校验器修复，并基于 `2a23ce87` 重新生成与校验 [`patches/honk-android.patch`](./patches/honk-android.patch)（`git apply --check` 通过）。
+
 ## v1.0.8 (2026-11-26)
 
 ### 合并上游 `daeuniverse/honk` 主线至 `4ce5272f`

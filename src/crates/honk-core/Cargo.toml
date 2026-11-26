@@ -62,8 +62,8 @@ pin-project-lite.workspace = true
 # musl's stock malloc is slow under contention (visible as ~8% malloc+lock
 # time in perf); the `jemalloc` feature (default on) makes it the shipped
 # binary's allocator. Build without default features for a stock-malloc
-# binary. The crate compiles jemalloc from C source with the `cc` crate, so
-# the zig wrappers cover the musl cross builds.
+# binary. The crate compiles jemalloc from C source with the `cc` crate;
+# static musl builds run natively inside the Alpine 3.24 builder image.
 tikv-jemallocator = { version = "0.7", optional = true }
 
 # Encoding
@@ -92,7 +92,6 @@ lru.workspace = true
 libc.workspace = true
 parking_lot.workspace = true
 dashmap.workspace = true
-libsystemd.workspace = true
 nix.workspace = true
 sha2.workspace = true
 aes-gcm.workspace = true
@@ -111,6 +110,9 @@ flate2 = { workspace = true, optional = true }
 # External UI auto-download (clash-api)
 zip = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libsystemd.workspace = true
+
 [features]
 default = ["clash-api", "jemalloc", "rprx"]
 # Enable real eBPF support (requires Linux kernel 6.12+)
@@ -122,6 +124,8 @@ native-api = ["dep:axum", "dep:tower", "dep:tower-http", "dep:subtle", "dep:hmac
 native-ui = ["native-api", "dep:brotli", "dep:flate2"]
 # Route the shipped binary's allocations through jemalloc (see main.rs)
 jemalloc = ["dep:tikv-jemallocator"]
+# Enable jemalloc runtime statistics (e.g. `_RJEM_MALLOC_CONF=stats_print:true`)
+jemalloc-stats = ["jemalloc", "tikv-jemallocator/stats"]
 # VLESS / VMess proxy handlers (xtls-rprx-vision flow support)
 rprx = ["honk-outbound/rprx"]
 # Compile optional client DNS syslog auditing.

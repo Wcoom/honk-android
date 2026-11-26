@@ -42,6 +42,50 @@ it.each([
   }
 });
 
+it('keeps Mode card Apply and Global card Apply independently enabled by modeDirty and targetDirty', () => {
+  const noop = () => {};
+  const base = {
+    mode: 'global',
+    target: 'gaming',
+    targetText: 'gaming',
+    writable: true,
+    dirty: true,
+    incomplete: false,
+    targetIncomplete: false,
+    busy: false,
+    status: 'Read-only',
+    readOnly: false,
+    modes: [
+      ['rule', 'Rule'],
+      ['direct', 'Direct'],
+      ['global', 'Global']
+    ] as Array<[string, string]>,
+    targets: [{id: 'gaming', label: 'gaming'}],
+    reasons: {mode: null, global: null},
+    error: null,
+    retry: noop,
+    pick: noop,
+    pickTarget: noop,
+    apply: noop,
+    applyMode: noop,
+    applyTarget: noop
+  };
+  const applyButton = (part: 'mode' | 'global', modeDirty: boolean, targetDirty: boolean) => {
+    const markup = renderToStaticMarkup(
+      <LangContext.Provider value="en">
+        <ModeCards part={part} model={{...base, modeDirty, targetDirty}} />
+      </LangContext.Provider>
+    );
+    return [...markup.matchAll(/<button\b[^>]*>.*?<\/button>/gs)].map(match => match[0]).find(button => button.includes('Apply'))!;
+  };
+  // Only targetDirty: Global Apply is enabled, Mode Apply stays disabled.
+  expect(/\bdisabled=""|aria-disabled="true"/.test(applyButton('global', false, true))).toBe(false);
+  expect(/\bdisabled=""|aria-disabled="true"/.test(applyButton('mode', false, true))).toBe(true);
+  // Only modeDirty: Mode Apply is enabled, Global Apply stays disabled.
+  expect(/\bdisabled=""|aria-disabled="true"/.test(applyButton('mode', true, false))).toBe(false);
+  expect(/\bdisabled=""|aria-disabled="true"/.test(applyButton('global', true, false))).toBe(true);
+});
+
 import type {ReactElement} from 'react';
 import {hookHarness} from '../../store/testHelpers';
 const control = vi.hoisted(() => ({testing: false}));

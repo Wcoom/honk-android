@@ -16,7 +16,7 @@ export function ModeWidget({targetOnly, fill = false}: {targetOnly: boolean; fil
   return (
     <>
       <ErrorMessage error={m.error} onRetry={m.retry} />
-      {!targetOnly && <ModeSwitch model={m} fill={fill} />}
+      {!targetOnly && <ModeSwitch model={m} fill={fill} scope="both" />}
       {(targetOnly || m.mode === 'global') && (
         <WidgetRow label={t('act.global')}>
           <span className={targetOnly ? 'rp-cluster rp-global-controls' : 'rp-cluster'}>
@@ -31,7 +31,7 @@ export function ModeWidget({targetOnly, fill = false}: {targetOnly: boolean; fil
             >
               <WidestLabel labels={m.targets.map(target => target.label)}>{m.targetText}</WidestLabel>
             </ChoiceMenu>
-            {targetOnly && <ModeApply model={m} />}
+            {targetOnly && <ModeApply model={m} scope="global" />}
           </span>
         </WidgetRow>
       )}
