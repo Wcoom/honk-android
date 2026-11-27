@@ -93,7 +93,7 @@ test('panel mode stages a draft until Apply and writes the chosen mode', async (
 
 for (const host of ['panel', 'dashboard'] as const) {
   for (const width of [1280, 390]) {
-    test(`standalone Global outbound in the ${host} at ${width}px applies without reflow and clears its draft`, async ({page}) => {
+    test(`standalone Node policy in the ${host} at ${width}px applies without reflow and clears its draft`, async ({page}) => {
       await page.setViewportSize({width, height: 844});
       const backend = await mockBackend(page);
       await page.addInitScript(
@@ -106,10 +106,10 @@ for (const host of ['panel', 'dashboard'] as const) {
       await page.goto(host === 'panel' ? '/#/settings' : '/#/activity');
       if (host === 'panel' && width === 1280) await panel(page).getByRole('button', {name: 'Expand widgets', exact: true}).click();
       if (host === 'panel' && width === 390) await page.getByRole('button', {name: 'Show widgets', exact: true}).click();
-      const widget = host === 'panel' ? page.locator('.rp-widget[aria-label="Global outbound"]') : page.locator('[data-instance="global"] .rp-card');
+      const widget = host === 'panel' ? page.locator('.rp-widget[aria-label="Node policy"]') : page.locator('[data-instance="global"] .rp-card');
       // A dashboard card's label gives way to its icon when its third is too narrow, so its caption box is measured.
-      const label = host === 'panel' ? widget.getByText('Global outbound', {exact: true}) : widget.locator('.rp-qlabel');
-      const target = widget.getByRole('button', {name: 'Global outbound', exact: true});
+      const label = host === 'panel' ? widget.getByText('Node policy', {exact: true}) : widget.locator('.rp-qlabel');
+      const target = widget.getByRole('button', {name: 'Node policy', exact: true});
       const apply = widget.getByRole('button', {name: 'Apply', exact: true});
       await expect(target).toBeEnabled();
       await expect(apply).toBeVisible();
@@ -127,17 +127,18 @@ for (const host of ['panel', 'dashboard'] as const) {
         return boxes;
       };
       const idleBoxes = await line();
-      // In rule mode, changing Global outbound keeps outbound mode in rule and writes no config change.
+      // In rule mode, changing Node policy enables Apply and switches the hub policy while keeping outbound mode in rule.
       await target.click();
-      await page.getByRole('searchbox', {name: 'Filter outbounds', exact: true}).fill('gaming');
-      await page.getByRole('menuitemradio', {name: 'gaming', exact: true}).click();
-      await expect(target).toContainText('gaming');
-      expect(backend.requests.filter(request => request.method() !== 'GET')).toHaveLength(0);
-      await expect(apply).toBeDisabled();
-      expect(readMode((await backend.api.config()).sources.find(source => source.kind === 'main')!.content!)).toEqual({mode: 'rule'});
+      await page.getByRole('searchbox', {name: 'Filter outbounds', exact: true}).fill('auto');
+      await page.getByRole('menuitemradio', {name: 'auto', exact: true}).click();
+      await expect(target).toContainText('auto');
+      await expect(apply).toBeEnabled();
       // Another outbound moves nothing: the picker keeps its width and Apply its place.
       expect(await line()).toEqual(idleBoxes);
       expect((await widget.boundingBox())!.height).toBe(before.height);
+      await apply.click();
+      await expect(apply).toBeDisabled();
+      expect(readMode((await backend.api.config()).sources.find(source => source.kind === 'main')!.content!)).toEqual({mode: 'rule'});
       if (host === 'panel' && width === 390) {
         await page.getByRole('dialog').getByRole('button', {name: 'Close', exact: true}).click();
       }

@@ -1,10 +1,60 @@
 import {LocalError} from '../api/error';
-import {scanConfig, type TextBlock, type TextToken} from './text';
+import {scanConfig, unquote, type TextBlock, type TextToken} from './text';
 
 // The marker lets mode changes remove their catch-all without touching authored rules.
 export type OutboundMode = {mode: 'rule'} | {mode: 'direct'} | {mode: 'global'; target: string};
 
 const MODE_MARK = '# doona: outbound mode';
+
+function routingFallbackLine(text: string, block: TextBlock, tokens: TextToken[]) {
+  const inside = tokens.filter(token => token.from > block.open && token.to < block.close && token.depth === 1 && token.kind !== 'comment');
+  for (let i = 0; i < inside.length; i++) {
+    const token = inside[i];
+    if (i > 0 && inside[i - 1].line === token.line) continue;
+    const lineTokens = inside.filter(item => item.line === token.line);
+    const key = text.slice(token.from, token.to);
+    if ((key !== 'fallback' && key !== 'default') || lineTokens.length < 3 || text.slice(lineTokens[1].from, lineTokens[1].to) !== ':') continue;
+    const valueFrom = lineTokens[2].from;
+    const valueTo = lineTokens.at(-1)!.to;
+    const raw = text.slice(valueFrom, valueTo).replace(/\(must\)\s*$/, '').trim();
+    return {
+      valueFrom,
+      valueTo,
+      target: raw ? unquote(raw) : ''
+    };
+  }
+  return null;
+}
+
+/**
+ * Reads the top-level `routing` fallback target name when it names a policy group or node (not `direct` or `block`).
+ */
+export function readRuleFallback(text: string): string {
+  const {blocks, tokens} = scanConfig(text);
+  const block = blocks.filter(item => item.name === 'routing').at(-1);
+  if (!block) return '';
+  const line = routingFallbackLine(text, block, tokens);
+  if (!line || !line.target || line.target === 'direct' || line.target === 'block') return '';
+  return line.target;
+}
+
+/**
+ * Rewrites the top-level `routing` fallback target in place, or adds `fallback: <target>` at the end of `routing`.
+ */
+export function writeRuleFallback(text: string, target: string): string {
+  const {blocks, tokens} = scanConfig(text);
+  const block = blocks.filter(item => item.name === 'routing').at(-1);
+  if (!block) throw new LocalError('act.modeNoRouting');
+  const line = routingFallbackLine(text, block, tokens);
+  if (line) {
+    return text.slice(0, line.valueFrom) + target + text.slice(line.valueTo);
+  }
+  const body = text.slice(block.open + 1, block.close);
+  const indent = body.match(/\n([ \t]+)\S/)?.[1] ?? '    ';
+  const beforeClose = text.lastIndexOf('\n', block.close - 1) + 1;
+  const at = /^[ \t]*$/.test(text.slice(beforeClose, block.close)) ? beforeClose : block.close;
+  return text.slice(0, at) + (text[at - 1] === '\n' ? '' : '\n') + `${indent}fallback: ${target}\n` + text.slice(at);
+}
 // The marker alone identifies the line, so a hand-edited condition or spacing still reads and is still removed.
 function modeRanges(text: string, blocks: TextBlock[], tokens: TextToken[]) {
   return tokens

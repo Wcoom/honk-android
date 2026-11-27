@@ -1,6 +1,6 @@
 # honk-android：对上游 honk 的改动清单
 
-基线：`daeuniverse/honk` `main` 分支（提交 `2a23ce87`，位于上游 `v0.1.0-beta.7` 之后 11 个提交）。
+基线：`daeuniverse/honk` `main` 分支（提交 `467cfa77`，位于上游 `v0.1.0-beta.7` 之后 13 个提交）。
 
 ## 1. eBPF 数据面：适配 Android GKI 6.1+ / 6.6+ Verifier（1M 指令上限 + 512B 栈上限）
 
@@ -43,7 +43,7 @@
 - `crates/honk-core/src/dns/response.rs`、`crates/honk-core/src/dns/response/tests.rs`：
   - 修复上游 DNS 响应 QNAME 大小写敏感比较缺陷（改为按 RFC 1035 / RFC 4343 使用 `eq_ignore_ascii_case`），避免 DoH 上游将大写查询名规范化为小写时误触发 `QuestionMismatch` 并返回 `SERVFAIL`。
 - `crates/honk-outbound/src/bootstrap.rs`、`crates/honk-core/src/lib.rs`、`crates/honk-core/src/control/reload/transaction.rs`：
-  - 新增 Bootstrap UDP 1 秒超时自动重传（总预算 3 秒）与 `GLOBAL_FALLBACK`（`set_global_fallback`），在启动与热重载时同步接入 `config.global.fallback_resolver`，彻底解决 Android 无 `/etc/resolv.conf` 时切网瞬间单包丢失导致上游加密 DNS 失联的问题。
+  - 基于上游 `#550` 阶梯 UDP 重传（`400ms` / `1200ms`）与截止时间保护，保留 `GLOBAL_FALLBACK`（`set_global_fallback`）并在启动与热重载时同步接入 `config.global.fallback_resolver`，彻底解决 Android 无 `/etc/resolv.conf` 时切网瞬间主上游失效导致加密 DNS 失联的问题。
 
 ## 5. Android 6.6 GKI 内核 UDP 接收跟踪与数据路径钩子全量健康校验
 
@@ -67,5 +67,5 @@
 - `crates/honk-core/src/ebpf/real/{programs.rs,observation.rs}`：
   - `ProgramLoader::try_object()` 改为 `try_lock_for(5ms)`，`observe_backend()` 在 `programs` 仍为 `DatapathCheck::Unknown` 时保持未确认而不误判为 `DatapathObservationError::Hooks`，消除并发轮询 `/api/v1/runtime` 与 `/api/v1/datapath` 时偶发的 `hook_observation_incomplete`。
 - `crates/honk-core/src/native_api/{core_update.rs,handlers.rs,types.rs}`、`crates/honk-core/src/{main.rs,native_api.rs}` 与 `webui/`：
-  - 同步 `Zakkaus/doona` 主线至 `0ed10b6`（含代理链管理、策略组出口节点编辑、全局出站独立持久化/保存及内存/核心更新扩展）并接入 [`build.sh`](./build.sh) 自动内嵌标准版与 Lite 版 WebUI。
+  - 同步 `Zakkaus/doona` 主线至 `0ed10b6`（含代理链管理、策略组出口节点编辑、「节点策略选择」规则分流中枢联动及内存/核心更新扩展）并接入 [`build.sh`](./build.sh) 自动内嵌标准版与 Lite 版 WebUI。
   - 新增 `GET/POST /api/v1/x-honk/core/update`，支持检测 `Wcoom/honk-android` GitHub Releases、下载 `honk-android-arm64` 与 `SHA256SUMS.txt`、校验 SHA-256 与 ARM64 ELF64 头并原子替换后分离重启（复用 `record_startup_args()`）；同步适配 Doona 标准版/Lite 版核心更新卡片与 `BoxProxy Honk` 客户端内更新源。

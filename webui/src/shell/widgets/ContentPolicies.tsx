@@ -25,7 +25,7 @@ export function ModeWidget({targetOnly, fill = false}: {targetOnly: boolean; fil
               label={t('act.global')}
               value={m.target}
               onChange={m.pickTarget}
-              isDisabled={m.busy || !m.writable}
+              isDisabled={m.busy || !m.targetWritable}
               items={m.targets}
               searchLabel={t('ui.filterOutbounds')}
             >

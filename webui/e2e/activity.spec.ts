@@ -205,9 +205,9 @@ test('read-only main configuration keeps the current mode and explains the write
   const mode = page.getByRole('radiogroup', {name: 'Outbound mode'});
   await expect(mode.getByRole('radio', {name: 'Global', exact: true})).toHaveAttribute('aria-checked', 'true');
   await expect(mode.getByRole('radio', {name: 'Global', exact: true})).toBeDisabled();
-  await expect(page.getByRole('button', {name: 'Global outbound', exact: true})).toBeDisabled();
-  await expect(page.getByRole('button', {name: 'Global outbound', exact: true})).toContainText('proxy');
-  await expect(page.getByRole('button', {name: 'Global outbound', exact: true})).toHaveAccessibleDescription('Read-only');
+  await expect(page.getByRole('button', {name: 'Node policy', exact: true})).toBeDisabled();
+  await expect(page.getByRole('button', {name: 'Node policy', exact: true})).toContainText('proxy');
+  await expect(page.getByRole('button', {name: 'Node policy', exact: true})).toHaveAccessibleDescription('Read-only');
   await page.getByRole('button', {name: 'Why is the mode read-only?'}).click();
   await expect(page.getByRole('dialog', {name: 'Why is the mode read-only?'})).toContainText('honk requires configuration writes');
   await expect(page.getByRole('link', {name: 'Read-only config files'})).toHaveAttribute('href', 'https://daeuniverse.org/doona/troubleshooting#read-only');

@@ -86,6 +86,43 @@ it('keeps Mode card Apply and Global card Apply independently enabled by modeDir
   expect(/\bdisabled=""|aria-disabled="true"/.test(applyButton('global', true, false))).toBe(true);
 });
 
+it('respects targetWritable independently of config mode writable', () => {
+  const noop = () => {};
+  const markup = renderToStaticMarkup(
+    <LangContext.Provider value="en">
+      <ModeCards
+        part="global"
+        model={{
+          mode: 'rule',
+          target: 'auto',
+          targetText: 'auto',
+          writable: false,
+          targetWritable: true,
+          dirty: true,
+          modeDirty: false,
+          targetDirty: true,
+          incomplete: false,
+          targetIncomplete: false,
+          busy: false,
+          status: 'Read-only',
+          readOnly: true,
+          modes: [],
+          targets: [{id: 'auto', label: 'auto'}],
+          reasons: {mode: null, global: null},
+          error: null,
+          retry: noop,
+          pick: noop,
+          pickTarget: noop,
+          apply: noop
+        }}
+      />
+    </LangContext.Provider>
+  );
+  const apply = [...markup.matchAll(/<button\b[^>]*>.*?<\/button>/gs)].map(match => match[0]).find(button => button.includes('Apply'));
+  expect(apply).toBeDefined();
+  expect(/\bdisabled=""|aria-disabled="true"/.test(apply!)).toBe(false);
+});
+
 import type {ReactElement} from 'react';
 import {hookHarness} from '../../store/testHelpers';
 const control = vi.hoisted(() => ({testing: false}));
@@ -103,6 +140,33 @@ vi.mock('../../i18n', async original => {
     useT: () => (key: Parameters<typeof actual.translate>[1], params: Parameters<typeof actual.translate>[2]) => actual.translate('en', key, params)
   };
 });
+it('applies global-scoped node policy selection immediately without opening a Global mode confirm dialog', () => {
+  control.testing = true;
+  hookHarness.reset();
+  const applyTarget = vi.fn();
+  const model = {
+    mode: 'rule',
+    modes: [['rule', 'Rule']] as Array<[string, string]>,
+    writable: true,
+    dirty: true,
+    incomplete: false,
+    busy: false,
+    apply: vi.fn(),
+    applyTarget
+  };
+  const read = () =>
+    hookHarness.render(() => ModeApply({model, scope: 'global'})) as ReactElement<{
+      children: [ReactElement<{onPress: () => void}>, ReactElement<{isOpen: boolean}>];
+    }>;
+  try {
+    read().props.children[0].props.onPress();
+    expect(applyTarget).toHaveBeenCalledOnce();
+    expect(read().props.children[1].props.isOpen).toBe(false);
+  } finally {
+    control.testing = false;
+  }
+});
+
 it.each(['direct', 'global', 'rule'])('confirms %s mode before applying, with cancellation preserving the draft', mode => {
   control.testing = true;
   hookHarness.reset();

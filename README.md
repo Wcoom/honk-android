@@ -15,7 +15,7 @@
 | **完整 UDP / QUIC 透明代理 & 内核追踪** | 支持完整 UDP / HTTP3 (QUIC) 透明转发、节点评分 QUIC 探测，并新增 ARM64 `kprobe`/`kretprobe` 内核 UDP 接收跟踪回退（解决 GKI 6.1+ / 6.6+ `fentry` `ENOTSUPP` 问题） |
 | **数据路径实时健康校验** | 通过 `BPF_PROG_QUERY` 与 Netlink `cls_bpf` 实时核查 cgroup、`daens` `sk_lookup` 与 TC 链，Doona 面板数据路径完整显示 **`活动 / 已附加 / 健康`** |
 | **与官方原版 BoxProxy 完美共存** | 独立包名 **`com.boxproxy.honk`**（桌面名称 **`BoxProxy Honk`**，快捷磁贴 **`Box Honk`**，独立自启脚本 `/data/adb/service.d/boxproxy-honk.sh` 与独立沙盒目录 `/data/user/0/com.boxproxy.honk/files/box`），**无需卸载官方原版 `com.boxproxy.box`** |
-| **双面板无缝协同** | 同时启用本机 `Clash API`（`127.0.0.1:9090`，驱动 BoxProxy 原生「面板」页）与内嵌 **Doona 原生面板**（`0ed10b6`，`http://127.0.0.1:9527/ui/`，BoxProxy 首页点击「WebUI」免密直连；支持配置读写、`--store db` 修订历史、代理链与组出口节点编辑、全部 8 项内存与独立 cgroup 遥测指标、地理数据更新及 **核心在线检测更新与热重启**） |
+| **双面板无缝协同** | 同时启用本机 `Clash API`（`127.0.0.1:9090`，驱动 BoxProxy 原生「面板」页）与内嵌 **Doona 原生面板**（`0ed10b6`，`http://127.0.0.1:9527/ui/`，BoxProxy 首页点击「WebUI」免密直连；支持配置读写、`--store db` 修订历史、规则模式下「节点策略选择」联动总策略组、代理链与组出口节点编辑、全部 8 项内存与独立 cgroup 遥测指标、地理数据更新及 **核心在线检测更新与热重启**） |
 | **双端核心在线更新** | 内核 Native API `/api/v1/x-honk/core/update`（Doona **设置 → 核心更新**）与 `BoxProxy Honk` **工具 → 更新核心** 均原生对接 `Wcoom/honk-android` GitHub Releases，支持 SHA-256 与 ELF64 校验后原子替换并分离自重启 |
 | **DNS 双栈容错与规范兼容** | 修复 DNS 响应 QNAME 大小写敏感校验缺陷（RFC 1035/4343）；新增 Bootstrap UDP 1s 自动重传与 `fallback_resolver` 兜底，消除 Android 无 `/etc/resolv.conf` 切网失联 |
 | **USB 共享网络免劫持** | 内核 `wan_egress_l3` 自动放行 `rndis0`/`ncm0`/`usb0` 转发包，默认配置放行 `dnsmasq`，开启 USB 热点不劫持宿主电脑流量 |
@@ -33,8 +33,8 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `honk-android-release-v1.0.9-arm64.tar.gz` | 完整正式版一体包（含二进制、共存版 APK、配置模板、指南、AI Skill、补丁与校验和） |
-| `honk-android-arm64` | 静态链接 `aarch64-unknown-linux-musl` 的 `honk-core`（支持 GKI 6.1+ / 6.6+，合并上游 `2a23ce87`，含空闲中继缓冲缩容、TLS 上下文共享与缓存瘦身、全策略组空闲探活暂停、独立 cgroup 内存遥测、核心在线更新与 Doona `0ed10b6` 前端） |
+| `honk-android-release-v1.0.10-arm64.tar.gz` | 完整正式版一体包（含二进制、共存版 APK、配置模板、指南、AI Skill、补丁与校验和） |
+| `honk-android-arm64` | 静态链接 `aarch64-unknown-linux-musl` 的 `honk-core`（支持 GKI 6.1+ / 6.6+，合并上游 `467cfa77`，含 Bootstrap DNS 地址缓存与加固、空闲中继缓冲缩容、全策略组空闲探活暂停、独立 cgroup 内存遥测、核心在线更新与 Doona `0ed10b6`「节点策略选择」前端） |
 | `boxctl-android-arm64` | 适配 `honk` 核心、`ebpf` 模式、`boot` 自启、独立 `/honk` cgroup 与 `com.boxproxy.honk` 共存目录的静态 `boxctl` |
 | `BoxProxy-honk-arm64.apk` | 基于官方新版 BoxProxy (`26.11.23.aa98568` / `v214`) 适配，独立包名 **`com.boxproxy.honk`**（`BoxProxy Honk`），内置 `Honk` 核心更新源并完整对接独立开机自启脚本 `/data/adb/service.d/boxproxy-honk.sh`，可与官方原版 BoxProxy 直接共存安装 |
 | `config.example.dae` | 脱敏后的 Android 全功能 7 源融合分流配置模板（含去广告、WebRTC 防泄漏、大陆 App/域名/IPv4+IPv6 直连及 `Wcoom/honk-rules-dat` 云端自动拉取） |
@@ -80,7 +80,7 @@ cp target/bpfel-unknown-none/release/honk-ebpf ../../target/honk-core.o
 
 ```text
 honk-android/
-├── src/                  honk 完整源码（同步上游 main 2a23ce87）+ Android 全功能适配
+├── src/                  honk 完整源码（同步上游 main 467cfa77）+ Android 全功能适配
 ├── webui/                嵌入式 Doona 原生前端（同步上游 Zakkaus/doona 0ed10b6 + 内存/更新扩展）
 ├── boxproxy/             boxproxy / boxctl 源码（新增 honk 核心与 ebpf 模式生命周期管理）
 ├── toolchain/            zig + rust-lld 的 aarch64-linux-musl 交叉编译包装器

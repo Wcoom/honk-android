@@ -138,15 +138,25 @@ it('tones the latency tile like the nodes table, by speed', () => {
   expect(nodeView(nodes, 'jp-01', t).latencyClass).toBe('rp-big');
 });
 
-it('keeps outbound mode and global outbound independent and detects unchanged selections', () => {
+it('keeps outbound mode and node policy independent and detects unchanged selections', () => {
   const {groups} = nodeFixtures(0);
-  // Remembering a global target while in rule mode does not switch outbound mode to global or dirty mode apply.
+  // Active policy defaults cleanly in rule mode with no staged diff.
   const remembered = modeView({mode: 'rule'}, null, groups, true, true, t, true, undefined, 'auto');
   expect(remembered).toMatchObject({mode: 'rule', target: 'auto', modeDirty: false, targetDirty: false, dirty: false, incomplete: false});
-  // Staging global mode uses the remembered global target without forcing a separate target draft.
+  // Changing the policy target in rule mode dirties only targetDirty while keeping outbound mode in rule.
+  const stagedPolicyInRule = modeView({mode: 'rule'}, {target: 'gaming'}, groups, true, true, t, true, undefined, 'auto', {
+    options: [
+      {id: 'auto', label: 'auto'},
+      {id: 'gaming', label: 'gaming'}
+    ],
+    activeTarget: 'auto',
+    targetWritable: true
+  });
+  expect(stagedPolicyInRule).toMatchObject({mode: 'rule', target: 'gaming', modeDirty: false, targetDirty: true, dirty: true, incomplete: false});
+  // Staging global mode uses the current node policy target without forcing a separate target draft.
   const stagedMode = modeView({mode: 'rule'}, {mode: 'global'}, groups, true, true, t, true, undefined, 'auto');
   expect(stagedMode).toMatchObject({mode: 'global', target: 'auto', modeDirty: true, targetDirty: false, dirty: true, incomplete: false});
-  // Changing the global target while already in global mode dirties only the global target, not the mode control.
+  // Changing the policy target while already in global mode dirties only the policy target, not the mode control.
   const stagedTarget = modeView({mode: 'global', target: 'proxy'}, {target: 'auto'}, groups, true, true, t);
   expect(stagedTarget).toMatchObject({mode: 'global', target: 'auto', modeDirty: false, targetDirty: true, dirty: true, incomplete: false});
   expect(modeView({mode: 'global', target: 'proxy'}, {mode: 'global', target: 'proxy'}, groups, true, true, t).dirty).toBe(false);
@@ -285,12 +295,14 @@ it('reports a degraded or failed datapath in the status as Overview does, withou
   expect(activityView(runtime, t, true, 'en', 'active').status).toEqual({tone: 'ok', text: t('lifecycle.running')});
 });
 
-it('says why Apply or the global target is disabled, and nothing when there is only nothing to apply or a change is being applied', () => {
+it('says why Apply or the policy target is disabled, and nothing when there is only nothing to apply or a change is being applied', () => {
   const view = {writable: true, incomplete: false, status: t('act.modeReadOnly')};
   expect(modeReasons(view, false, t)).toEqual({mode: null, global: null});
-  expect(modeReasons({...view, incomplete: true}, false, t)).toEqual({mode: 'Global mode needs an outbound', global: null});
-  // The mode card shows a read-only backend's status beside its switch; the global target repeats it.
+  expect(modeReasons({...view, incomplete: true}, false, t)).toEqual({mode: 'Global mode needs a node policy', global: null});
+  // The mode card shows a read-only backend's status beside its switch; the policy card repeats it.
   expect(modeReasons({...view, writable: false}, false, t)).toEqual({mode: null, global: 'Read-only'});
+  // Rule-mode policy selection via selector group stays writable even if main config is read-only.
+  expect(modeReasons({...view, writable: false, targetWritable: true}, false, t)).toEqual({mode: null, global: null});
   expect(modeReasons(view, true, t)).toEqual({mode: null, global: null});
 });
 

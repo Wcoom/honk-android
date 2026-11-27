@@ -1,6 +1,6 @@
 import {LocalError} from '../api/error';
 import {expect, it} from 'vitest';
-import {modeRuleLines, readMode, sameMode, writeMode} from './outboundMode';
+import {modeRuleLines, readMode, readRuleFallback, sameMode, writeMode, writeRuleFallback} from './outboundMode';
 
 const config = `global {
     log_level: info
@@ -120,4 +120,18 @@ dns {
 `;
   expect(modeRuleLines(text)).toEqual([2]);
   expect(modeRuleLines('routing { l4proto(tcp) -> direct # doona: outbound mode\n}')).toEqual([]);
+});
+
+it('reads and rewrites the routing fallback without touching nested dns blocks', () => {
+  expect(readRuleFallback(config)).toBe('proxy');
+  const spaced = writeRuleFallback(config, '自建 CDN 优选');
+  expect(readRuleFallback(spaced)).toBe('自建 CDN 优选');
+  expect(spaced).toContain('    fallback: 自建 CDN 优选\n}');
+  // Nested dns.routing.request fallback stays untouched.
+  expect(spaced).toContain('fallback: lab');
+  const direct = writeRuleFallback(config, 'direct');
+  expect(readRuleFallback(direct)).toBe('');
+  const noFallback = 'routing {\n  domain(geosite:cn) -> direct\n}\n';
+  expect(readRuleFallback(noFallback)).toBe('');
+  expect(writeRuleFallback(noFallback, '智能策略 / ALL')).toBe('routing {\n  domain(geosite:cn) -> direct\n  fallback: 智能策略 / ALL\n}\n');
 });

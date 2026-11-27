@@ -7325,11 +7325,11 @@ index f3f8510..61fb9c7 100644
      out.listener_l4proto = tctx.listener_l4proto;
      out.is_fragmented = tctx.is_fragmented;
 diff --git a/crates/honk-outbound/src/bootstrap.rs b/crates/honk-outbound/src/bootstrap.rs
-index bea4447..56d1653 100644
+index 827bac6..758154d 100644
 --- a/crates/honk-outbound/src/bootstrap.rs
 +++ b/crates/honk-outbound/src/bootstrap.rs
-@@ -20,7 +20,7 @@ use std::sync::{Arc, RwLock};
- use std::time::Duration;
+@@ -27,7 +27,7 @@ use wire::{
+ };
  
  /// A direct DNS server used to resolve proxy-server hostnames.
 -#[derive(Debug, Clone, Copy)]
@@ -7337,7 +7337,7 @@ index bea4447..56d1653 100644
  pub struct BootstrapResolver {
      server: SocketAddr,
      use_tcp: bool,
-@@ -43,6 +43,7 @@ impl BootstrapResolver {
+@@ -50,6 +50,7 @@ impl BootstrapResolver {
  }
  
  static GLOBAL: RwLock<Option<BootstrapResolver>> = RwLock::new(None);
@@ -7345,7 +7345,7 @@ index bea4447..56d1653 100644
  
  /// Install (or clear) the process-wide bootstrap resolver. Called by
  /// honk-core at startup and on config reload.
-@@ -50,6 +51,23 @@ pub fn set_global(resolver: Option<BootstrapResolver>) {
+@@ -57,6 +58,23 @@ pub fn set_global(resolver: Option<BootstrapResolver>) {
      *GLOBAL.write().unwrap() = resolver;
  }
  
@@ -7369,92 +7369,41 @@ index bea4447..56d1653 100644
  /// Snapshot the process-wide resolver for compatibility callers that do not
  /// already own a configuration generation.
  pub fn global() -> Option<BootstrapResolver> {
-@@ -158,6 +176,20 @@ where
-             Err(e) => tracing::debug!("bootstrap resolution of '{}' failed: {}", host, e),
+@@ -214,6 +232,26 @@ where
+             }
          }
      }
 +    if let Some(fallback) = global_fallback().filter(|fb| Some(*fb) != resolver) {
++        if let Some(err) = deadline_expired_error(deadline, &mut configured_error) {
++            return Err(err);
++        }
 +        let result = {
 +            let _guard = admit().await?;
-+            fallback.query_with_deadline(host, deadline).await
++            fallback.query_records(host, families, deadline).await
 +        };
 +        match result {
-+            Ok(ips) if !ips.is_empty() => return Ok(ips),
++            Ok(records) if !records.ips.is_empty() => return Ok(records),
 +            Ok(_) => tracing::debug!(
 +                "fallback bootstrap resolver returned no records for '{}'",
 +                host
 +            ),
-+            Err(e) => tracing::debug!("fallback bootstrap resolution of '{}' failed: {}", host, e),
++            Err(e) => {
++                tracing::debug!("fallback bootstrap resolution of '{}' failed: {}", host, e);
++                configured_error = Some(e);
++            }
 +        }
 +    }
      if let Ok(contents) = tokio::fs::read_to_string("/etc/hosts").await {
-         let addrs = hosts_addresses(&contents, host);
-         if !addrs.is_empty() {
-@@ -314,6 +346,7 @@ impl BootstrapResolver {
-     }
- 
-     async fn exchange_udp(&self, query: &[u8]) -> io::Result<Vec<u8>> {
-+        const UDP_RETRY_INTERVAL: Duration = Duration::from_secs(1);
-         let bind: SocketAddr = if self.server.is_ipv4() {
-             (Ipv4Addr::UNSPECIFIED, 0).into()
-         } else {
-@@ -323,11 +356,21 @@ impl BootstrapResolver {
-         socket.connect(self.server).await?;
-         socket.send(query).await?;
-         let mut buf = [0u8; 1500];
--        // Stray and off-path spoofed datagrams are skipped; the caller's deadline bounds the wait.
-+        let mut next_retry = tokio::time::Instant::now() + UDP_RETRY_INTERVAL;
-+        // Stray and off-path spoofed datagrams are skipped; retransmits recover
-+        // single dropped UDP packets within the caller's QUERY_TIMEOUT budget.
-         loop {
--            let n = socket.recv(&mut buf).await?;
--            if answers_query(query, &buf[..n]) {
--                return Ok(buf[..n].to_vec());
-+            match tokio::time::timeout_at(next_retry, socket.recv(&mut buf)).await {
-+                Ok(res) => {
-+                    let n = res?;
-+                    if answers_query(query, &buf[..n]) {
-+                        return Ok(buf[..n].to_vec());
-+                    }
-+                }
-+                Err(_) => {
-+                    socket.send(query).await?;
-+                    next_retry = tokio::time::Instant::now() + UDP_RETRY_INTERVAL;
-+                }
-             }
-         }
-     }
+         let mut addrs = hosts_addresses(&contents, host);
+         addrs.retain(|ip| families.matches(*ip));
 diff --git a/crates/honk-outbound/src/bootstrap/tests.rs b/crates/honk-outbound/src/bootstrap/tests.rs
-index b66a232..cb57466 100644
+index 6a5878c..bd4fe61 100644
 --- a/crates/honk-outbound/src/bootstrap/tests.rs
 +++ b/crates/honk-outbound/src/bootstrap/tests.rs
-@@ -593,3 +593,45 @@ fn system_hosts_matches_aliases_and_address_families() {
-     assert!(hosts_addresses(hosts, "ignored").is_empty());
+@@ -596,6 +596,26 @@ fn system_hosts_matches_aliases_and_address_families() {
      assert!(hosts_addresses(hosts, "hidden").is_empty());
  }
-+
-+#[tokio::test]
-+async fn udp_exchange_retransmits_after_dropped_packet() {
-+    use std::sync::atomic::{AtomicUsize, Ordering};
-+
-+    let good = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42));
-+    let seen = Arc::new(AtomicUsize::new(0));
-+    let seen_clone = Arc::clone(&seen);
-+    // Drop the very first A query datagram, answer the retransmit.
-+    let server = spawn_udp_stub(move |query| {
-+        if qtype(query) == 1 && seen_clone.fetch_add(1, Ordering::AcqRel) == 0 {
-+            Vec::new()
-+        } else {
-+            vec![addr_response(query, &[good])]
-+        }
-+    })
-+    .await;
-+    let resolver = BootstrapResolver::parse(&format!("udp://{server}")).unwrap();
-+    let ips = resolver.query_family("retransmit.invalid", 1).await.unwrap();
-+    assert_eq!(ips, vec![good]);
-+    assert!(seen.load(Ordering::Acquire) >= 2);
-+}
-+
+ 
 +#[tokio::test]
 +async fn fallback_bootstrap_resolver_recovers_when_primary_fails() {
 +    if run_global_test_in_child(
@@ -7474,3 +7423,7 @@ index b66a232..cb57466 100644
 +    set_global_fallback(None);
 +    assert_eq!(ips, vec![good]);
 +}
++
+ fn v4(d: u8) -> IpAddr {
+     IpAddr::V4(Ipv4Addr::new(192, 0, 2, d))
+ }

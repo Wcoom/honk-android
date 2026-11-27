@@ -17,6 +17,7 @@ type ModeCardsModel = {
   target: string;
   targetText: string;
   writable: boolean;
+  targetWritable?: boolean;
   dirty: boolean;
   modeDirty?: boolean;
   targetDirty?: boolean;
@@ -46,20 +47,22 @@ export function ModeApply({
 }: {
   model: Pick<
     ModeCardsModel,
-    'mode' | 'modes' | 'writable' | 'dirty' | 'modeDirty' | 'targetDirty' | 'incomplete' | 'targetIncomplete' | 'busy' | 'apply' | 'applyMode' | 'applyTarget'
+    'mode' | 'modes' | 'writable' | 'targetWritable' | 'dirty' | 'modeDirty' | 'targetDirty' | 'incomplete' | 'targetIncomplete' | 'busy' | 'apply' | 'applyMode' | 'applyTarget'
   >;
   scope?: ApplyScope;
 }) {
   const t = useT();
   const [asking, setAsking] = useState<string | null>(null);
+  const canWrite = scope === 'global' ? (vm.targetWritable ?? vm.writable) : vm.writable;
   const dirty = scope === 'mode' ? (vm.modeDirty ?? vm.dirty) : scope === 'global' ? (vm.targetDirty ?? vm.dirty) : vm.dirty;
   const incomplete = scope === 'global' ? (vm.targetIncomplete ?? vm.incomplete) : vm.incomplete;
-  const confirmMode = scope === 'global' ? 'global' : vm.mode;
+  const needsConfirm = scope !== 'global' && vm.mode !== 'rule';
+  const confirmMode = vm.mode;
   const submit = scope === 'mode' ? (vm.applyMode ?? vm.apply) : scope === 'global' ? (vm.applyTarget ?? vm.apply) : vm.apply;
-  const confirmLabel = vm.modes.find(([id]) => id === asking)?.[1] ?? (asking === 'global' ? t('mode.global') : '');
-  return vm.writable ? (
+  const confirmLabel = vm.modes.find(([id]) => id === asking)?.[1] ?? '';
+  return canWrite ? (
     <>
-      <Button accent isDisabled={!dirty || incomplete} isPending={vm.busy} onPress={() => (confirmMode === 'rule' ? submit() : setAsking(confirmMode))}>
+      <Button accent isDisabled={!dirty || incomplete} isPending={vm.busy} onPress={() => (needsConfirm ? setAsking(confirmMode) : submit())}>
         {t('config.save')}
       </Button>
       <ConfirmDialog
@@ -140,7 +143,7 @@ export function ModeCards({model: vm, part}: {model: ModeCardsModel; part?: 'mod
             <span className="rp-cluster rp-global-controls">
               <ChoiceMenu
                 quiet
-                isDisabled={vm.busy || !vm.writable}
+                isDisabled={vm.busy || !(vm.targetWritable ?? vm.writable)}
                 label={t('act.global')}
                 value={vm.target}
                 onChange={vm.pickTarget}

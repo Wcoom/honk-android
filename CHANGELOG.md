@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.0.10 (2026-11-27)
+
+### 合并上游 `daeuniverse/honk` 主线至 `467cfa77`
+- **合并上游 `2a23ce87..467cfa77` 共 2 个提交**：
+  - **Bootstrap DNS 加固与上游地址缓存（`#550`）**：为节点与 DNS 上游解析新增地址 TTL 缓存、按地址族（IPv4/IPv6/prefer_v6）分离完成窗口、固定绝对时序阶梯重传（`400ms` / `1200ms`）与并发配额截止保护，并完整保留 Android `GLOBAL_FALLBACK` 主/备直连兜底；
+  - **Clash `/proxies` 上报节点存活状态（`#545`）**：节点详情补齐实时 `alive` 状态字段。
+- 完整保留 `v1.0.7` 的 GKI 6.1/6.6 eBPF `BTF_FUNC_GLOBAL` 校验器修复，并基于 `467cfa77` 重新生成与校验 [`patches/honk-android.patch`](./patches/honk-android.patch)（`git apply --check` 通过）。
+
+### Doona 内置面板：「全局出站」升级为「节点策略选择」
+- **保留「出站模式」为「规则 / 直连 / 全局」三态，并将第二张卡片升级为「节点策略选择」**：
+  - 在 **规则模式**（及直连模式）下，选择策略组（例如 **`自建 CDN 优选`** 或 **`智能策略 / ALL`**）并点击「应用」时，自动定位并切换代理中枢策略组（如 `总模式`）的活动策略（扁平配置则切换 `routing.fallback`），在保持「出站模式 = 规则」继续执行域名/GeoIP/App 精细分流的同时，将代理流量限定在所选策略组范围内；
+  - 在 **全局模式** 下，切换策略仍即时写入 `l4proto(tcp, udp) -> <target>` 并同步中枢策略组，后续切回规则模式状态无缝衔接；
+  - 节点策略卡片独立按策略组 `can_select` 权限决定是否可写，点击「应用」直接生效，补齐简/繁/英三语翻译及 `policyTarget` / `outboundMode` / `ModeSwitch` / E2E 测试。
+
 ## v1.0.9 (2026-11-27)
 
 ### 合并上游 `daeuniverse/honk` 主线至 `2a23ce87`
