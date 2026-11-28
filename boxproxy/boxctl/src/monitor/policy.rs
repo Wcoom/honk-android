@@ -243,6 +243,27 @@ pub(super) fn refresh_local_ip_rules_if_running(config: &Config, runner: &Runner
 }
 
 pub(super) fn should_enable_service(config: &Config, observation: &WifiObservation) -> bool {
+    if !config.network_rule_groups.is_empty() {
+        let obs = boxproxy_schema::NetworkObservation {
+            wifi_connected: observation.connected,
+            wifi_ssid: observation.ssid.clone(),
+            wifi_bssid: observation.bssid.clone(),
+            cellular_connected: !observation.connected,
+            ..Default::default()
+        };
+        if let Some(group) =
+            boxproxy_schema::match_first_rule_group(&config.network_rule_groups, &obs)
+        {
+            for act in &group.actions {
+                match act.action_type.trim().to_ascii_lowercase().as_str() {
+                    "stop" | "disable" | "down" => return false,
+                    "start" | "enable" | "up" | "restart" => return true,
+                    _ => {}
+                }
+            }
+        }
+    }
+
     if !observation.connected {
         return config.wifi_use_on_disconnect;
     }

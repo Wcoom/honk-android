@@ -1,0 +1,85 @@
+{
+  "unit": "apps/lite/src/groupHealth.ts",
+  "files": 1,
+  "fingerprint": "f8cc82f5cbff7f67",
+  "cases": 115,
+  "cases_hash": "d17eed7deaa3d455",
+  "coverage": {
+    "lines": 860,
+    "reached": 499,
+    "files": [
+      {
+        "file": "apps/lite/src/groupHealth.ts",
+        "lines": 34,
+        "reached": 28,
+        "missed": "16-18, 32, 34, 36"
+      },
+      {
+        "file": "src/api/selectors.ts",
+        "lines": 315,
+        "reached": 168,
+        "missed": "25-32, 59-66, 76-93, 99-109, 113-115, 118-126, 134-140, 142-145, 151-153, 158-159, 164-166, 169-173, 209-211, 214-215, 232-235, 244-248, 251-282, 287-306"
+      },
+      {
+        "file": "src/api/storage.ts",
+        "lines": 44,
+        "reached": 44,
+        "missed": ""
+      },
+      {
+        "file": "src/api/u64.ts",
+        "lines": 34,
+        "reached": 9,
+        "missed": "5-10, 12-16, 20-27, 31-36"
+      },
+      {
+        "file": "src/dae/vocab.ts",
+        "lines": 87,
+        "reached": 81,
+        "missed": "64-69"
+      },
+      {
+        "file": "src/features/policies/health.ts",
+        "lines": 36,
+        "reached": 14,
+        "missed": "8-12, 19-31, 35-38"
+      },
+      {
+        "file": "src/fonts.ts",
+        "lines": 29,
+        "reached": 17,
+        "missed": "9-12, 22-29"
+      },
+      {
+        "file": "src/i18n/direction.ts",
+        "lines": 22,
+        "reached": 11,
+        "missed": "13-21, 25-26"
+      },
+      {
+        "file": "src/i18n/enum.ts",
+        "lines": 4,
+        "reached": 4,
+        "missed": ""
+      },
+      {
+        "file": "src/i18n/index.ts",
+        "lines": 199,
+        "reached": 80,
+        "missed": "28-29, 31-39, 47-50, 56-71, 79-94, 98-116, 120-129, 133-134, 136-137, 148-153, 158-161, 164-178, 184-190, 194-195, 199-203"
+      },
+      {
+        "file": "src/i18n/languages.ts",
+        "lines": 53,
+        "reached": 40,
+        "missed": "39-40, 46-56"
+      },
+      {
+        "file": "src/i18n/stages.ts",
+        "lines": 3,
+        "reached": 3,
+        "missed": ""
+      }
+    ]
+  }
+}

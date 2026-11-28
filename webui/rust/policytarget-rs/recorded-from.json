@@ -1,0 +1,19 @@
+{
+  "unit": "src/features/shared/policyTarget.ts",
+  "files": 1,
+  "fingerprint": "49548ee8a0eddbab",
+  "cases": 57,
+  "cases_hash": "b62f77796d9059ce",
+  "coverage": {
+    "lines": 121,
+    "reached": 117,
+    "files": [
+      {
+        "file": "src/features/shared/policyTarget.ts",
+        "lines": 121,
+        "reached": 117,
+        "missed": "84-85, 105-106"
+      }
+    ]
+  }
+}

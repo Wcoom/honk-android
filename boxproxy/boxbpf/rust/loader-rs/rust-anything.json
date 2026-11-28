@@ -1,0 +1,241 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/boxproxy/boxbpf",
+  "unit": "loader.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "loader-rs",
+  "exports": [
+    {
+      "name": "create_map",
+      "file": "loader.c",
+      "line": 19,
+      "params": [
+        {
+          "name": "type",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int"
+        },
+        {
+          "name": "key_size",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "size_t"
+        },
+        {
+          "name": "value_size",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "size_t"
+        },
+        {
+          "name": "max_entries",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "int",
+      "prototype": "int create_map(enum bpf_map_type type, size_t key_size, size_t value_size, uint32_t max_entries, uint32_t flags)"
+    },
+    {
+      "name": "clear_map",
+      "file": "loader.c",
+      "line": 57,
+      "params": [
+        {
+          "name": "fd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int"
+        },
+        {
+          "name": "key_size",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "size_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "int",
+      "prototype": "int clear_map(int fd, size_t key_size)"
+    },
+    {
+      "name": "get_pinned",
+      "file": "loader.c",
+      "line": 75,
+      "params": [
+        {
+          "name": "path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false,
+          "native_type": "const char*"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "int",
+      "prototype": "int get_pinned(const char *path)"
+    },
+    {
+      "name": "pin_replace",
+      "file": "loader.c",
+      "line": 91,
+      "params": [
+        {
+          "name": "fd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int"
+        },
+        {
+          "name": "path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false,
+          "native_type": "const char*"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "int",
+      "prototype": "int pin_replace(int fd, const char *path)"
+    },
+    {
+      "name": "close_fd",
+      "file": "loader.c",
+      "line": 106,
+      "params": [
+        {
+          "name": "fd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int"
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "void",
+      "prototype": "void close_fd(int fd)"
+    },
+    {
+      "name": "remove_known_pins",
+      "file": "loader.c",
+      "line": 110,
+      "params": [],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "void",
+      "prototype": "void remove_known_pins(void)"
+    },
+    {
+      "name": "load_program",
+      "file": "loader.c",
+      "line": 404,
+      "params": [
+        {
+          "name": "section_name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false,
+          "native_type": "const char*"
+        },
+        {
+          "name": "program_name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false,
+          "native_type": "const char*"
+        },
+        {
+          "name": "cidr4_fd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int"
+        },
+        {
+          "name": "cidr6_fd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int"
+        },
+        {
+          "name": "force_uid_fd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int"
+        },
+        {
+          "name": "app_uid_fd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "int",
+      "prototype": "int load_program( const char *section_name, const char *program_name, int cidr4_fd, int cidr6_fd, int force_uid_fd, int app_uid_fd )"
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "bpf_call",
+      "file": "loader.c",
+      "line": 15,
+      "reason": "passes a pointer (`union bpf_attr*`): ownership must be designed"
+    },
+    {
+      "name": "update_elem",
+      "file": "loader.c",
+      "line": 30,
+      "reason": "passes a pointer (`const void*`) with no length parameter after it"
+    }
+  ]
+}

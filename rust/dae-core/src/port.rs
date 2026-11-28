@@ -1,0 +1,34 @@
+#[path = "../../../webui/rust/dae-rs/src/port/conditions.rs"]
+pub mod conditions;
+#[path = "../../../webui/rust/dae-rs/src/port/geodata.rs"]
+pub mod geodata;
+#[path = "../../../webui/rust/dae-rs/src/port/groups.rs"]
+pub mod groups;
+#[path = "../../../webui/rust/dae-rs/src/port/js_str.rs"]
+pub mod js_str;
+#[path = "../../../webui/rust/dae-rs/src/port/new_source.rs"]
+pub mod new_source;
+#[path = "../../../webui/rust/dae-rs/src/port/node_form.rs"]
+pub mod node_form;
+#[path = "../../../webui/rust/dae-rs/src/port/nodes.rs"]
+pub mod nodes;
+#[path = "../../../webui/rust/dae-rs/src/port/outbound_mode.rs"]
+pub mod outbound_mode;
+#[path = "../../../webui/rust/dae-rs/src/port/regions.rs"]
+pub mod regions;
+#[path = "../../../webui/rust/dae-rs/src/port/rule_text.rs"]
+pub mod rule_text;
+#[path = "../../../webui/rust/dae-rs/src/port/settings.rs"]
+pub mod settings;
+#[path = "../../../webui/rust/dae-rs/src/port/subscriptions.rs"]
+pub mod subscriptions;
+#[path = "../../../webui/rust/dae-rs/src/port/templates.rs"]
+pub mod templates;
+#[path = "../../../webui/rust/dae-rs/src/port/text.rs"]
+pub mod text;
+#[path = "../../../webui/rust/dae-rs/src/port/vocab.rs"]
+pub mod vocab;
+#[path = "../../../webui/rust/dae-rs/src/port/xhttp.rs"]
+pub mod xhttp;
+
+include!(concat!(env!("OUT_DIR"), "/port_body.rs"));

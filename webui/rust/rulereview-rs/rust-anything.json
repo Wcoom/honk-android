@@ -1,0 +1,78 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "apps/lite/src/ruleReview.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "rulereview-rs",
+  "exports": [
+    {
+      "name": "ruleReview",
+      "file": "apps/lite/src/ruleReview.ts",
+      "line": 7,
+      "params": [
+        {
+          "name": "before",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "after",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "kind",
+          "ts_type": "('routing' | 'request' | 'response')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "t",
+          "ts_type": "{[K in keyof typeof en]: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "dnsReview",
+      "file": "apps/lite/src/ruleReview.ts",
+      "line": 35,
+      "params": [
+        {
+          "name": "before",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "after",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "t",
+          "ts_type": "{[K in keyof typeof en]: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

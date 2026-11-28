@@ -1,0 +1,4 @@
+bin.name = "boxbpf"
+args = ["--clear"]
+status.code = 0
+fs.sandbox = true

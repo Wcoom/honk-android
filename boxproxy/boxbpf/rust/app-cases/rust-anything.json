@@ -1,0 +1,26 @@
+{
+  "schema": "rust-anything/app-cases@1",
+  "name": "boxbpf",
+  "run": [
+    "./boxbpf"
+  ],
+  "normalizers": {
+    "progpath": "/[^\\n ]+/boxbpf"
+  },
+  "timeout_secs": 30,
+  "recorded": [
+    "no-args",
+    "unknown-flag",
+    "init-missing-config",
+    "apply-missing-config",
+    "update-missing-config",
+    "apply-nonexistent-config",
+    "apply-missing-cidr4",
+    "apply-missing-cidr6-when-ipv6-true",
+    "update-missing-cidr4",
+    "clear",
+    "probe-v4",
+    "probe-v6",
+    "probe-v6-zero"
+  ]
+}

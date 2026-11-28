@@ -1,0 +1,36 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "apps/lite/src/fetchFailure.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "fetchfailure-rs",
+  "exports": [
+    {
+      "name": "fetchFailureText",
+      "file": "apps/lite/src/fetchFailure.ts",
+      "line": 18,
+      "params": [
+        {
+          "name": "error",
+          "ts_type": "NonNullable<components['schemas']['components['schemas']['components['schemas']['Schema['Provider']']']']['last_error']>",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "t",
+          "ts_type": "{[K in keyof typeof en]: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

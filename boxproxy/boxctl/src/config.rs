@@ -108,6 +108,7 @@ pub struct Config {
     pub wifi_list_mode: String,
     pub wifi_ssids: Vec<String>,
     pub wifi_bssids: Vec<String>,
+    pub network_rule_groups: Vec<boxproxy_schema::NetworkRuleGroup>,
     pub tun_device: String,
     pub fake_ip_range: String,
     pub fake_ip6_range: String,
@@ -138,8 +139,11 @@ impl BoxPaths {
             .or_else(infer_home_from_current_exe)
             .unwrap_or_else(|| {
                 let honk_home = "/data/user/0/com.boxproxy.honk/files/box";
+                let pure_rust_home = "/data/user/0/io.honk.android/files/box";
                 if std::path::Path::new(honk_home).exists() {
                     honk_home.to_string()
+                } else if std::path::Path::new(pure_rust_home).exists() {
+                    pure_rust_home.to_string()
                 } else {
                     "/data/user/0/com.boxproxy.box/files/box".to_string()
                 }
@@ -232,7 +236,7 @@ impl Config {
             &db_mihomo_dns_port,
             &core_values.mihomo_dns_port,
             &default_mihomo_dns_port,
-            bin_name == "mihomo",
+            matches!(bin_name.as_str(), "mihomo" | "meow"),
         );
         let resolved_tun_device = resolve_value(
             &overrides.tun_device,
@@ -246,14 +250,14 @@ impl Config {
             &db_fake_ip_range,
             &core_values.fake_ip_range,
             &default_fake_ip_range,
-            matches!(bin_name.as_str(), "mihomo" | "sing-box"),
+            matches!(bin_name.as_str(), "mihomo" | "meow" | "sing-box"),
         );
         let resolved_fake_ip6_range = resolve_value(
             &overrides.fake_ip6_range,
             &db_fake_ip6_range,
             &core_values.fake_ip6_range,
             &default_fake_ip6_range,
-            matches!(bin_name.as_str(), "mihomo" | "sing-box"),
+            matches!(bin_name.as_str(), "mihomo" | "meow" | "sing-box"),
         );
         let sources = CoreConfigSources {
             read_status: core_values.read_status.clone(),
@@ -276,7 +280,7 @@ impl Config {
             box_log: paths.run.join("runs.log"),
             box_user_group: "root:net_admin".to_string(),
             bin_name: bin_name.clone(),
-            bin_list: ["mihomo", "sing-box", "xray", "v2fly", "hysteria", "honk"]
+            bin_list: ["mihomo", "meow", "sing-box", "xray", "v2fly", "hysteria", "honk"]
                 .iter()
                 .map(|value| value.to_string())
                 .collect(),
@@ -355,6 +359,7 @@ impl Config {
             wifi_list_mode: db_data.wifi_list_mode,
             wifi_ssids: db_data.wifi_ssids,
             wifi_bssids: db_data.wifi_bssids,
+            network_rule_groups: db_data.network_rule_groups,
             tun_device: resolved_tun_device.value,
             fake_ip_range: resolved_fake_ip_range.value,
             fake_ip6_range: resolved_fake_ip6_range.value,
@@ -403,7 +408,7 @@ impl Config {
         self.bin_name = normalize_choice(
             "core",
             &self.bin_name,
-            &["mihomo", "sing-box", "xray", "v2fly", "hysteria", "honk"],
+            &["mihomo", "meow", "sing-box", "xray", "v2fly", "hysteria", "honk"],
         )?;
         self.dns_hijack_mode = normalize_choice(
             "DNS hijack mode",
@@ -449,7 +454,7 @@ fn runtime_config_file_path(paths: &BoxPaths) -> PathBuf {
 }
 
 fn core_uses_runtime_config(bin_name: &str) -> bool {
-    matches!(bin_name, "mihomo" | "sing-box")
+    matches!(bin_name, "mihomo" | "meow" | "sing-box")
 }
 
 #[cfg(test)]
@@ -503,7 +508,7 @@ mod tests {
 }
 
 fn core_config_values_needed(bin_name: &str) -> bool {
-    matches!(bin_name, "mihomo" | "sing-box")
+    matches!(bin_name, "mihomo" | "meow" | "sing-box")
 }
 
 #[derive(Clone, Debug)]

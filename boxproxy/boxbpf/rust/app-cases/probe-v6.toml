@@ -1,0 +1,4 @@
+bin.name = "boxbpf"
+args = ["--probe", "--ipv6", "1"]
+status.code = 1
+fs.sandbox = true

@@ -334,6 +334,7 @@ fn embedded_response(
         "css" => "text/css",
         "svg" => "image/svg+xml",
         "json" => "application/json",
+        "wasm" => "application/wasm",
         "webmanifest" => "application/manifest+json",
         "png" => "image/png",
         "webp" => "image/webp",

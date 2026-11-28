@@ -1,0 +1,168 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "apps/lite/src/groupBindings.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "groupbindings-rs",
+  "exports": [
+    {
+      "name": "regexLiterals",
+      "file": "apps/lite/src/groupBindings.ts",
+      "line": 11,
+      "params": [
+        {
+          "name": "pattern",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[] | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "nodeBinding",
+      "file": "apps/lite/src/groupBindings.ts",
+      "line": 17,
+      "params": [
+        {
+          "name": "node",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']']",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "providers",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['Provider']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "manual",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{id: string; label: string; description: string; filter: string; provider?: string}",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "subscriptionFilter",
+      "file": "apps/lite/src/groupBindings.ts",
+      "line": 27,
+      "params": [
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "regex",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "honkPolicy",
+      "file": "apps/lite/src/groupBindings.ts",
+      "line": 31,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "regionPatterns",
+      "file": "apps/lite/src/groupBindings.ts",
+      "line": 61,
+      "params": [
+        {
+          "name": "iso",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "subscriptionBinding",
+      "file": "apps/lite/src/groupBindings.ts",
+      "line": 67,
+      "params": [
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "regions",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "words",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "readSubscriptionBinding",
+      "file": "apps/lite/src/groupBindings.ts",
+      "line": 73,
+      "params": [
+        {
+          "name": "filter",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{source: string; regions: string[]; words: string[]} | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

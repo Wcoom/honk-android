@@ -1,0 +1,17 @@
+[package]
+name = "honk-xtask"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Pure Rust build, eBPF stackmap, verifier test, cgroup setup, and Android deployment tooling for honk-android"
+
+[[bin]]
+name = "honk-xtask"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
+sha2 = "0.10"
+
+[workspace]

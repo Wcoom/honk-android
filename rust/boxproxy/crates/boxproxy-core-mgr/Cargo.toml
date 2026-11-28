@@ -1,0 +1,20 @@
+[package]
+name = "boxproxy-core-mgr"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+boxproxy-schema = { path = "../boxproxy-schema" }
+boxproxy-root = { path = "../boxproxy-root" }
+flate2.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true

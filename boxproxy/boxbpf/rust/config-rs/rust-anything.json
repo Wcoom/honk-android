@@ -1,0 +1,109 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/boxproxy/boxbpf",
+  "unit": "config.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "config-rs",
+  "exports": [
+    {
+      "name": "load_cidr_file",
+      "file": "config.c",
+      "line": 184,
+      "params": [
+        {
+          "name": "map_fd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int"
+        },
+        {
+          "name": "path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false,
+          "native_type": "const char*"
+        },
+        {
+          "name": "ipv6",
+          "ts_type": "boolean",
+          "optional": false,
+          "rest": false,
+          "native_type": "bool"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "int",
+      "prototype": "int load_cidr_file(int map_fd, const char *path, bool ipv6)"
+    },
+    {
+      "name": "load_uid_file",
+      "file": "config.c",
+      "line": 238,
+      "params": [
+        {
+          "name": "map_fd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int"
+        },
+        {
+          "name": "path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false,
+          "native_type": "const char*"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "int",
+      "prototype": "int load_uid_file(int map_fd, const char *path)"
+    },
+    {
+      "name": "uid_file_has_entries",
+      "file": "config.c",
+      "line": 264,
+      "params": [
+        {
+          "name": "path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false,
+          "native_type": "const char*"
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "bool",
+      "prototype": "bool uid_file_has_entries(const char *path)"
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "config_defaults",
+      "file": "config.c",
+      "line": 11,
+      "reason": "passes a pointer (`struct config*`): ownership must be designed"
+    },
+    {
+      "name": "read_config_json",
+      "file": "config.c",
+      "line": 105,
+      "reason": "passes a pointer (`struct config*`): ownership must be designed"
+    }
+  ]
+}

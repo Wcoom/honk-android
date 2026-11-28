@@ -25,7 +25,7 @@ pub fn sync(config: &Config) -> Result<()> {
     }
 
     match config.bin_name.as_str() {
-        "mihomo" => sync_mihomo(config),
+        "mihomo" | "meow" => sync_mihomo(config),
         "sing-box" => sync_sing_box(config),
         "honk" => {
             let source = config.source_config_path();
@@ -54,9 +54,9 @@ pub fn sync(config: &Config) -> Result<()> {
 
 pub(crate) fn ensure_network_mode_supported(config: &Config) -> Result<()> {
     if config.network_mode == crate::config::NetworkMode::Ebpf
-        && !matches!(config.bin_name.as_str(), "sing-box" | "mihomo" | "honk")
+        && !matches!(config.bin_name.as_str(), "sing-box" | "mihomo" | "meow" | "honk")
     {
-        return Err("eBPF network mode is only supported by mihomo, sing-box, and honk".to_string());
+        return Err("eBPF network mode is only supported by mihomo, meow, sing-box, and honk".to_string());
     }
     Ok(())
 }

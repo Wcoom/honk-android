@@ -220,7 +220,7 @@ struct Compressed {
 fn encode(file: &std::path::Path) -> anyhow::Result<Option<Compressed>> {
     use std::io::Write;
 
-    const TEXT: &[&str] = &["css", "html", "js", "json", "svg", "txt", "webmanifest"];
+    const TEXT: &[&str] = &["css", "html", "js", "json", "svg", "txt", "wasm", "webmanifest"];
     if !file
         .extension()
         .and_then(|extension| extension.to_str())

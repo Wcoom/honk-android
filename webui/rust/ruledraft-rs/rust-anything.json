@@ -1,0 +1,336 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "apps/lite/src/ruleDraft.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "ruledraft-rs",
+  "exports": [
+    {
+      "name": "kindsFor",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 17,
+      "params": [
+        {
+          "name": "kind",
+          "ts_type": "('routing' | 'request' | 'response')",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "serializeBuilder",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 20,
+      "params": [
+        {
+          "name": "rows",
+          "ts_type": "{kind: string; value: string; negate: boolean}[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "findBlocks",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 81,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "path",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: TextBlock[];\n}[];\n}[];\n}[];\n}[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseRuleList",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 90,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "kind",
+          "ts_type": "('routing' | 'request' | 'response')",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({text: string; kind: ('routing' | 'request' | 'response'); block: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: TextBlock[];\n}[];\n}[];\n} | null; rows: ({\n  from: number;\n  to: number;\n  raw: string;\n  note: string;\n  expression: string;\n  target: string;\n  fallback: boolean;\n  conditions: {kind: string; value: string; negate: boolean}[] | null;\n  anchor: {\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n};\n})[]; ambiguous: boolean})",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeRuleList",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 151,
+      "params": [
+        {
+          "name": "doc",
+          "ts_type": "({text: string; kind: ('routing' | 'request' | 'response'); block: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: TextBlock[];\n}[];\n}[];\n} | null; rows: ({\n  from: number;\n  to: number;\n  raw: string;\n  note: string;\n  expression: string;\n  target: string;\n  fallback: boolean;\n  conditions: {kind: string; value: string; negate: boolean}[] | null;\n  anchor: {\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n};\n})[]; ambiguous: boolean})",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "rows",
+          "ts_type": "({\n  from: number;\n  to: number;\n  raw: string;\n  note: string;\n  expression: string;\n  target: string;\n  fallback: boolean;\n  conditions: {kind: string; value: string; negate: boolean}[] | null;\n  anchor: {\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n};\n})[]",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "moveRule",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 162,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "kind",
+          "ts_type": "('routing' | 'request' | 'response')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "from",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "to",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "ensureBlock",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 173,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "path",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "addDraftRule",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 185,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "kind",
+          "ts_type": "('routing' | 'request' | 'response')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "condition",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "target",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "position",
+          "ts_type": "'first' | 'last'",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "editDraftRule",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 196,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "rule",
+          "ts_type": "({\n  from: number;\n  to: number;\n  raw: string;\n  note: string;\n  expression: string;\n  target: string;\n  fallback: boolean;\n  conditions: {kind: string; value: string; negate: boolean}[] | null;\n  anchor: {\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n};\n})",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "conditions",
+          "ts_type": "{kind: string; value: string; negate: boolean}[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "target",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "setFallback",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 203,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "kind",
+          "ts_type": "('routing' | 'request' | 'response')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "target",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "changeCount",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 216,
+      "params": [
+        {
+          "name": "before",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "after",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "stageAuthoredRules",
+      "file": "apps/lite/src/ruleDraft.ts",
+      "line": 222,
+      "params": [
+        {
+          "name": "before",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "after",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

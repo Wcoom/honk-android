@@ -1,0 +1,60 @@
+[package]
+name = "doona-wasm"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Pure Rust WASM (Leptos 0.8 CSR) rewrite of Doona WebUI (/ui/)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+console_error_panic_hook = "0.1"
+doona-common = { path = "../doona-common" }
+doona-logic = { path = "../doona-logic" }
+js-sys = "0.3"
+leptos = { version = "0.8", features = ["csr"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "AbortController",
+    "AbortSignal",
+    "Blob",
+    "BlobPropertyBag",
+    "Clipboard",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HashChangeEvent",
+    "Headers",
+    "History",
+    "HtmlAnchorElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlSelectElement",
+    "HtmlTextAreaElement",
+    "KeyboardEvent",
+    "Location",
+    "MediaQueryList",
+    "Navigator",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "Request",
+    "RequestCache",
+    "RequestInit",
+    "Response",
+    "Storage",
+    "TextDecoder",
+    "Url",
+    "Window",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

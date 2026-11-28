@@ -6,7 +6,7 @@ pub(super) fn core_check_command(config: &Config) -> (String, Vec<String>) {
     let file = config.launch_config_path().to_string_lossy().to_string();
 
     match config.bin_name.as_str() {
-        "mihomo" => (bin, vec!["-t".into(), "-d".into(), dir, "-f".into(), file]),
+        "mihomo" | "meow" => (bin, vec!["-t".into(), "-d".into(), dir, "-f".into(), file]),
         "sing-box" => (
             bin,
             vec!["check".into(), "-c".into(), file, "-D".into(), dir],
@@ -26,7 +26,7 @@ pub(super) fn core_run_command(config: &Config) -> (String, Vec<String>) {
     let bin = config.bin_path.to_string_lossy().to_string();
 
     match config.bin_name.as_str() {
-        "mihomo" => args.extend(["-d".into(), dir, "-f".into(), file]),
+        "mihomo" | "meow" => args.extend(["-d".into(), dir, "-f".into(), file]),
         "sing-box" => args.extend(["run".into(), "-c".into(), file, "-D".into(), dir]),
         "xray" => args.extend(["run".into(), "-confdir".into(), dir]),
         "v2fly" => args.extend(["run".into(), "-d".into(), dir]),

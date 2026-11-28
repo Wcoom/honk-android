@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/boxproxy-schema",
+    "crates/boxproxy-store",
+    "crates/boxproxy-root",
+    "crates/boxproxy-api",
+    "crates/boxproxy-core-mgr",
+    "crates/boxproxy-tools",
+    "crates/boxproxy-engine",
+    "crates/boxproxy-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "process", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "gzip", "deflate"] }
+regex = "1.11"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+flate2 = "1.0"
+tar = "0.4"
+base64 = "0.22"
+jsonc-parser = { version = "0.33.0", features = ["serde", "serde_json"] }
+serde_norway = "0.9.42"
+tempfile = "3.14"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = "s"
+strip = true
+panic = "abort"

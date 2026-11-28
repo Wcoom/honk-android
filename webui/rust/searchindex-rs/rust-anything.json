@@ -1,0 +1,78 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "apps/lite/src/searchIndex.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "searchindex-rs",
+  "exports": [
+    {
+      "name": "resourceIndex",
+      "file": "apps/lite/src/searchIndex.ts",
+      "line": 31,
+      "params": [
+        {
+          "name": "nodes",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "groups",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['GroupSummary']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "providers",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['Provider']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "sources",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "manualLabel",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({\n  id: string;\n  label: string;\n  description: string;\n  target: ({\n  kind: 'node' | 'group' | 'member' | 'subscription' | 'rule' | 'upstream';\n  id: string;\n  ruleKind?: 'routing' | 'request' | 'response';\n});\n  category: 'nodes' | 'groups' | 'subscriptions' | 'routing' | 'dns';\n  preview?: string;\n  keywords?: string[];\n  rule?: {\n    conditions: Array<{kind: string; value: string; negate: boolean}> | null;\n    target: string;\n    fallback: boolean;\n    kind: 'routing' | 'request' | 'response';\n  };\n})[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "searchNameRank",
+      "file": "apps/lite/src/searchIndex.ts",
+      "line": 91,
+      "params": [
+        {
+          "name": "label",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "query",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

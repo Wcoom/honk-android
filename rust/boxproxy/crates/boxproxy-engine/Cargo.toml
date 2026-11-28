@@ -1,0 +1,19 @@
+[package]
+name = "boxproxy-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+boxproxy-api = { path = "../boxproxy-api" }
+boxproxy-core-mgr = { path = "../boxproxy-core-mgr" }
+boxproxy-root = { path = "../boxproxy-root" }
+boxproxy-schema = { path = "../boxproxy-schema" }
+boxproxy-store = { path = "../boxproxy-store" }
+boxproxy-tools = { path = "../boxproxy-tools" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

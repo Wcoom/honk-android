@@ -39,7 +39,7 @@ impl CoreConfigValues {
             }
         };
         match bin_name {
-            "mihomo" => Self::read_mihomo(&text, network_mode),
+            "mihomo" | "meow" => Self::read_mihomo(&text, network_mode),
             "sing-box" => Self::read_sing_box(&text, network_mode),
             _ => Self {
                 read_status: format!("{bin_name} does not support automatic parsing"),
@@ -242,7 +242,7 @@ pub(super) fn non_empty_value(value: &str) -> Option<String> {
 }
 
 pub(super) fn default_mihomo_dns_port(bin_name: &str) -> String {
-    if bin_name == "mihomo" {
+    if matches!(bin_name, "mihomo" | "meow") {
         "1053".to_string()
     } else {
         String::new()
@@ -254,14 +254,14 @@ pub(super) fn default_tun_device(bin_name: &str, network_mode: &str) -> String {
         return String::new();
     }
     match bin_name {
-        "mihomo" => "meta".to_string(),
+        "mihomo" | "meow" => "meta".to_string(),
         "sing-box" => "sing".to_string(),
         _ => String::new(),
     }
 }
 
 pub(super) fn default_fake_ip_range(bin_name: &str) -> String {
-    if bin_name == "mihomo" {
+    if matches!(bin_name, "mihomo" | "meow") {
         "198.18.0.1/16".to_string()
     } else {
         String::new()
@@ -269,7 +269,7 @@ pub(super) fn default_fake_ip_range(bin_name: &str) -> String {
 }
 
 pub(super) fn default_fake_ip6_range(bin_name: &str) -> String {
-    if bin_name == "mihomo" {
+    if matches!(bin_name, "mihomo" | "meow") {
         "fc00::/18".to_string()
     } else {
         String::new()

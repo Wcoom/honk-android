@@ -68,6 +68,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 name = "boxctl"
 version = "0.1.0"
 dependencies = [
+ "boxproxy-schema",
  "clap",
  "getrandom",
  "jsonc-parser",
@@ -78,6 +79,15 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "yaml-rust2",
+]
+
+[[package]]
+name = "boxproxy-schema"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

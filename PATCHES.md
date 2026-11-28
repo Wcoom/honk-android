@@ -69,3 +69,9 @@
 - `crates/honk-core/src/native_api/{core_update.rs,handlers.rs,types.rs}`、`crates/honk-core/src/{main.rs,native_api.rs}` 与 `webui/`：
   - 同步 `Zakkaus/doona` 主线至 `0ed10b6`（含代理链管理、策略组出口节点编辑、「节点策略选择」规则分流中枢联动及内存/核心更新扩展）并接入 [`build.sh`](./build.sh) 自动内嵌标准版与 Lite 版 WebUI。
   - 新增 `GET/POST /api/v1/x-honk/core/update`，支持检测 `Wcoom/honk-android` GitHub Releases、下载 `honk-android-arm64` 与 `SHA256SUMS.txt`、校验 SHA-256 与 ARM64 ELF64 头并原子替换后分离重启（复用 `record_startup_args()`）；同步适配 Doona 标准版/Lite 版核心更新卡片与 `BoxProxy Honk` 客户端内更新源。
+
+## 8. 内嵌纯 Rust WASM Doona WebUI 静态托管与预压缩支持（v1.1.0）
+
+- `crates/honk-core/build.rs`、`crates/honk-core/src/native_api/ui.rs`：
+  - 将 `wasm` 扩展名纳入 `build.rs` 静态资源 Brotli/Gzip 预压缩白名单，并在 `embedded_response()` 补齐 `"wasm" => "application/wasm"` MIME 类型映射，支撑纯 Rust Leptos WASM 版 Doona（`/ui/` 与 `/ui/lite/`）零外部依赖直接内嵌编译进 `honk-core`。
+  - 改动已同步写入 [`patches/honk-android.patch`](./patches/honk-android.patch) 并通过 `git apply --check` 校验。

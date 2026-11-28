@@ -99,6 +99,7 @@ pub(super) fn load_profile(conn: &Connection) -> Result<RuntimeData> {
                     wifi_list_mode: "blacklist".to_string(),
                     wifi_ssids: Vec::new(),
                     wifi_bssids: Vec::new(),
+                    network_rule_groups: Vec::new(),
                     hotspot_ap_interfaces: Vec::new(),
                     blocked_interfaces: Vec::new(),
                     mac_filter: false,
@@ -142,12 +143,20 @@ pub(super) fn read_uid_list(conn: &Connection, table: &str, column: &str) -> Vec
 }
 
 pub(super) fn read_wifi_settings(conn: &Connection) -> Result<WifiSettings> {
-    let values = conn.query_row(
-        "SELECT network_control_enabled, use_on_wifi_disconnect, use_on_wifi_connect, \
-         enable_ssid_matching, enable_network_control_log, list_mode \
-         FROM wifi_match_settings WHERE id = 1",
-        [],
-        |row| {
+    for table in ["network_match_settings", "wifi_match_settings"] {
+        let sql = format!(
+            "SELECT network_control_enabled, use_on_wifi_disconnect, use_on_wifi_connect, \
+             enable_ssid_matching, enable_network_control_log, list_mode \
+             FROM {table} WHERE id = 1"
+        );
+        if let Ok((
+            network_control_enabled,
+            use_on_wifi_disconnect,
+            use_on_wifi_connect,
+            enable_ssid_matching,
+            enable_network_control_log,
+            list_mode,
+        )) = conn.query_row(&sql, [], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
@@ -156,51 +165,97 @@ pub(super) fn read_wifi_settings(conn: &Connection) -> Result<WifiSettings> {
                 row.get::<_, i64>(4)?,
                 row.get::<_, String>(5)?,
             ))
-        },
-    );
-    match values {
-        Ok((
-            network_control_enabled,
-            use_on_wifi_disconnect,
-            use_on_wifi_connect,
-            enable_ssid_matching,
-            enable_network_control_log,
-            list_mode,
-        )) => Ok(WifiSettings {
-            network_control_enabled: network_control_enabled != 0,
-            use_on_wifi_disconnect: use_on_wifi_disconnect != 0,
-            use_on_wifi_connect: use_on_wifi_connect != 0,
-            enable_ssid_matching: enable_ssid_matching != 0,
-            enable_network_control_log: enable_network_control_log != 0,
-            list_mode,
-        }),
-        Err(_) => Ok(WifiSettings {
-            network_control_enabled: false,
-            use_on_wifi_disconnect: true,
-            use_on_wifi_connect: true,
-            enable_ssid_matching: false,
-            enable_network_control_log: true,
-            list_mode: "blacklist".to_string(),
-        }),
+        }) {
+            return Ok(WifiSettings {
+                network_control_enabled: network_control_enabled != 0,
+                use_on_wifi_disconnect: use_on_wifi_disconnect != 0,
+                use_on_wifi_connect: use_on_wifi_connect != 0,
+                enable_ssid_matching: enable_ssid_matching != 0,
+                enable_network_control_log: enable_network_control_log != 0,
+                list_mode,
+            });
+        }
     }
+    Ok(WifiSettings {
+        network_control_enabled: false,
+        use_on_wifi_disconnect: true,
+        use_on_wifi_connect: true,
+        enable_ssid_matching: false,
+        enable_network_control_log: true,
+        list_mode: "blacklist".to_string(),
+    })
 }
 
 pub(super) fn read_hotspot_settings(conn: &Connection) -> Result<HotspotSettings> {
-    let values = conn.query_row(
-        "SELECT mac_filter, mac_mode FROM hotspot_settings WHERE id = 1",
-        [],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-    );
-    match values {
-        Ok((mac_filter, mac_mode)) => Ok(HotspotSettings {
-            mac_filter: mac_filter != 0,
-            mac_mode,
-        }),
-        Err(_) => Ok(HotspotSettings {
-            mac_filter: false,
-            mac_mode: "blacklist".to_string(),
-        }),
+    for table in ["shared_network_settings", "hotspot_settings"] {
+        let sql = format!("SELECT mac_filter, mac_mode FROM {table} WHERE id = 1");
+        if let Ok((mac_filter, mac_mode)) =
+            conn.query_row(&sql, [], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+        {
+            return Ok(HotspotSettings {
+                mac_filter: mac_filter != 0,
+                mac_mode,
+            });
+        }
     }
+    Ok(HotspotSettings {
+        mac_filter: false,
+        mac_mode: "blacklist".to_string(),
+    })
+}
+
+pub(super) fn read_string_list_preferred(
+    conn: &Connection,
+    preferred: &str,
+    legacy: &str,
+    column: &str,
+) -> Result<Vec<String>> {
+    let primary = read_string_list(conn, preferred, column)?;
+    if !primary.is_empty() {
+        return Ok(primary);
+    }
+    read_string_list(conn, legacy, column)
+}
+
+pub(super) fn read_network_rule_groups(conn: &Connection) -> Vec<boxproxy_schema::NetworkRuleGroup> {
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT id, name, enabled, priority, expression FROM network_rule_groups ORDER BY priority ASC, id ASC",
+    ) else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok(boxproxy_schema::NetworkRuleGroup {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            enabled: row.get::<_, i64>(2)? != 0,
+            priority: row.get(3)?,
+            expression: row.get(4)?,
+            actions: Vec::new(),
+        })
+    }) else {
+        return Vec::new();
+    };
+    let mut groups: Vec<boxproxy_schema::NetworkRuleGroup> = rows.filter_map(|r| r.ok()).collect();
+    if let Ok(mut act_stmt) = conn.prepare(
+        "SELECT id, group_id, sort_order, type, target, continue_on_error \
+         FROM network_rule_actions WHERE group_id = ?1 ORDER BY sort_order ASC, id ASC",
+    ) {
+        for group in &mut groups {
+            if let Ok(act_rows) = act_stmt.query_map([group.id], |row| {
+                Ok(boxproxy_schema::NetworkRuleAction {
+                    id: row.get(0)?,
+                    group_id: row.get(1)?,
+                    sort_order: row.get(2)?,
+                    action_type: row.get(3)?,
+                    target: row.get(4)?,
+                    continue_on_error: row.get::<_, i64>(5)? != 0,
+                })
+            }) {
+                group.actions = act_rows.filter_map(|r| r.ok()).collect();
+            }
+        }
+    }
+    groups
 }
 
 pub(super) fn read_string_list(

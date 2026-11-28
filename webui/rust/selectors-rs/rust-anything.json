@@ -1,0 +1,589 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "src/api/selectors.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "selectors-rs",
+  "exports": [
+    {
+      "name": "safeHttpUrl",
+      "file": "src/api/selectors.ts",
+      "line": 24,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "measured",
+      "file": "src/api/selectors.ts",
+      "line": 50,
+      "params": [
+        {
+          "name": "h",
+          "ts_type": "Pick<components['schemas']['components['schemas']['components['schemas']['Schema['HealthObservation']']']'], 'error'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "preferredObservation",
+      "file": "src/api/selectors.ts",
+      "line": 51,
+      "params": [
+        {
+          "name": "health",
+          "ts_type": "(components['schemas']['components['schemas']['components['schemas']['Schema['HealthObservation']']']'])[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "(components['schemas']['components['schemas']['components['schemas']['Schema['HealthObservation']']']']) | undefined",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "foldFamilies",
+      "file": "src/api/selectors.ts",
+      "line": 58,
+      "params": [
+        {
+          "name": "rows",
+          "ts_type": "(Pick<components['schemas']['components['schemas']['components['schemas']['Schema['HealthObservation']']']'], 'state' | 'latency_ms' | 'ip_version'>)[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "(Pick<components['schemas']['components['schemas']['components['schemas']['Schema['HealthObservation']']']'], 'state' | 'latency_ms' | 'ip_version'>) | undefined",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "preferredHealth",
+      "file": "src/api/selectors.ts",
+      "line": 67,
+      "params": [
+        {
+          "name": "node",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']']",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "probeKinds",
+      "file": "src/api/selectors.ts",
+      "line": 75,
+      "params": [
+        {
+          "name": "health",
+          "ts_type": "(components['schemas']['components['schemas']['components['schemas']['Schema['HealthObservation']']']'])[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "healthMillis",
+      "file": "src/api/selectors.ts",
+      "line": 94,
+      "params": [
+        {
+          "name": "health",
+          "ts_type": "Pick<components['schemas']['components['schemas']['components['schemas']['Schema['HealthObservation']']']'], 'state' | 'latency_ms'> | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "compareLatency",
+      "file": "src/api/selectors.ts",
+      "line": 96,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "number | undefined",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "b",
+          "ts_type": "number | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "outboundUsage",
+      "file": "src/api/selectors.ts",
+      "line": 98,
+      "params": [
+        {
+          "name": "snapshot",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['RuntimeOutbounds']']']'] | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "simulatedAddress",
+      "file": "src/api/selectors.ts",
+      "line": 112,
+      "params": [
+        {
+          "name": "result",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['DnsQueryResponse']']']']['results'][number]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "ipLiteral",
+      "file": "src/api/selectors.ts",
+      "line": 117,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | undefined",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "pseudoOwner",
+      "file": "src/api/selectors.ts",
+      "line": 131,
+      "params": [
+        {
+          "name": "node",
+          "ts_type": "Pick<components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']'], 'protocol'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "('builtin' | 'unattributed')",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "noNodeSources",
+      "file": "src/api/selectors.ts",
+      "line": 133,
+      "params": [
+        {
+          "name": "providers",
+          "ts_type": "readonly Pick<components['schemas']['components['schemas']['components['schemas']['Schema['Provider']']']'], 'kind'>[] | undefined",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "nodes",
+          "ts_type": "readonly Pick<components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']'], 'protocol'>[] | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "pseudoOwnerId",
+      "file": "src/api/selectors.ts",
+      "line": 141,
+      "params": [
+        {
+          "name": "kind",
+          "ts_type": "('builtin' | 'unattributed')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "providers",
+          "ts_type": "ReadonlyArray<{id: string}>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "nodeOwner",
+      "file": "src/api/selectors.ts",
+      "line": 147,
+      "params": [
+        {
+          "name": "node",
+          "ts_type": "Pick<components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']'], 'provider_id' | 'protocol'>",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "providers",
+          "ts_type": "ReadonlyArray<{id: string}>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "sourceIp",
+      "file": "src/api/selectors.ts",
+      "line": 150,
+      "params": [
+        {
+          "name": "src",
+          "ts_type": "string | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | undefined",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "addressPort",
+      "file": "src/api/selectors.ts",
+      "line": 155,
+      "params": [
+        {
+          "name": "address",
+          "ts_type": "string | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "chainNames",
+      "file": "src/api/selectors.ts",
+      "line": 162,
+      "params": [
+        {
+          "name": "chain",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "names",
+          "ts_type": "ReadonlyMap<string, string>",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "nodeSubscription",
+      "file": "src/api/selectors.ts",
+      "line": 175,
+      "params": [
+        {
+          "name": "row",
+          "ts_type": "Pick<components['schemas']['components['schemas']['components['schemas']['Schema['Connection']']']'], 'chain' | 'outbound'>",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "subscriptions",
+          "ts_type": "ReadonlyMap<string, string>",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "lifecycleTone",
+      "file": "src/api/selectors.ts",
+      "line": 189,
+      "params": [
+        {
+          "name": "state",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['Runtime']']']']['lifecycle']['state'] | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "memoryTone",
+      "file": "src/api/selectors.ts",
+      "line": 191,
+      "params": [
+        {
+          "name": "percent",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "'ok' | 'warn' | 'err'",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "closedAllTone",
+      "file": "src/api/selectors.ts",
+      "line": 193,
+      "params": [
+        {
+          "name": "tally",
+          "ts_type": "{closed: number; skipped: number}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "connectionRows",
+      "file": "src/api/selectors.ts",
+      "line": 213,
+      "params": [
+        {
+          "name": "snapshot",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConnectionList']']']'] | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "routineGap",
+      "file": "src/api/selectors.ts",
+      "line": 231,
+      "params": [
+        {
+          "name": "event",
+          "ts_type": "{[K in components['schemas']['components['schemas']['Schema['EventKind']']']]: {id: string; event: K; data: {\n  'stream.ready': components['schemas']['StreamReadyEvent'];\n  'runtime.updated': components['schemas']['RuntimeUpdatedEvent'];\n  'flow.updated': components['schemas']['FlowUpdatedEvent'];\n  'flow.gap': components['schemas']['FlowGapEvent'];\n  'operation.updated': components['schemas']['OperationUpdatedEvent'];\n  'generation.changed': components['schemas']['GenerationChangedEvent'];\n}[K]}}[components['schemas']['components['schemas']['Schema['EventKind']']']]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "shortId",
+      "file": "src/api/selectors.ts",
+      "line": 284,
+      "params": [
+        {
+          "name": "id",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "resolveSelectedLeaf",
+      "file": "src/api/selectors.ts",
+      "line": 286,
+      "params": [
+        {
+          "name": "outbound",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "network",
+          "ts_type": "'tcp' | 'udp'",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "groupsByName",
+          "ts_type": "ReadonlyMap<string, components['schemas']['components['schemas']['components['schemas']['Schema['GroupSummary']']']']>",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "groupsById",
+          "ts_type": "ReadonlyMap<string, components['schemas']['components['schemas']['components['schemas']['Schema['GroupSummary']']']']>",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "nodesById",
+          "ts_type": "ReadonlyMap<string, components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']']>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{groups: components['schemas']['components['schemas']['components['schemas']['Schema['GroupSummary']']']'][]; member: string | null; node: components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']'] | null}",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "interestingNotice",
+      "file": "src/api/selectors.ts",
+      "line": 330,
+      "params": [
+        {
+          "name": "event",
+          "ts_type": "{[K in components['schemas']['components['schemas']['Schema['EventKind']']']]: {id: string; event: K; data: {\n  'stream.ready': components['schemas']['StreamReadyEvent'];\n  'runtime.updated': components['schemas']['RuntimeUpdatedEvent'];\n  'flow.updated': components['schemas']['FlowUpdatedEvent'];\n  'flow.gap': components['schemas']['FlowGapEvent'];\n  'operation.updated': components['schemas']['OperationUpdatedEvent'];\n  'generation.changed': components['schemas']['GenerationChangedEvent'];\n}[K]}}[components['schemas']['components['schemas']['Schema['EventKind']']']]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "outboundLabel",
+      "file": "src/api/selectors.ts",
+      "line": 157,
+      "reason": "takes or returns a function"
+    },
+    {
+      "name": "chainLabel",
+      "file": "src/api/selectors.ts",
+      "line": 163,
+      "reason": "takes or returns a function"
+    },
+    {
+      "name": "nodeLabel",
+      "file": "src/api/selectors.ts",
+      "line": 168,
+      "reason": "takes or returns a function"
+    },
+    {
+      "name": "chainPath",
+      "file": "src/api/selectors.ts",
+      "line": 178,
+      "reason": "takes or returns a function"
+    },
+    {
+      "name": "eventSummary",
+      "file": "src/api/selectors.ts",
+      "line": 250,
+      "reason": "takes or returns a function"
+    }
+  ]
+}

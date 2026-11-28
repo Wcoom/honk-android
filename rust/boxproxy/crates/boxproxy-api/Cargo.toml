@@ -1,0 +1,13 @@
+[package]
+name = "boxproxy-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+boxproxy-schema = { path = "../boxproxy-schema" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+jsonc-parser.workspace = true
+tokio.workspace = true

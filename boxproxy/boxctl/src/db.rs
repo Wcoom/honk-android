@@ -53,6 +53,7 @@ pub struct RuntimeData {
     pub wifi_list_mode: String,
     pub wifi_ssids: Vec<String>,
     pub wifi_bssids: Vec<String>,
+    pub network_rule_groups: Vec<boxproxy_schema::NetworkRuleGroup>,
     pub hotspot_ap_interfaces: Vec<String>,
     pub blocked_interfaces: Vec<String>,
     pub mac_filter: bool,
@@ -81,14 +82,20 @@ pub fn load_runtime_data(db_path: &Path) -> Result<RuntimeData> {
     profile.wifi_enable_ssid_matching = wifi_settings.enable_ssid_matching;
     profile.wifi_enable_log = wifi_settings.enable_network_control_log;
     profile.wifi_list_mode = wifi_settings.list_mode;
-    profile.wifi_ssids = read_string_list(&conn, "wifi_match_ssids", "value")?;
-    profile.wifi_bssids = read_string_list(&conn, "wifi_match_bssids", "value")?;
-    profile.hotspot_ap_interfaces = read_string_list(&conn, "hotspot_ap_interfaces", "value")?;
+    profile.wifi_ssids = read_string_list_preferred(&conn, "network_match_ssids", "wifi_match_ssids", "value")?;
+    profile.wifi_bssids = read_string_list_preferred(&conn, "network_match_bssids", "wifi_match_bssids", "value")?;
+    profile.network_rule_groups = read_network_rule_groups(&conn);
+    profile.hotspot_ap_interfaces = read_string_list_preferred(
+        &conn,
+        "shared_network_interfaces",
+        "hotspot_ap_interfaces",
+        "value",
+    )?;
     profile.blocked_interfaces = read_string_list(&conn, "blocked_interfaces", "value")?;
     let hotspot_settings = read_hotspot_settings(&conn)?;
     profile.mac_filter = hotspot_settings.mac_filter;
     profile.mac_mode = hotspot_settings.mac_mode;
-    profile.macs_list = read_string_list(&conn, "hotspot_macs", "value")?;
+    profile.macs_list = read_string_list_preferred(&conn, "shared_network_macs", "hotspot_macs", "value")?;
     profile.intranet_cidrs4 = read_string_list(&conn, "intranet_ipv4_cidrs", "value")?;
     profile.intranet_cidrs6 = read_string_list(&conn, "intranet_ipv6_cidrs", "value")?;
     Ok(profile)

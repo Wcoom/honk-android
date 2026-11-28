@@ -1,0 +1,25 @@
+{
+  "unit": "src/api/rings.ts",
+  "files": 1,
+  "fingerprint": "08b23f18d87bcc0f",
+  "cases": 25,
+  "cases_hash": "2b9380a3573ca4e3",
+  "coverage": {
+    "lines": 87,
+    "reached": 43,
+    "files": [
+      {
+        "file": "src/api/rings.ts",
+        "lines": 53,
+        "reached": 20,
+        "missed": "19-27, 31-45, 50-58"
+      },
+      {
+        "file": "src/api/serverClock.ts",
+        "lines": 34,
+        "reached": 23,
+        "missed": "18-24, 34-35, 38-39"
+      }
+    ]
+  }
+}

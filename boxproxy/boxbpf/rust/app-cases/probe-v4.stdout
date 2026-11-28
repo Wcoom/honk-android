@@ -1,0 +1,5 @@
+supported=0
+message=eBPF xt_bpf unavailable
+lpm_ipv4=0
+program_ipv4=0
+pin_ipv4=0

@@ -1,0 +1,19 @@
+# Pure-Rust workspace & Android shell build outputs (local ignore; preserves root .gitignore)
+target/
+**/target/
+.gradle/
+**/.gradle/
+build/
+**/build/
+local.properties
+**/local.properties
+**/jniLibs/
+**/assets/boxctl/arm64-v8a/boxctl
+**/assets/boxctl/arm64-v8a/boxbpf
+dist/
+**/dist/
+pkg/
+**/pkg/
+*.apk
+*.so
+*.wasm

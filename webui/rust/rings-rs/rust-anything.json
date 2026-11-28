@@ -1,0 +1,49 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "src/api/rings.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "rings-rs",
+  "exports": [
+    {
+      "name": "mean",
+      "file": "src/api/rings.ts",
+      "line": 13,
+      "params": [
+        {
+          "name": "values",
+          "ts_type": "Array<number | null>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "bucket",
+      "file": "src/api/rings.ts",
+      "line": 18,
+      "reason": "uses `Fold`, which has function members"
+    },
+    {
+      "name": "append",
+      "file": "src/api/rings.ts",
+      "line": 30,
+      "reason": "uses `Fold`, which has function members"
+    },
+    {
+      "name": "window",
+      "file": "src/api/rings.ts",
+      "line": 49,
+      "reason": "uses `Fold`, which has function members"
+    }
+  ]
+}

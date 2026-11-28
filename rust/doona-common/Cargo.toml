@@ -1,0 +1,37 @@
+[package]
+name = "doona-common"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Shared pure-Rust Native API models, HTTP/SSE client, i18n catalogs, formatters, SVG chart paths, and palettes for Doona and Doona Lite WASM"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.130"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "AbortController",
+    "AbortSignal",
+    "Document",
+    "Element",
+    "Headers",
+    "History",
+    "HtmlElement",
+    "Location",
+    "MediaQueryList",
+    "Navigator",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "Request",
+    "RequestCache",
+    "RequestInit",
+    "Response",
+    "Storage",
+    "Window",
+] }
+
+[workspace]

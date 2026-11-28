@@ -1,0 +1,19 @@
+{
+  "unit": "src/api/hash.ts",
+  "files": 1,
+  "fingerprint": "5cf6eb5803bddaaa",
+  "cases": 57,
+  "cases_hash": "ea4642f5f33a4b68",
+  "coverage": {
+    "lines": 69,
+    "reached": 62,
+    "files": [
+      {
+        "file": "src/api/hash.ts",
+        "lines": 69,
+        "reached": 62,
+        "missed": "65-71"
+      }
+    ]
+  }
+}

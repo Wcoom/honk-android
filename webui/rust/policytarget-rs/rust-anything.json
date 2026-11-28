@@ -1,0 +1,54 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "src/features/shared/policyTarget.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "policytarget-rs",
+  "exports": [
+    {
+      "name": "findPolicyHub",
+      "file": "src/features/shared/policyTarget.ts",
+      "line": 16,
+      "params": [
+        {
+          "name": "groups",
+          "ts_type": "readonly components['schemas']['components['schemas']['components['schemas']['Schema['GroupSummary']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "fallbackName",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "components['schemas']['components['schemas']['components['schemas']['Schema['GroupSummary']']']'] | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "resolvePolicyState",
+      "file": "src/features/shared/policyTarget.ts",
+      "line": 62,
+      "params": [
+        {
+          "name": "arg0",
+          "ts_type": "{\n  current: ({mode: 'rule'} | {mode: 'direct'} | {mode: 'global'; target: string});\n  groups: readonly components['schemas']['components['schemas']['components['schemas']['Schema['GroupSummary']']']'][];\n  hub: components['schemas']['components['schemas']['components['schemas']['Schema['GroupSummary']']']'] | null;\n  hubDetail?: Omit<components['schemas']['Omit<components['schemas']['Omit<components['schemas']['Omit<Schema['Group'], 'config'> & {config: GroupConfig}'], 'config'> & {config: {[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'][K]}};\n  ruleFallback: string;\n  savedTarget: string;\n}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({\n  hubId: string | null;\n  hubMembers: Array<{id: string; name: string}>;\n  options: Array<{id: string; label: string}>;\n  activeTarget: string;\n  usesHub: boolean;\n})",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

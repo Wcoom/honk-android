@@ -1,0 +1,16 @@
+[package]
+name = "boxproxy-app"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "boxproxy_app"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+boxproxy-engine = { path = "../boxproxy-engine" }
+boxproxy-schema = { path = "../boxproxy-schema" }
+boxproxy-store = { path = "../boxproxy-store" }
+boxproxy-tools = { path = "../boxproxy-tools" }
+jni = "0.21"
+serde_json.workspace = true

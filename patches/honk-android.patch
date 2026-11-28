@@ -7427,3 +7427,28 @@ index 6a5878c..bd4fe61 100644
  fn v4(d: u8) -> IpAddr {
      IpAddr::V4(Ipv4Addr::new(192, 0, 2, d))
  }
+diff --git a/crates/honk-core/build.rs b/crates/honk-core/build.rs
+index 64e41d3..e20349b 100644
+--- a/crates/honk-core/build.rs
++++ b/crates/honk-core/build.rs
+@@ -220,7 +220,7 @@ struct Compressed {
+ fn encode(file: &std::path::Path) -> anyhow::Result<Option<Compressed>> {
+     use std::io::Write;
+ 
+-    const TEXT: &[&str] = &["css", "html", "js", "json", "svg", "txt", "webmanifest"];
++    const TEXT: &[&str] = &["css", "html", "js", "json", "svg", "txt", "wasm", "webmanifest"];
+     if !file
+         .extension()
+         .and_then(|extension| extension.to_str())
+diff --git a/crates/honk-core/src/native_api/ui.rs b/crates/honk-core/src/native_api/ui.rs
+index e89f78b..1dfe54c 100644
+--- a/crates/honk-core/src/native_api/ui.rs
++++ b/crates/honk-core/src/native_api/ui.rs
+@@ -334,6 +334,7 @@ fn embedded_response(
+         "css" => "text/css",
+         "svg" => "image/svg+xml",
+         "json" => "application/json",
++        "wasm" => "application/wasm",
+         "webmanifest" => "application/manifest+json",
+         "png" => "image/png",
+         "webp" => "image/webp",

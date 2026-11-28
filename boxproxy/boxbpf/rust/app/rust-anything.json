@@ -1,0 +1,28 @@
+{
+  "schema": "rust-anything/front-door@1",
+  "name": "boxbpf",
+  "commands": [
+    "config-check"
+  ],
+  "units": [
+    {
+      "name": "config",
+      "crate": "config-rs",
+      "path": "../config-rs",
+      "commands": [
+        "config-check"
+      ],
+      "switch": "RUST_ANYTHING_UNIT_CONFIG"
+    },
+    {
+      "name": "loader",
+      "crate": "loader-rs",
+      "path": "../loader-rs",
+      "commands": [
+        "boxbpf"
+      ],
+      "switch": "RUST_ANYTHING_UNIT_LOADER"
+    }
+  ],
+  "lifted": true
+}

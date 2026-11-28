@@ -1,0 +1,14 @@
+# rust-anything & Cargo build outputs
+target/
+**/target/
+.rust-anything/
+**/.rust-anything/
+cases.jsonl
+**/cases.jsonl
+test-inputs.jsonl
+**/test-inputs.jsonl
+record-inputs.json
+**/record-inputs.json
+*.a
+*.so
+*.o

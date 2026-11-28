@@ -1,0 +1,20 @@
+profile = { release.lto = true, release.codegen-units = 1 }
+dev-dependencies = { trycmd = "1" }
+[package]
+name = "boxbpf"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "`boxbpf` in Rust, lifted by rust-anything from its front door"
+rust-version = "1.97"
+
+[[bin]]
+name = "boxbpf"
+path = "src/main.rs"
+
+[dependencies]
+clap = "4"
+config-rs = { path = "../config-rs" }
+loader-rs = { path = "../loader-rs" }
+
+[workspace]

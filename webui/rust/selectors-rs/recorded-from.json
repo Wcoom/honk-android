@@ -1,0 +1,73 @@
+{
+  "unit": "src/api/selectors.ts",
+  "files": 1,
+  "fingerprint": "5c5252009a124e2e",
+  "cases": 1086,
+  "cases_hash": "752150bf8a632222",
+  "coverage": {
+    "lines": 790,
+    "reached": 542,
+    "files": [
+      {
+        "file": "src/api/selectors.ts",
+        "lines": 315,
+        "reached": 253,
+        "missed": "26-27, 30-31, 82, 86-90, 101-105, 158-159, 164-166, 169-173, 244-248, 251-282"
+      },
+      {
+        "file": "src/api/storage.ts",
+        "lines": 44,
+        "reached": 44,
+        "missed": ""
+      },
+      {
+        "file": "src/api/u64.ts",
+        "lines": 34,
+        "reached": 9,
+        "missed": "5-10, 12-16, 20-27, 31-36"
+      },
+      {
+        "file": "src/dae/vocab.ts",
+        "lines": 87,
+        "reached": 81,
+        "missed": "64-69"
+      },
+      {
+        "file": "src/fonts.ts",
+        "lines": 29,
+        "reached": 17,
+        "missed": "9-12, 22-29"
+      },
+      {
+        "file": "src/i18n/direction.ts",
+        "lines": 22,
+        "reached": 11,
+        "missed": "13-21, 25-26"
+      },
+      {
+        "file": "src/i18n/enum.ts",
+        "lines": 4,
+        "reached": 4,
+        "missed": ""
+      },
+      {
+        "file": "src/i18n/index.ts",
+        "lines": 199,
+        "reached": 80,
+        "missed": "28-29, 31-39, 47-50, 56-71, 79-94, 98-116, 120-129, 133-134, 136-137, 148-153, 158-161, 164-178, 184-190, 194-195, 199-203"
+      },
+      {
+        "file": "src/i18n/languages.ts",
+        "lines": 53,
+        "reached": 40,
+        "missed": "39-40, 46-56"
+      },
+      {
+        "file": "src/i18n/stages.ts",
+        "lines": 3,
+        "reached": 3,
+        "missed": ""
+      }
+    ]
+  }
+}

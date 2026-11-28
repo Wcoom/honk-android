@@ -1,0 +1,114 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "apps/lite/src/groupHealth.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "grouphealth-rs",
+  "exports": [
+    {
+      "name": "memberName",
+      "file": "apps/lite/src/groupHealth.ts",
+      "line": 8,
+      "params": [
+        {
+          "name": "group",
+          "ts_type": "Omit<components['schemas']['Omit<components['schemas']['Omit<components['schemas']['Omit<Schema['Group'], 'config'> & {config: GroupConfig}'], 'config'> & {config: {[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'][K]}}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "id",
+          "ts_type": "string | undefined | null",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "unknown",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "healthFallback",
+      "file": "apps/lite/src/groupHealth.ts",
+      "line": 12,
+      "params": [
+        {
+          "name": "nodes",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "groups",
+          "ts_type": "Omit<components['schemas']['Omit<components['schemas']['Omit<components['schemas']['Omit<Schema['Group'], 'config'> & {config: GroupConfig}'], 'config'> & {config: {[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'][K]}}[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "ReturnType<typeof selectionHealth>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "observedMembers",
+      "file": "apps/lite/src/groupHealth.ts",
+      "line": 23,
+      "params": [
+        {
+          "name": "group",
+          "ts_type": "Omit<components['schemas']['Omit<components['schemas']['Omit<components['schemas']['Omit<Schema['Group'], 'config'> & {config: GroupConfig}'], 'config'> & {config: {[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'][K]}}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "fallback",
+          "ts_type": "ReturnType<typeof selectionHealth>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "groupStatus",
+      "file": "apps/lite/src/groupHealth.ts",
+      "line": 26,
+      "params": [
+        {
+          "name": "group",
+          "ts_type": "Omit<components['schemas']['Omit<components['schemas']['Omit<components['schemas']['Omit<Schema['Group'], 'config'> & {config: GroupConfig}'], 'config'> & {config: {[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'][K]}}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "fallback",
+          "ts_type": "ReturnType<typeof selectionHealth>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{status: ('healthy' | 'warning' | 'unavailable' | 'unknown'); latency: number | null}",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

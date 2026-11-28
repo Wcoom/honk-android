@@ -1,0 +1,19 @@
+{
+  "unit": "apps/lite/src/fetchFailure.ts",
+  "files": 1,
+  "fingerprint": "cb78f9cfc50343ac",
+  "cases": 56,
+  "cases_hash": "caa17be68528af0b",
+  "coverage": {
+    "lines": 21,
+    "reached": 21,
+    "files": [
+      {
+        "file": "apps/lite/src/fetchFailure.ts",
+        "lines": 21,
+        "reached": 21,
+        "missed": ""
+      }
+    ]
+  }
+}

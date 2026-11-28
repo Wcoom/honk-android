@@ -1,0 +1,90 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "apps/lite/src/resourceDraft.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "resourcedraft-rs",
+  "exports": [
+    {
+      "name": "draftResources",
+      "file": "apps/lite/src/resourceDraft.ts",
+      "line": 9,
+      "params": [
+        {
+          "name": "content",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "kind",
+          "ts_type": "('node' | 'subscription')",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "changeResource",
+      "file": "apps/lite/src/resourceDraft.ts",
+      "line": 17,
+      "params": [
+        {
+          "name": "content",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "others",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "kind",
+          "ts_type": "('node' | 'subscription')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "action",
+          "ts_type": "('form' | 'text' | 'duplicate' | 'delete')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "original",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

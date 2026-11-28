@@ -1,0 +1,168 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "apps/lite/src/describe.ts",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "describe-rs",
+  "exports": [
+    {
+      "name": "describeGroupFilter",
+      "file": "apps/lite/src/describe.ts",
+      "line": 26,
+      "params": [
+        {
+          "name": "filter",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{key: MessageKey; values?: Record<string, (string | {key: MessageKey; values?: Record<string, (string | Phrase | PhraseList | PhraseParts | {regions: string[]})>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: (string | Phrase | PhraseList | PhraseParts | {regions: string[]})[]; join: 'and' | 'sep'}) | {regions: string[]})>} | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "describeGroupFilters",
+      "file": "apps/lite/src/describe.ts",
+      "line": 108,
+      "params": [
+        {
+          "name": "filters",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{key: MessageKey; values?: Record<string, (string | {key: MessageKey; values?: Record<string, (string | Phrase | PhraseList | PhraseParts | {regions: string[]})>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: (string | Phrase | PhraseList | PhraseParts | {regions: string[]})[]; join: 'and' | 'sep'}) | {regions: string[]})>}[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "policyKey",
+      "file": "apps/lite/src/describe.ts",
+      "line": 135,
+      "params": [
+        {
+          "name": "keyword",
+          "ts_type": "string | null | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "MessageKey",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "describeCondition",
+      "file": "apps/lite/src/describe.ts",
+      "line": 193,
+      "params": [
+        {
+          "name": "condition",
+          "ts_type": "{kind: string; value: string; negate: boolean}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{key: MessageKey; values?: Record<string, (string | {key: MessageKey; values?: Record<string, (string | Phrase | PhraseList | PhraseParts | {regions: string[]})>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: (string | Phrase | PhraseList | PhraseParts | {regions: string[]})[]; join: 'and' | 'sep'}) | {regions: string[]})>} | ({parts: (string | {key: MessageKey; values?: Record<string, (string | Phrase | PhraseList | PhraseParts | {regions: string[]})>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: (string | Phrase | PhraseList | PhraseParts | {regions: string[]})[]; join: 'and' | 'sep'}) | {regions: string[]})[]; join: 'and' | 'sep'})",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "describeTarget",
+      "file": "apps/lite/src/describe.ts",
+      "line": 204,
+      "params": [
+        {
+          "name": "target",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "(string | {key: MessageKey; values?: Record<string, (string | {key: MessageKey; values?: Record<string, PhraseValue>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: PhraseValue[]; join: 'and' | 'sep'}) | {regions: string[]})>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: (string | {key: MessageKey; values?: Record<string, PhraseValue>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: PhraseValue[]; join: 'and' | 'sep'}) | {regions: string[]})[]; join: 'and' | 'sep'}) | {regions: string[]})",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "describeRule",
+      "file": "apps/lite/src/describe.ts",
+      "line": 213,
+      "params": [
+        {
+          "name": "conditions",
+          "ts_type": "{kind: string; value: string; negate: boolean}[] | null",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "target",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{key: MessageKey; values?: Record<string, (string | {key: MessageKey; values?: Record<string, (string | Phrase | PhraseList | PhraseParts | {regions: string[]})>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: (string | Phrase | PhraseList | PhraseParts | {regions: string[]})[]; join: 'and' | 'sep'}) | {regions: string[]})>}",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "phraseText",
+      "file": "apps/lite/src/describe.ts",
+      "line": 223,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "(string | {key: MessageKey; values?: Record<string, (string | {key: MessageKey; values?: Record<string, PhraseValue>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: PhraseValue[]; join: 'and' | 'sep'}) | {regions: string[]})>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: (string | {key: MessageKey; values?: Record<string, PhraseValue>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: PhraseValue[]; join: 'and' | 'sep'}) | {regions: string[]})[]; join: 'and' | 'sep'}) | {regions: string[]})",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "t",
+          "ts_type": "{[K in keyof typeof en]: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "describeGroupChanges",
+      "file": "apps/lite/src/describe.ts",
+      "line": 246,
+      "params": [
+        {
+          "name": "changes",
+          "ts_type": "(| {kind: 'added'; name: string; filters: string[]}\n  | {kind: 'removed'; name: string}\n  | {kind: 'renamed'; before: string; after: string}\n  | {kind: 'policy'; name: string; policy: string | null}\n  | {kind: 'members'; name: string; added: string[]; removed: string[]}\n  | {kind: 'changed'; name: string}\n  | {kind: 'other'})[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{key: MessageKey; values?: Record<string, (string | {key: MessageKey; values?: Record<string, (string | Phrase | PhraseList | PhraseParts | {regions: string[]})>} | ({items: string[]; join: 'or' | 'sep'; quote?: boolean}) | ({parts: (string | Phrase | PhraseList | PhraseParts | {regions: string[]})[]; join: 'and' | 'sep'}) | {regions: string[]})>}[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

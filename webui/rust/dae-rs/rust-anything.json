@@ -1,0 +1,3083 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/wcoom/桌面/oplus13/honk-android/webui",
+  "unit": "src/dae/",
+  "language": "ts",
+  "kind": "wasm",
+  "crate_name": "dae-rs",
+  "exports": [
+    {
+      "name": "serializeConditions",
+      "file": "src/dae/conditions.ts",
+      "line": 6,
+      "params": [
+        {
+          "name": "rows",
+          "ts_type": "readonly {kind: (('domain' | 'domainSuffix' | 'domainKeyword' | 'geosite' | 'dip' | 'geoip' | 'dport' | 'sport' | 'pname' | 'l4proto' | 'sip' | 'mac') | ('qnameSuffix' | 'qnameFull' | 'qnameKeyword' | 'qnameGeosite' | 'qtype' | 'sip' | 'upstream' | 'answerIp' | 'answerGeoip')); value: string; negate: boolean}[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseConditions",
+      "file": "src/dae/conditions.ts",
+      "line": 13,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "kinds",
+          "ts_type": "readonly (('domain' | 'domainSuffix' | 'domainKeyword' | 'geosite' | 'dip' | 'geoip' | 'dport' | 'sport' | 'pname' | 'l4proto' | 'sip' | 'mac') | ('qnameSuffix' | 'qnameFull' | 'qnameKeyword' | 'qnameGeosite' | 'qtype' | 'sip' | 'upstream' | 'answerIp' | 'answerGeoip'))[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{kind: (('domain' | 'domainSuffix' | 'domainKeyword' | 'geosite' | 'dip' | 'geoip' | 'dport' | 'sport' | 'pname' | 'l4proto' | 'sip' | 'mac') | ('qnameSuffix' | 'qnameFull' | 'qnameKeyword' | 'qnameGeosite' | 'qtype' | 'sip' | 'upstream' | 'answerIp' | 'answerGeoip')); value: string; negate: boolean}[] | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "flagKey",
+      "file": "src/dae/flags.ts",
+      "line": 6,
+      "params": [
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "validFlagName",
+      "file": "src/dae/flags.ts",
+      "line": 7,
+      "params": [
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "hasEmbeddedFlag",
+      "file": "src/dae/flags.ts",
+      "line": 8,
+      "params": [
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "validFlagChoice",
+      "file": "src/dae/flags.ts",
+      "line": 9,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "value is string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "flagChoices",
+      "file": "src/dae/flags.ts",
+      "line": 15,
+      "params": [
+        {
+          "name": "locale",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{id: string; label: string; flag: string; keywords: string}[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "matchPreset",
+      "file": "src/dae/geodata.ts",
+      "line": 20,
+      "params": [
+        {
+          "name": "urls",
+          "ts_type": "Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], string[]>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({\n  id: ('metacubex' | 'metacubex-lite' | 'loyalsoldier');\n  urls: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], string[]>;\n  mirrors: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], string[]>;\n  sizes: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], number>;\n  categories: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], readonly string[]> | null;\n}) | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "missingCategories",
+      "file": "src/dae/geodata.ts",
+      "line": 29,
+      "params": [
+        {
+          "name": "preset",
+          "ts_type": "({\n  id: ('metacubex' | 'metacubex-lite' | 'loyalsoldier');\n  urls: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], string[]>;\n  mirrors: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], string[]>;\n  sizes: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], number>;\n  categories: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], readonly string[]> | null;\n}) | null",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "required",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['GeoData']']']']['required_codes'] | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Partial<Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], string[]>> | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "geodataPreset",
+      "file": "src/dae/geodata.ts",
+      "line": 103,
+      "params": [
+        {
+          "name": "id",
+          "ts_type": "('metacubex' | 'metacubex-lite' | 'loyalsoldier')",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({\n  id: ('metacubex' | 'metacubex-lite' | 'loyalsoldier');\n  urls: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], string[]>;\n  mirrors: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], string[]>;\n  sizes: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], number>;\n  categories: Record<components['schemas']['components['schemas']['Schema['GeoAssetKind']']'], readonly string[]> | null;\n})",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "validGeodataUrl",
+      "file": "src/dae/geodata.ts",
+      "line": 109,
+      "params": [
+        {
+          "name": "url",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "conditionFamily",
+      "file": "src/dae/groupConditions.ts",
+      "line": 7,
+      "params": [
+        {
+          "name": "kind",
+          "ts_type": "(typeof groupConditionKinds)[number]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "newGroupCondition",
+      "file": "src/dae/groupConditions.ts",
+      "line": 19,
+      "params": [],
+      "returns": "{id: number; kind: (typeof groupConditionKinds)[number]; value: string} & {negate: boolean; alternatives?: {id: number; kind: (typeof groupConditionKinds)[number]; value: string}[]}",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "conditionValues",
+      "file": "src/dae/groupConditions.ts",
+      "line": 21,
+      "params": [
+        {
+          "name": "values",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseConditionValues",
+      "file": "src/dae/groupConditions.ts",
+      "line": 22,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[] | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseGroupConditions",
+      "file": "src/dae/groupConditions.ts",
+      "line": 51,
+      "params": [
+        {
+          "name": "source",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{id: number; kind: (typeof groupConditionKinds)[number]; value: string} & {negate: boolean; alternatives?: {id: number; kind: (typeof groupConditionKinds)[number]; value: string}[]}[] | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "serializeGroupConditions",
+      "file": "src/dae/groupConditions.ts",
+      "line": 119,
+      "params": [
+        {
+          "name": "rows",
+          "ts_type": "{id: number; kind: (typeof groupConditionKinds)[number]; value: string} & {negate: boolean; alternatives?: {id: number; kind: (typeof groupConditionKinds)[number]; value: string}[]}[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "groupFilterDraft",
+      "file": "src/dae/groupConditions.ts",
+      "line": 145,
+      "params": [
+        {
+          "name": "source",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "advanced",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "({id: number; source: string; initial: string; rows: {id: number; kind: (typeof groupConditionKinds)[number]; value: string} & {negate: boolean; alternatives?: {id: number; kind: (typeof groupConditionKinds)[number]; value: string}[]}[] | null; advanced: boolean})",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "groupFilterText",
+      "file": "src/dae/groupConditions.ts",
+      "line": 149,
+      "params": [
+        {
+          "name": "filter",
+          "ts_type": "({id: number; source: string; initial: string; rows: {id: number; kind: (typeof groupConditionKinds)[number]; value: string} & {negate: boolean; alternatives?: {id: number; kind: (typeof groupConditionKinds)[number]; value: string}[]}[] | null; advanced: boolean})",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "groupFilterTexts",
+      "file": "src/dae/groupConditions.ts",
+      "line": 152,
+      "params": [
+        {
+          "name": "filters",
+          "ts_type": "({id: number; source: string; initial: string; rows: {id: number; kind: (typeof groupConditionKinds)[number]; value: string} & {negate: boolean; alternatives?: {id: number; kind: (typeof groupConditionKinds)[number]; value: string}[]}[] | null; advanced: boolean})[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "reconcileGroupFilters",
+      "file": "src/dae/groupConditions.ts",
+      "line": 154,
+      "params": [
+        {
+          "name": "previous",
+          "ts_type": "({id: number; source: string; initial: string; rows: {id: number; kind: (typeof groupConditionKinds)[number]; value: string} & {negate: boolean; alternatives?: {id: number; kind: (typeof groupConditionKinds)[number]; value: string}[]}[] | null; advanced: boolean})[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "texts",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({id: number; source: string; initial: string; rows: {id: number; kind: (typeof groupConditionKinds)[number]; value: string} & {negate: boolean; alternatives?: {id: number; kind: (typeof groupConditionKinds)[number]; value: string}[]}[] | null; advanced: boolean})[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "newGroupFilter",
+      "file": "src/dae/groupConditions.ts",
+      "line": 161,
+      "params": [],
+      "returns": "({id: number; source: string; initial: string; rows: {id: number; kind: (typeof groupConditionKinds)[number]; value: string} & {negate: boolean; alternatives?: {id: number; kind: (typeof groupConditionKinds)[number]; value: string}[]}[] | null; advanced: boolean})",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "groupAdmits",
+      "file": "src/dae/groupFilters.ts",
+      "line": 59,
+      "params": [
+        {
+          "name": "filters",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "node",
+          "ts_type": "({name: string; subscription_tag: string | null})",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "readGroupEntries",
+      "file": "src/dae/groups.ts",
+      "line": 18,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({\n  name: string;\n  // The header as written, quotes included: honk names the group by this text, so `->` must repeat it verbatim.\n  written: string;\n  filters: string[];\n  policy: string | null;\n  // `default`, `final` and `exit` as written, quotes included, or null when the entry sets none.\n  default: string | null;\n  final: string | null;\n  exit: string | null;\n  interrupt: string | null;\n  from: number;\n  to: number;\n})[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "quoteName",
+      "file": "src/dae/groups.ts",
+      "line": 43,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isWritableName",
+      "file": "src/dae/groups.ts",
+      "line": 44,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "groupNameProblem",
+      "file": "src/dae/groups.ts",
+      "line": 47,
+      "params": [
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "taken",
+          "ts_type": "ReadonlySet<string>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "'invalid' | 'taken' | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeGroupEntry",
+      "file": "src/dae/groups.ts",
+      "line": 60,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "next",
+          "ts_type": "({\n  filters: string[];\n  policy: string | null;\n  default?: string | null;\n  final?: string | null;\n  exit?: string | null;\n  interrupt?: string | null;\n})",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "nameText",
+      "file": "src/dae/groups.ts",
+      "line": 184,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string | null",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "written",
+          "ts_type": "string | null",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "nestedIn",
+      "file": "src/dae/groups.ts",
+      "line": 190,
+      "params": [
+        {
+          "name": "entry",
+          "ts_type": "Pick<({\n  name: string;\n  // The header as written, quotes included: honk names the group by this text, so `->` must repeat it verbatim.\n  written: string;\n  filters: string[];\n  policy: string | null;\n  // `default`, `final` and `exit` as written, quotes included, or null when the entry sets none.\n  default: string | null;\n  final: string | null;\n  exit: string | null;\n  interrupt: string | null;\n  from: number;\n  to: number;\n}), 'filters'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "exactTokens",
+      "file": "src/dae/groups.ts",
+      "line": 228,
+      "params": [
+        {
+          "name": "filter",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "call",
+          "ts_type": "('name' | 'subtag') | 'group'",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "namedIn",
+      "file": "src/dae/groups.ts",
+      "line": 242,
+      "params": [
+        {
+          "name": "entry",
+          "ts_type": "Pick<({\n  name: string;\n  // The header as written, quotes included: honk names the group by this text, so `->` must repeat it verbatim.\n  written: string;\n  filters: string[];\n  policy: string | null;\n  // `default`, `final` and `exit` as written, quotes included, or null when the entry sets none.\n  default: string | null;\n  final: string | null;\n  exit: string | null;\n  interrupt: string | null;\n  from: number;\n  to: number;\n}), 'filters'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "classifyFilters",
+      "file": "src/dae/groups.ts",
+      "line": 248,
+      "params": [
+        {
+          "name": "entry",
+          "ts_type": "Pick<({\n  name: string;\n  // The header as written, quotes included: honk names the group by this text, so `->` must repeat it verbatim.\n  written: string;\n  filters: string[];\n  policy: string | null;\n  // `default`, `final` and `exit` as written, quotes included, or null when the entry sets none.\n  default: string | null;\n  final: string | null;\n  exit: string | null;\n  interrupt: string | null;\n  from: number;\n  to: number;\n}), 'filters'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "describeFilters",
+      "file": "src/dae/groups.ts",
+      "line": 259,
+      "params": [
+        {
+          "name": "filters",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "citingGroups",
+      "file": "src/dae/groups.ts",
+      "line": 291,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "tag",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "namedInExpression",
+      "file": "src/dae/groups.ts",
+      "line": 295,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "tag",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "groupsNamingTag",
+      "file": "src/dae/groups.ts",
+      "line": 298,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "tag",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "addSubtagsToGroup",
+      "file": "src/dae/groups.ts",
+      "line": 335,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "group",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "tags",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "addNodesToGroup",
+      "file": "src/dae/groups.ts",
+      "line": 336,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "group",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "names",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "removeSubtagsFromGroup",
+      "file": "src/dae/groups.ts",
+      "line": 337,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "group",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "tags",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "splitTop",
+      "file": "src/dae/groups.ts",
+      "line": 339,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "separator",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "ruleCondition",
+      "file": "src/dae/groups.ts",
+      "line": 387,
+      "params": [
+        {
+          "name": "kind",
+          "ts_type": "(('domain' | 'domainSuffix' | 'domainKeyword' | 'geosite' | 'dip' | 'geoip' | 'dport' | 'sport' | 'pname' | 'l4proto' | 'sip' | 'mac') | ('qnameSuffix' | 'qnameFull' | 'qnameKeyword' | 'qnameGeosite' | 'qtype' | 'sip' | 'upstream' | 'answerIp' | 'answerGeoip'))",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "includePatterns",
+      "file": "src/dae/newSource.ts",
+      "line": 5,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isGlob",
+      "file": "src/dae/newSource.ts",
+      "line": 13,
+      "params": [
+        {
+          "name": "pattern",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "globMatch",
+      "file": "src/dae/newSource.ts",
+      "line": 16,
+      "params": [
+        {
+          "name": "pattern",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "includedBy",
+      "file": "src/dae/newSource.ts",
+      "line": 25,
+      "params": [
+        {
+          "name": "patterns",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "resolveIncludePath",
+      "file": "src/dae/newSource.ts",
+      "line": 29,
+      "params": [
+        {
+          "name": "base",
+          "ts_type": "string | undefined",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "includeDirectory",
+      "file": "src/dae/newSource.ts",
+      "line": 51,
+      "params": [
+        {
+          "name": "patterns",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "newSourcePathProblem",
+      "file": "src/dae/newSource.ts",
+      "line": 60,
+      "params": [
+        {
+          "name": "path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "'config.newSourceControl' | 'config.newSourceAbsolute' | 'config.newSourceSegments' | 'config.newSourceExtension' | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "namePatterns",
+      "file": "src/dae/newSource.ts",
+      "line": 74,
+      "params": [
+        {
+          "name": "patterns",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{pattern: string; prefix: string; suffix: string}[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "newSourceNameProblem",
+      "file": "src/dae/newSource.ts",
+      "line": 90,
+      "params": [
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "pattern",
+          "ts_type": "{pattern: string; prefix: string; suffix: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "sourceAt",
+      "file": "src/dae/newSource.ts",
+      "line": 98,
+      "params": [
+        {
+          "name": "sources",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']'] | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isProtocol",
+      "file": "src/dae/nodeForm.ts",
+      "line": 3,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "value is (typeof protocols)[number]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "protocolName",
+      "file": "src/dae/nodeForm.ts",
+      "line": 5,
+      "params": [
+        {
+          "name": "protocol",
+          "ts_type": "(typeof protocols)[number]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "emptyNode",
+      "file": "src/dae/nodeForm.ts",
+      "line": 11,
+      "params": [
+        {
+          "name": "protocol",
+          "ts_type": "(typeof protocols)[number]",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseNodeLink",
+      "file": "src/dae/nodeForm.ts",
+      "line": 52,
+      "params": [
+        {
+          "name": "original",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{document: {original: string; initial: Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}; query: string; json?: Record<string, unknown>; tail: string}; fields: Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}}",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "nodeLink",
+      "file": "src/dae/nodeForm.ts",
+      "line": 188,
+      "params": [
+        {
+          "name": "fields",
+          "ts_type": "Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "document",
+          "ts_type": "{original: string; initial: Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}; query: string; json?: Record<string, unknown>; tail: string}",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "securityOptions",
+      "file": "src/dae/nodeForm.ts",
+      "line": 264,
+      "params": [
+        {
+          "name": "protocol",
+          "ts_type": "(typeof protocols)[number]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "usesTls",
+      "file": "src/dae/nodeForm.ts",
+      "line": 267,
+      "params": [
+        {
+          "name": "f",
+          "ts_type": "Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "manualFields",
+      "file": "src/dae/nodeForm.ts",
+      "line": 273,
+      "params": [
+        {
+          "name": "f",
+          "ts_type": "Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{key: string; options?: string[]; flag?: string; required?: boolean; range?: [number, number]}[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "advancedFields",
+      "file": "src/dae/nodeForm.ts",
+      "line": 312,
+      "params": [
+        {
+          "name": "f",
+          "ts_type": "Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{key: string; options?: string[]; flag?: string; required?: boolean; range?: [number, number]}[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "settle",
+      "file": "src/dae/nodeForm.ts",
+      "line": 356,
+      "params": [
+        {
+          "name": "f",
+          "ts_type": "Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "manualInvalid",
+      "file": "src/dae/nodeForm.ts",
+      "line": 392,
+      "params": [
+        {
+          "name": "f",
+          "ts_type": "Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "manualLink",
+      "file": "src/dae/nodeForm.ts",
+      "line": 408,
+      "params": [
+        {
+          "name": "f",
+          "ts_type": "Record<string, string> & {protocol: (typeof protocols)[number]; host: string; port: string; username: string; password: string; name: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isNodeLink",
+      "file": "src/dae/nodes.ts",
+      "line": 16,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "readNodeEntries",
+      "file": "src/dae/nodes.ts",
+      "line": 19,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{name: string; link: string; from: number; to: number; line: number; nameTo: number; linkFrom: number}[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "readChainEntries",
+      "file": "src/dae/nodes.ts",
+      "line": 39,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{\n  name: string;\n  hops: Array<{name: string; from: number; to: number}>;\n  from: number;\n  to: number;\n  line: number;\n  nameTo: number;\n  hopsFrom: number;\n}[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "nodeReferenced",
+      "file": "src/dae/nodes.ts",
+      "line": 115,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "nodeReferrers",
+      "file": "src/dae/nodes.ts",
+      "line": 116,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({kind: 'group' | 'chain' | 'dns'; name: string})[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "removeChainEntry",
+      "file": "src/dae/nodes.ts",
+      "line": 130,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "original",
+          "ts_type": "{\n  name: string;\n  hops: Array<{name: string; from: number; to: number}>;\n  from: number;\n  to: number;\n  line: number;\n  nameTo: number;\n  hopsFrom: number;\n}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "chainHopCandidate",
+      "file": "src/dae/nodes.ts",
+      "line": 143,
+      "params": [
+        {
+          "name": "node",
+          "ts_type": "Pick<components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']'], 'protocol'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "tunnelDialable",
+      "file": "src/dae/nodes.ts",
+      "line": 145,
+      "params": [
+        {
+          "name": "node",
+          "ts_type": "Pick<components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']'], 'protocol' | 'stream_transport'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "chainHopProblem",
+      "file": "src/dae/nodes.ts",
+      "line": 147,
+      "params": [
+        {
+          "name": "nodes",
+          "ts_type": "readonly (Pick<components['schemas']['components['schemas']['Schema['Node']']'], 'name' | 'protocol' | 'stream_transport'>)[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "index",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "('invalid-chain-hop-reference' | 'ambiguous-chain-hop-reference' | 'unsupported-chain-hop') | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "chainUdpProblem",
+      "file": "src/dae/nodes.ts",
+      "line": 154,
+      "params": [
+        {
+          "name": "hops",
+          "ts_type": "ReadonlyArray<Pick<components['schemas']['components['schemas']['components['schemas']['Schema['Node']']']'], 'name' | 'protocol' | 'stream_transport'>>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeChainEntry",
+      "file": "src/dae/nodes.ts",
+      "line": 171,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "original",
+          "ts_type": "{\n  name: string;\n  hops: Array<{name: string; from: number; to: number}>;\n  from: number;\n  to: number;\n  line: number;\n  nameTo: number;\n  hopsFrom: number;\n}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "next",
+          "ts_type": "{name: string; hops: string[]}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "appendChainEntry",
+      "file": "src/dae/nodes.ts",
+      "line": 180,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "next",
+          "ts_type": "{name: string; hops: string[]}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeNodeEntry",
+      "file": "src/dae/nodes.ts",
+      "line": 196,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "original",
+          "ts_type": "{name: string; link: string; from: number; to: number; line: number; nameTo: number; linkFrom: number}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "next",
+          "ts_type": "{name: string; link: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "readRuleFallback",
+      "file": "src/dae/outboundMode.ts",
+      "line": 32,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeRuleFallback",
+      "file": "src/dae/outboundMode.ts",
+      "line": 44,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "target",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "readMode",
+      "file": "src/dae/outboundMode.ts",
+      "line": 78,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({mode: 'rule'} | {mode: 'direct'} | {mode: 'global'; target: string})",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeMode",
+      "file": "src/dae/outboundMode.ts",
+      "line": 84,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "next",
+          "ts_type": "({mode: 'rule'} | {mode: 'direct'} | {mode: 'global'; target: string})",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "sameMode",
+      "file": "src/dae/outboundMode.ts",
+      "line": 131,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "({mode: 'rule'} | {mode: 'direct'} | {mode: 'global'; target: string})",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "b",
+          "ts_type": "({mode: 'rule'} | {mode: 'direct'} | {mode: 'global'; target: string})",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "modeRuleLines",
+      "file": "src/dae/outboundMode.ts",
+      "line": 133,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "nodeProbeSupport",
+      "file": "src/dae/probes.ts",
+      "line": 21,
+      "params": [
+        {
+          "name": "protocol",
+          "ts_type": "string | null",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "supportsNodeProbe",
+      "file": "src/dae/probes.ts",
+      "line": 26,
+      "params": [
+        {
+          "name": "protocol",
+          "ts_type": "string | null",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "kind",
+          "ts_type": "Omit<components['schemas']['Omit<components['schemas']['Omit<components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}'], 'members'> & {members?: components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}']['members']}'], 'members'> & {members?: components['schemas']['Omit<components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}'], 'members'> & {members?: components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}']['members']}']['members']}'], 'members'> & {members?: components['schemas']['Omit<components['schemas']['Omit<components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}'], 'members'> & {members?: components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}']['members']}'], 'members'> & {members?: components['schemas']['Omit<components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}'], 'members'> & {members?: components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}']['members']}']['members']}']['members']}['kind']",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "transports",
+          "ts_type": "Omit<components['schemas']['Omit<components['schemas']['Omit<components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}'], 'members'> & {members?: components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}']['members']}'], 'members'> & {members?: components['schemas']['Omit<components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}'], 'members'> & {members?: components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}']['members']}']['members']}'], 'members'> & {members?: components['schemas']['Omit<components['schemas']['Omit<components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}'], 'members'> & {members?: components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}']['members']}'], 'members'> & {members?: components['schemas']['Omit<components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}'], 'members'> & {members?: components['schemas']['Omit<Schema['ProbeRequest'], 'members'> & {members?: Schema['ProbeRequest']['members']}']['members']}']['members']}']['members']}['transport']",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "regionFlag",
+      "file": "src/dae/regions.ts",
+      "line": 95,
+      "params": [
+        {
+          "name": "region",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "matchRegion",
+      "file": "src/dae/regions.ts",
+      "line": 159,
+      "params": [
+        {
+          "name": "name",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "sourceFor",
+      "file": "src/dae/ruleText.ts",
+      "line": 4,
+      "params": [
+        {
+          "name": "list",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "source",
+          "ts_type": "NonNullable<components['schemas']['NonNullable<components['schemas']['NonNullable<components['schemas']['NonNullable<Schema['RuleSource']>']>']>']> | null | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "ruleAnchor",
+      "file": "src/dae/ruleText.ts",
+      "line": 83,
+      "params": [
+        {
+          "name": "source",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']']",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "rule",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['RoutingRule']']']']",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "scan",
+          "ts_type": "ReturnType<typeof scanConfig>",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "{\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n} | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "dnsRuleTarget",
+      "file": "src/dae/ruleText.ts",
+      "line": 99,
+      "params": [
+        {
+          "name": "rule",
+          "ts_type": "Pick<components['schemas']['components['schemas']['components['schemas']['Schema['DnsRoutingRule']']']'], 'action' | 'upstream'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "dnsRuleAnchor",
+      "file": "src/dae/ruleText.ts",
+      "line": 107,
+      "params": [
+        {
+          "name": "source",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']']",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "rule",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['DnsRoutingRule']']']']",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "list",
+          "ts_type": "('request' | 'response')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "scan",
+          "ts_type": "ReturnType<typeof scanConfig>",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "{\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n} | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "dnsListEnd",
+      "file": "src/dae/ruleText.ts",
+      "line": 124,
+      "params": [
+        {
+          "name": "sources",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "list",
+          "ts_type": "('request' | 'response')",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{source: components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']']; anchor: {\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n}} | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "dnsUpstreams",
+      "file": "src/dae/ruleText.ts",
+      "line": 153,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "scan",
+          "ts_type": "unknown",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "Array<{name: string; address: string}>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "dnsUpstreamNames",
+      "file": "src/dae/ruleText.ts",
+      "line": 164,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "scan",
+          "ts_type": "unknown",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "ruleLine",
+      "file": "src/dae/ruleText.ts",
+      "line": 166,
+      "params": [
+        {
+          "name": "condition",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "outbound",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "must",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "addRule",
+      "file": "src/dae/ruleText.ts",
+      "line": 168,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "anchor",
+          "ts_type": "{\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "condition",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "outbound",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "must",
+          "ts_type": "boolean",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "replaceRuleTarget",
+      "file": "src/dae/ruleText.ts",
+      "line": 179,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "anchor",
+          "ts_type": "{\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "outbound",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "must",
+          "ts_type": "boolean",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "removeRule",
+      "file": "src/dae/ruleText.ts",
+      "line": 187,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "anchor",
+          "ts_type": "{\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "replaceRule",
+      "file": "src/dae/ruleText.ts",
+      "line": 192,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "anchor",
+          "ts_type": "{\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "condition",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "outbound",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "must",
+          "ts_type": "boolean",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "addFallback",
+      "file": "src/dae/ruleText.ts",
+      "line": 205,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "anchor",
+          "ts_type": "{\n  from: number;\n  to: number;\n  indent: string;\n  text: string;\n  target?: {from: number; to: number; foldCase?: boolean};\n  condition?: {from: number; to: number};\n  open?: string;\n  close?: string;\n}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "target",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "numberSetting",
+      "file": "src/dae/settings.ts",
+      "line": 28,
+      "params": [
+        {
+          "name": "field",
+          "ts_type": "({\n  key: string;\n  label: keyof typeof en;\n  group: keyof typeof settingGroups;\n  type: 'boolean' | 'integer' | 'text' | 'list' | 'duration';\n  max?: string;\n  hexMax?: string;\n  bareItems?: boolean;\n  choices?: readonly string[];\n  units?: readonly string[];\n})",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "settingValue",
+      "file": "src/dae/settings.ts",
+      "line": 38,
+      "params": [
+        {
+          "name": "field",
+          "ts_type": "({\n  key: string;\n  label: keyof typeof en;\n  group: keyof typeof settingGroups;\n  type: 'boolean' | 'integer' | 'text' | 'list' | 'duration';\n  max?: string;\n  hexMax?: string;\n  bareItems?: boolean;\n  choices?: readonly string[];\n  units?: readonly string[];\n})",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "serializeSetting",
+      "file": "src/dae/settings.ts",
+      "line": 58,
+      "params": [
+        {
+          "name": "field",
+          "ts_type": "({\n  key: string;\n  label: keyof typeof en;\n  group: keyof typeof settingGroups;\n  type: 'boolean' | 'integer' | 'text' | 'list' | 'duration';\n  max?: string;\n  hexMax?: string;\n  bareItems?: boolean;\n  choices?: readonly string[];\n  units?: readonly string[];\n})",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeSettings",
+      "file": "src/dae/settings.ts",
+      "line": 88,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "section",
+          "ts_type": "{name: string; fields: readonly ({\n  key: string;\n  label: keyof typeof en;\n  group: keyof typeof settingGroups;\n  type: 'boolean' | 'integer' | 'text' | 'list' | 'duration';\n  max?: string;\n  hexMax?: string;\n  bareItems?: boolean;\n  choices?: readonly string[];\n  units?: readonly string[];\n})[]}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "index",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "patch",
+          "ts_type": "Record<string, string>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "holdsDns",
+      "file": "src/dae/setup.ts",
+      "line": 33,
+      "params": [
+        {
+          "name": "texts",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "holdsRouting",
+      "file": "src/dae/setup.ts",
+      "line": 37,
+      "params": [
+        {
+          "name": "texts",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "templateGroups",
+      "file": "src/dae/setup.ts",
+      "line": 51,
+      "params": [
+        {
+          "name": "rules",
+          "ts_type": "('global' | 'bypass' | 'gfw' | 'single' | 'services' | 'regions' | 'homebound')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "defined",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "allGroupNames",
+      "file": "src/dae/sources.ts",
+      "line": 18,
+      "params": [
+        {
+          "name": "sources",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "draft",
+          "ts_type": "{id: string; content: string}",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "allUpstreamNames",
+      "file": "src/dae/sources.ts",
+      "line": 20,
+      "params": [
+        {
+          "name": "sources",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "draft",
+          "ts_type": "{id: string; content: string}",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "redacted",
+      "file": "src/dae/sources.ts",
+      "line": 24,
+      "params": [
+        {
+          "name": "source",
+          "ts_type": "{path: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "fileName",
+      "file": "src/dae/sources.ts",
+      "line": 25,
+      "params": [
+        {
+          "name": "source",
+          "ts_type": "{id: string; kind: string; path: string}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "validationSources",
+      "file": "src/dae/sources.ts",
+      "line": 29,
+      "params": [
+        {
+          "name": "sources",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigSource']']']'][]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "replacement",
+          "ts_type": "{id: string; content: string}",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigValidationRequest']']']']['sources'] | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "restartSettings",
+      "file": "src/dae/sources.ts",
+      "line": 45,
+      "params": [
+        {
+          "name": "diagnostics",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigDiagnostic'] & {params?: Record<string, string>}'] & {params?: Record<string, string>}'] & {params?: Record<string, string>}'] & {params?: Record<string, string>}[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({key: string | null; sourceId: string; line: number | null})[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "restartRequired",
+      "file": "src/dae/sources.ts",
+      "line": 49,
+      "params": [
+        {
+          "name": "diagnostics",
+          "ts_type": "components['schemas']['components['schemas']['components['schemas']['Schema['ConfigDiagnostic'] & {params?: Record<string, string>}'] & {params?: Record<string, string>}'] & {params?: Record<string, string>}'] & {params?: Record<string, string>}[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "unwrittenRestartSettings",
+      "file": "src/dae/sources.ts",
+      "line": 55,
+      "params": [
+        {
+          "name": "settings",
+          "ts_type": "({key: string | null; sourceId: string; line: number | null})[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "sources",
+          "ts_type": "{content?: string | null}[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "completeSubscriptionUrl",
+      "file": "src/dae/subscriptions.ts",
+      "line": 16,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isSubscriptionUrl",
+      "file": "src/dae/subscriptions.ts",
+      "line": 26,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseInterval",
+      "file": "src/dae/subscriptions.ts",
+      "line": 61,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "urlHost",
+      "file": "src/dae/subscriptions.ts",
+      "line": 73,
+      "params": [
+        {
+          "name": "url",
+          "ts_type": "string | null",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "agentProblem",
+      "file": "src/dae/subscriptions.ts",
+      "line": 84,
+      "params": [
+        {
+          "name": "agent",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "written",
+          "ts_type": "boolean",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "keyof typeof en | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "readSubscriptionEntries",
+      "file": "src/dae/subscriptions.ts",
+      "line": 294,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({\n  tag: string;\n  url: string;\n  form: ('bare' | 'short' | 'agent' | 'block' | 'options');\n  naming: ('tag' | 'embedded' | 'host');\n  // What honk reads; null when unset, and for an interval or cache honk cannot read either.\n  ua: string | null;\n  interval: number | null;\n  cache: boolean | null;\n  // The download route as written: `routing`, `direct` or a group; the old block form may write it as\n  // `download_detour`.\n  route: string | null;\n  // Options as written, values quotes included; the agent form's User-Agent is listed as `ua`.\n  options: {name: string; value: string}[];\n  // The entry's own text, without a comment after it, and where its tag and its URL are written.\n  from: number;\n  to: number;\n  line: number;\n  tagAt: {from: number; to: number} | null;\n  urlAt: {from: number; to: number};\n})[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeSubscriptionEntry",
+      "file": "src/dae/subscriptions.ts",
+      "line": 328,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "tag",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "change",
+          "ts_type": "({tag?: string; url?: string; ua?: string | null; interval?: number | null; cache?: boolean | null; route?: string | null})",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "templateRules",
+      "file": "src/dae/templates.ts",
+      "line": 213,
+      "params": [
+        {
+          "name": "template",
+          "ts_type": "('global' | 'bypass' | 'gfw' | 'single' | 'services' | 'regions' | 'homebound')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "options",
+          "ts_type": "Partial<{blockAds: boolean; blockQuic: boolean; networkManagerDirect: boolean}>",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "detectTemplate",
+      "file": "src/dae/templates.ts",
+      "line": 258,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({blockAds: boolean; blockQuic: boolean; networkManagerDirect: boolean} & {template: ('global' | 'bypass' | 'gfw' | 'single' | 'services' | 'regions' | 'homebound'); group: string | null}) | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "routingOptions",
+      "file": "src/dae/templates.ts",
+      "line": 293,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{blockAds: boolean; blockQuic: boolean; networkManagerDirect: boolean} | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isPresetRouting",
+      "file": "src/dae/templates.ts",
+      "line": 320,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isBareName",
+      "file": "src/dae/text.ts",
+      "line": 4,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "quote",
+      "file": "src/dae/text.ts",
+      "line": 5,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isQuotable",
+      "file": "src/dae/text.ts",
+      "line": 10,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "scanConfig",
+      "file": "src/dae/text.ts",
+      "line": 33,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isFragment",
+      "file": "src/dae/text.ts",
+      "line": 109,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "unquote",
+      "file": "src/dae/text.ts",
+      "line": 123,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "uncomment",
+      "file": "src/dae/text.ts",
+      "line": 124,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "blockFields",
+      "file": "src/dae/text.ts",
+      "line": 130,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "block",
+          "ts_type": "{\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: TextBlock[];\n}[];\n}[];\n}[];\n}",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "tokens",
+          "ts_type": "({from: number; to: number; line: number; kind: 'text' | 'quoted' | 'comment' | 'symbol'; depth: number; parens: number})[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{name: string; from: number; to: number; valueFrom: number; valueTo: number; value: string}[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "blockBody",
+      "file": "src/dae/text.ts",
+      "line": 155,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "block",
+          "ts_type": "{\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: TextBlock[];\n}[];\n}[];\n}[];\n}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "blockEntries",
+      "file": "src/dae/text.ts",
+      "line": 165,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "block",
+          "ts_type": "{\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: TextBlock[];\n}[];\n}[];\n}[];\n}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Array<{from: number; to: number; block?: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: {\n  name: string;\n  from: number;\n  open: number;\n  close: number;\n  to: number;\n  line: number;\n  endLine: number;\n  depth: number;\n  children: TextBlock[];\n}[];\n}[];\n}[];\n}}>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "policyKind",
+      "file": "src/dae/vocab.ts",
+      "line": 63,
+      "params": [
+        {
+          "name": "native",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Omit<components['schemas']['Omit<components['schemas']['Omit<components['schemas']['Omit<Schema['Group'], 'config'> & {config: GroupConfig}'], 'config'> & {config: {[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}}'], 'config'> & {config: {[K in keyof components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'] as string extends K ? never : K]: components['schemas']['{[K in keyof Schema['GroupConfig'] as string extends K ? never : K]: Schema['GroupConfig'][K]}'][K]}'][K]}}['policy']['kind'] | undefined",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isBuiltinOutbound",
+      "file": "src/dae/vocab.ts",
+      "line": 87,
+      "params": [
+        {
+          "name": "name",
+          "ts_type": "string | null | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "name is (typeof builtinOutboundNames)[number]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "readXhttp",
+      "file": "src/dae/xhttp.ts",
+      "line": 101,
+      "params": [
+        {
+          "name": "link",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "({\n  mode: string;\n  path: string;\n  host: string;\n  headers: Array<[string, string]>;\n  xPaddingBytes: string;\n  noGRPCHeader: boolean;\n  scMaxEachPostBytes: string;\n  scMinPostsIntervalMs: string;\n  download: {address: string; port: string; serverName: string; path: string; host: string} | null;\n}) | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "duplicateXhttpHeaders",
+      "file": "src/dae/xhttp.ts",
+      "line": 106,
+      "params": [
+        {
+          "name": "headers",
+          "ts_type": "({\n  mode: string;\n  path: string;\n  host: string;\n  headers: Array<[string, string]>;\n  xPaddingBytes: string;\n  noGRPCHeader: boolean;\n  scMaxEachPostBytes: string;\n  scMinPostsIntervalMs: string;\n  download: {address: string; port: string; serverName: string; path: string; host: string} | null;\n})['headers']",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Set<number>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeXhttp",
+      "file": "src/dae/xhttp.ts",
+      "line": 118,
+      "params": [
+        {
+          "name": "link",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "change",
+          "ts_type": "(Partial<Omit<({\n  mode: string;\n  path: string;\n  host: string;\n  headers: Array<[string, string]>;\n  xPaddingBytes: string;\n  noGRPCHeader: boolean;\n  scMaxEachPostBytes: string;\n  scMinPostsIntervalMs: string;\n  download: {address: string; port: string; serverName: string; path: string; host: string} | null;\n}), 'download'>> & {download?: Partial<{address: string; port: string; serverName: string; path: string; host: string}> | null})",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "compileFilters",
+      "file": "src/dae/groupFilters.ts",
+      "line": 40,
+      "reason": "takes or returns a function"
+    },
+    {
+      "name": "includeCheck",
+      "file": "src/dae/newSource.ts",
+      "line": 43,
+      "reason": "takes or returns a function"
+    },
+    {
+      "name": "rustRegexToJs",
+      "file": "src/dae/rustRegex.ts",
+      "line": 103,
+      "reason": "takes or returns a RegExp"
+    },
+    {
+      "name": "writeTemplate",
+      "file": "src/dae/setup.ts",
+      "line": 83,
+      "reason": "takes or returns a function"
+    },
+    {
+      "name": "templateGroupLabel",
+      "file": "src/dae/templates.ts",
+      "line": 209,
+      "reason": "takes or returns a function"
+    }
+  ]
+}

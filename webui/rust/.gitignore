@@ -1,0 +1,14 @@
+# rust-anything wasm-bindgen logic crate build & recording caches
+target/
+**/target/
+pkg/
+**/pkg/
+.rust-anything/
+**/.rust-anything/
+cases.jsonl
+**/cases.jsonl
+test-inputs.jsonl
+**/test-inputs.jsonl
+record-inputs.json
+**/record-inputs.json
+*.wasm

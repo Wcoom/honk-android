@@ -11,6 +11,7 @@ panic = "abort"
 strip = true
 
 [dependencies]
+boxproxy-schema = { path = "../../rust/boxproxy/crates/boxproxy-schema" }
 clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.4.3"
 jsonc-parser = { version = "0.33.0", features = ["serde", "serde_json"] }

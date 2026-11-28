@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.1.0 (2026-11-28)
+
+### 全项目纯 Rust 化重构与 `BoxProxy Honk` 1:1 复刻
+- **`boxproxy/boxbpf` C → 纯 Rust 整应用重写**（[`boxproxy/boxbpf/rust/`](./boxproxy/boxbpf/rust/)）：
+  - 使用 `rust-anything` 完成 `config-rs`（152/152 `gate`）、`loader-rs`（313/313 `gate`）与整应用 `app lift`（13/13 `trycmd`，`0%` fallback，`No drift`），OnePlus 13 GKI 6.6.118 真机 A/B 实测 12 个 BPF 对象与 8 组 `bpftool map dump` 逐字节一致。
+- **内嵌 Doona WebUI（`/ui/` + `/ui/lite/`）纯 Rust WASM 重写**（[`webui/rust/`](./webui/rust/)、[`rust/doona-wasm/`](./rust/doona-wasm/)、[`rust/doona-lite-wasm/`](./rust/doona-lite-wasm/)）：
+  - 将 14 个核心 TypeScript 逻辑单元移植为纯 Rust `wasm-bindgen` crate（**12,469/12,493 = 99.81%**），基于 Leptos 0.8 CSR 重构完整标准版 12 页与 Lite 版 5 屏（保留「节点策略选择」规则分流联动、8 项内存指标与核心在线更新）。
+  - 扩展 `crates/honk-core/{build.rs,src/native_api/ui.rs}` 原生支持 `.wasm` MIME（`application/wasm`）与 Brotli/Gzip 预压缩，并同步更新 [`patches/honk-android.patch`](./patches/honk-android.patch)；静态内嵌纯 Rust WASM 后的 ARM64 `honk-core` 为 **`31.29 MB`**（较原 React/JS 版缩小 1.43 MB）。
+- **`boxctl` 统一升级至 `box.db` Schema v15**（[`rust/boxproxy/crates/boxproxy-schema/`](./rust/boxproxy/crates/boxproxy-schema/)、[`boxproxy/boxctl/`](./boxproxy/boxctl/)）：
+  - 抽离共享 `boxproxy-schema` crate，统一 `boxctl` 与客户端的 21 张 `box.db` v15 表，原生补齐 `meow` 核心、`network_rule_groups` 布尔规则组 AST 与 `shared_network_*`（35/35 单测 + `clippy -D warnings` 通过）。
+- **`BoxProxy Honk` 全 58 模块纯 Rust MVI 引擎 + 1:1 Miuix 前端复刻**（[`rust/boxproxy/`](./rust/boxproxy/)）：
+  - 8 个领域 Rust crate 编译为单一 ARM64 JNI 动态库 `libboxproxy_app.so`（28/28 单测，零告警，12 JNI 入口），完整承载 M01–M58 全量业务逻辑（含优先使用 Honk Native API `/api/v1/*`、持久 Root Shell 池、ZIP 原子备份回滚、9 源核心更新与 29 平台诊断）。
+  - 超薄 Jetpack Compose DEX 壳（正式切流包名 **`com.boxproxy.honk`**，版本 `26.11.28.v1.1.0` / `v216`）1:1 复刻原版 HyperOS Miuix 全部 4 大主标签页（首页 Hero/操作栏/延迟/WAN/网速/资源、面板 60 秒平滑双曲线波形/策略/订阅/连接、工具 7 组卡片、设置 5 组卡片）及全部设置子页（`基础代理配置`/`其他代理配置`/`主题设置`/`备份与恢复`/`通知`/`关于`/`延迟测速目标` + Android 15 真实高斯模糊 `PanelSheetActivity`）。
+  - R8 裁剪签名后 APK 体积降至 **`7.3 MB`**（较原版 `9.4 MB` 缩小 2.1 MB），OnePlus 13 真机全栈 A/B 实测冷启动 `235 ms`、`cn=204`/`foreign=204`、`honk.log` 0 `WARN`/`ERROR`、`logcat` 0 异常/崩溃；完整验收报告见 [`rust/EQUIVALENCE_REPORT.md`](./rust/EQUIVALENCE_REPORT.md)。
+- **新增纯 Rust 构建运维 CLI [`rust/xtask/`](./rust/xtask/)**：替代原 7 个 Shell/Python 运维脚本（`stackmap`、`build-boxbpf`、`build-webui` 等）。
+
 ## v1.0.10 (2026-11-27)
 
 ### 合并上游 `daeuniverse/honk` 主线至 `467cfa77`

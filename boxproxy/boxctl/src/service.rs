@@ -282,7 +282,7 @@ fn validate_core(config: &Config) -> Result<()> {
     );
 
     match config.bin_name.as_str() {
-        "mihomo" | "sing-box" | "xray" | "v2fly" | "hysteria" | "honk" => {}
+        "mihomo" | "meow" | "sing-box" | "xray" | "v2fly" | "hysteria" | "honk" => {}
         other => return Err(format!("unknown core: {other}")),
     }
 
