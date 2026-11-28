@@ -304,9 +304,10 @@ pub fn build_webui(repo_root: &Path, out_base: Option<&Path>) -> Result<(), Stri
         "doona_wasm",
         &tmp_dir.join("full"),
     )?;
-    let styles_root = repo_root.join("webui/src/ui/styles");
+    let full_assets_root = repo_root.join("rust/doona-wasm/assets");
+    let styles_root = full_assets_root.join("styles");
     let full_css_files = vec![
-        repo_root.join("webui/src/ui/flags.css"),
+        full_assets_root.join("flags.css"),
         styles_root.join("palettes/rose-pine.css"),
         styles_root.join("palettes/catppuccin.css"),
         styles_root.join("palettes/nord.css"),
@@ -346,7 +347,7 @@ pub fn build_webui(repo_root: &Path, out_base: Option<&Path>) -> Result<(), Stri
     let full_css = concat_css(&full_css_files)?;
     let mut full_css_assets: Vec<(String, PathBuf)> = vec![(
         "./assets/TwemojiCountryFlags.woff2".to_string(),
-        repo_root.join("webui/src/ui/assets/TwemojiCountryFlags.woff2"),
+        full_assets_root.join("fonts/TwemojiCountryFlags.woff2"),
     )];
     for sub in ["halloween", "qiangguo"] {
         let dir = styles_root.join("palettes").join(sub);
@@ -369,7 +370,7 @@ pub fn build_webui(repo_root: &Path, out_base: Option<&Path>) -> Result<(), Stri
         js_glue: &full_js,
         css_text: &full_css,
         css_assets: &full_css_assets,
-        public_dir: &repo_root.join("webui/public"),
+        public_dir: &full_assets_root.join("public"),
         has_manifest: true,
     })?;
 
@@ -379,11 +380,12 @@ pub fn build_webui(repo_root: &Path, out_base: Option<&Path>) -> Result<(), Stri
         "doona_lite_wasm",
         &tmp_dir.join("lite"),
     )?;
+    let lite_assets_root = repo_root.join("rust/doona-lite-wasm/assets");
     let lite_css_files = vec![
-        repo_root.join("webui/apps/lite/src/themes/site/site.css"),
-        repo_root.join("webui/apps/lite/src/themes/site/modeTokens.css"),
-        repo_root.join("webui/apps/lite/src/styles.css"),
-        repo_root.join("webui/apps/lite/src/ruleList.css"),
+        lite_assets_root.join("site.css"),
+        lite_assets_root.join("modeTokens.css"),
+        lite_assets_root.join("styles.css"),
+        lite_assets_root.join("ruleList.css"),
     ];
     let mut lite_css = concat_css(&lite_css_files)?;
     lite_css.push_str(LITE_LAYOUT_CSS);
@@ -395,7 +397,7 @@ pub fn build_webui(repo_root: &Path, out_base: Option<&Path>) -> Result<(), Stri
         js_glue: &lite_js,
         css_text: &lite_css,
         css_assets: &[],
-        public_dir: &repo_root.join("webui/apps/lite/public"),
+        public_dir: &lite_assets_root.join("public"),
         has_manifest: false,
     })?;
 

@@ -20,9 +20,9 @@ This skill enables an AI agent to end-to-end deploy, configure, migrate, verify,
 
 - `bin/honk-android-arm64` — Static `aarch64-unknown-linux-musl` `honk-core` binary built with `ebpf,rprx,clash-api,native-ui,jemalloc` (includes embedded Doona UI `c7f29e3`, dedicated leaf cgroup `/sys/fs/cgroup/honk` memory telemetry, `/api/v1/x-honk/core/update` self-updater, ARM64 `kprobe`/`kretprobe` UDP receive trace, full `BPF_PROG_QUERY` datapath hook verification, RFC 1035 case-insensitive DNS validation, and Android UDP bootstrap retry + fallback resolver).
 - `bin/boxctl-android-arm64` — Static `aarch64-unknown-linux-musl` `boxctl` supporting `honk` core, `ebpf` mode, `--store db`, `HONK_RECORD_ALWAYS=1`, dedicated `/honk` cgroup isolation, and `com.boxproxy.honk` home resolution.
-- `apk/BoxProxy-honk-arm64.apk` — Coexisting BoxProxy ARM64 APK (`v214 / 26.11.23.aa98568`, `package="com.boxproxy.honk"`, label `BoxProxy Honk`, tile `Box Honk`, built-in `Honk` updater under `工具 -> 更新核心`, boot script `/data/adb/service.d/boxproxy-honk.sh`, Home `WebUI` -> `http://127.0.0.1:9527/ui/`).
+- `apk/BoxProxy-honk-arm64.apk` — Coexisting pure-Rust MVI BoxProxy ARM64 APK (`v216 / 26.11.28.v1.1.0`, `package="com.boxproxy.honk"`, label `BoxProxy Honk`, tile `Box Honk`, built-in `Honk` updater under `工具 -> 更新核心`, boot script `/data/adb/service.d/boxproxy-honk.sh`, Home `WebUI` -> `http://127.0.0.1:9527/ui/`).
 - `config/config.example.dae` — Sanitized Android-ready configuration template.
-- `skill/honk-android/scripts/deploy_honk_android.sh` — Idempotent deployment helper script (defaults to `--pkg com.boxproxy.honk`).
+- `rust/xtask/` (`honk-xtask`) — Pure-Rust build & idempotent ADB deployment CLI (`cargo run --manifest-path rust/xtask/Cargo.toml -- deploy`, defaults to `--pkg com.boxproxy.honk`).
 - `skill/honk-android/references/troubleshooting.md` — Diagnostic cookbook and Android GKI 6.6 runtime reference.
 
 ---
@@ -84,10 +84,10 @@ EOF
 
 ### Phase 4: Deploy & Start `honk`
 
-If official `com.boxproxy.box` is currently running a proxy core, stop it cleanly first (`boxctl --db /data/user/0/com.boxproxy.box/files/box/box.db down || true`), then run the bundled helper script:
+If official `com.boxproxy.box` is currently running a proxy core, stop it cleanly first (`boxctl --db /data/user/0/com.boxproxy.box/files/box/box.db down || true`), then run the pure-Rust `honk-xtask` deployment CLI:
 
 ```bash
-bash skill/honk-android/scripts/deploy_honk_android.sh \
+cargo run --manifest-path rust/xtask/Cargo.toml -- deploy \
   --honk bin/honk-android-arm64 \
   --boxctl bin/boxctl-android-arm64 \
   --config /path/to/config.dae \

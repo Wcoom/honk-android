@@ -59,22 +59,6 @@ fn configure_musl_cross_env(cmd: &mut Command, root: &Path) {
     );
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
-    fs::create_dir_all(dst).map_err(|e| format!("mkdir {}: {e}", dst.display()))?;
-    for entry in fs::read_dir(src).map_err(|e| format!("readdir {}: {e}", src.display()))? {
-        let entry = entry.map_err(|e| format!("entry: {e}"))?;
-        let ty = entry.file_type().map_err(|e| format!("filetype: {e}"))?;
-        let target = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_recursive(&entry.path(), &target)?;
-        } else {
-            fs::copy(entry.path(), &target)
-                .map_err(|e| format!("copy {}: {e}", target.display()))?;
-        }
-    }
-    Ok(())
-}
-
 fn resolve_doona_dir(root: &Path, src: &Path) -> Result<Option<PathBuf>, String> {
     if let Ok(explicit) = env::var("HONK_DOONA_DIR")
         && !explicit.is_empty()
@@ -82,110 +66,14 @@ fn resolve_doona_dir(root: &Path, src: &Path) -> Result<Option<PathBuf>, String>
         return Ok(Some(PathBuf::from(explicit)));
     }
 
-    if env::var("FETCH_DOONA").ok().as_deref() == Some("1") {
-        let script = src.join("ci/fetch-doona.sh");
-        if script.is_file() {
-            let out = Command::new(&script)
-                .current_dir(src)
-                .output()
-                .map_err(|e| format!("fetch-doona: {e}"))?;
-            if out.status.success() {
-                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !p.is_empty() {
-                    return Ok(Some(PathBuf::from(p)));
-                }
-            }
-        }
+    let stage = src.join("target/doona-rust");
+    let stage_lite = src.join("target/doona-rust-lite");
+    let rebuild = env::var("REBUILD_WEBUI").ok().as_deref() == Some("1");
+    if rebuild || !stage.join("index.html").is_file() || !stage_lite.join("index.html").is_file() {
+        crate::webui::build_webui(root, Some(&stage))?;
     }
-
-    let webui_dir = root.join("webui");
-    if webui_dir.join("package.json").is_file() {
-        let home = home_dir();
-        let pnpm_bin = env::var_os("PATH")
-            .and_then(|paths| {
-                env::split_paths(&paths)
-                    .map(|p| p.join("pnpm"))
-                    .find(|p| p.is_file())
-            })
-            .or_else(|| {
-                let fallback = home.join(".local/bin/pnpm");
-                fallback.is_file().then_some(fallback)
-            });
-
-        if let Some(pnpm) = pnpm_bin {
-            if !webui_dir.join("node_modules").is_dir() {
-                let mut c = Command::new(&pnpm);
-                c.current_dir(&webui_dir)
-                    .args(["install", "--frozen-lockfile"]);
-                run_checked(&mut c, "pnpm install webui")?;
-            }
-            let lite_dir = webui_dir.join("apps/lite");
-            if !lite_dir.join("node_modules").is_dir() {
-                let mut c = Command::new(&pnpm);
-                c.current_dir(&lite_dir)
-                    .args(["install", "--frozen-lockfile"]);
-                run_checked(&mut c, "pnpm install webui lite")?;
-            }
-            let rebuild = env::var("REBUILD_WEBUI").ok().as_deref() == Some("1");
-            if rebuild
-                || !webui_dir.join("dist/index.html").is_file()
-                || !webui_dir.join("dist/.vite/bundled-packages.json").is_file()
-            {
-                let mut c = Command::new(&pnpm);
-                c.current_dir(&webui_dir).arg("build");
-                run_checked(&mut c, "pnpm build webui")?;
-            }
-            if rebuild
-                || !lite_dir.join("dist/index.html").is_file()
-                || !lite_dir.join("dist/.vite/bundled-packages.json").is_file()
-            {
-                let mut c = Command::new(&pnpm);
-                c.current_dir(&webui_dir)
-                    .args(["-C", &lite_dir.to_string_lossy(), "build"]);
-                run_checked(&mut c, "pnpm build webui lite")?;
-            }
-
-            let stage = src.join("target/doona-embedded");
-            for (dist_dir, out_dir) in [
-                (webui_dir.join("dist"), stage.clone()),
-                (
-                    lite_dir.join("dist"),
-                    src.join("target/doona-embedded-lite"),
-                ),
-            ] {
-                if out_dir.exists() {
-                    let _ = fs::remove_dir_all(&out_dir);
-                }
-                copy_dir_recursive(&dist_dir, &out_dir)?;
-                let _ = fs::remove_dir_all(out_dir.join("fonts"));
-                let _ = fs::remove_dir_all(out_dir.join(".vite"));
-                for f in ["LICENSE", "NOTICE", "README.md", "README.en.md"] {
-                    let _ = fs::copy(webui_dir.join(f), out_dir.join(f));
-                }
-                let mut notices = Command::new("node");
-                notices
-                    .current_dir(&webui_dir)
-                    .arg("tools/notices.mjs")
-                    .arg(&out_dir)
-                    .arg(dist_dir.join(".vite/bundled-packages.json"));
-                run_checked(&mut notices, "node tools/notices.mjs")?;
-            }
-            return Ok(Some(stage));
-        }
-    }
-
-    if let Ok(entries) = fs::read_dir(src.join("target")) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let s = name.to_string_lossy();
-            if s.starts_with("doona-") && !s.ends_with("-lite") {
-                let p = entry.path();
-                let lite = PathBuf::from(format!("{}-lite", p.display()));
-                if p.is_dir() && lite.is_dir() {
-                    return Ok(Some(p));
-                }
-            }
-        }
+    if stage.is_dir() && stage_lite.is_dir() {
+        return Ok(Some(stage));
     }
 
     Ok(None)

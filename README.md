@@ -50,19 +50,20 @@
 - `zig`（默认读取 `/usr/lib/zig0.16/lib` 头文件，可通过环境变量 `ZIG_LIB` 覆盖）
 - `cmake`、`llvm-ar-18`、`curl`
 
-### 1. 一键编译 `honk-core`（含内嵌 Doona 原生面板）
+### 1. 一键编译纯 Rust WASM Doona 与 `honk-core`
 
 ```bash
-# 自动编译内置 webui/（标准版 + Lite）并静态链接 honk-core；如需改用远端预构建资源可设 FETCH_DOONA=1
-./build.sh
+# 通过纯 Rust 构建运维 CLI (honk-xtask) 编译内嵌 Doona WASM (/ui/ + /ui/lite/) 并静态链接 honk-core
+cargo run --manifest-path rust/xtask/Cargo.toml -- build-webui
+cargo run --manifest-path rust/xtask/Cargo.toml -- build-core
 # 产物：src/target/aarch64-unknown-linux-musl/release/honk-core
 ```
 
-### 2. 一键编译 `boxctl`
+### 2. 一键编译静态 `boxctl` v15 与纯 Rust `boxbpf`
 
 ```bash
-./build-boxctl.sh
-# 产物：boxproxy/boxctl/target/aarch64-unknown-linux-musl/release/boxctl
+cargo run --manifest-path rust/xtask/Cargo.toml -- build-boxctl
+cargo run --manifest-path rust/xtask/Cargo.toml -- build-boxbpf
 ```
 
 ### 3. 重新编译 eBPF 对象（仅修改 `src/crates/honk-ebpf` 时需要）
@@ -76,23 +77,28 @@ cp target/bpfel-unknown-none/release/honk-ebpf ../../target/honk-core.o
 
 ---
 
-## 仓库目录结构
+## 仓库目录结构（100% Pure Rust 主线）
 
 ```text
 honk-android/
-├── src/                  honk 完整源码（同步上游 main 467cfa77）+ Android 全功能适配
-├── webui/                嵌入式 Doona 原生前端（同步上游 Zakkaus/doona 0ed10b6 + 内存/更新扩展）
-├── boxproxy/             boxproxy / boxctl 源码（新增 honk 核心与 ebpf 模式生命周期管理）
+├── src/                  honk-core + honk-ebpf 纯 Rust 源码 + Android GKI 6.1+/6.6+ 适配
+├── rust/                 纯 Rust 生态工作区：
+│   ├── xtask/            纯 Rust 构建/验真/部署 CLI（honk-xtask）
+│   ├── dae-core/         141 项 DAE 引擎纯 Rust 库
+│   ├── doona-logic/      Doona 业务规则纯 Rust 库
+│   ├── doona-common/     Doona 公共 i18n/模型纯 Rust 库
+│   ├── doona-wasm/       Leptos 0.8 CSR WASM 标准版面板 (/ui/)
+│   ├── doona-lite-wasm/  Leptos 0.8 CSR WASM Lite 版面板 (/ui/lite/)
+│   └── boxproxy/         8-crate 纯 Rust MVI 引擎 (libboxproxy_app.so) + 1:1 Miuix DEX 壳
+├── webui/rust/           14 个 rust-anything 门禁纯 Rust 逻辑 crate
+├── boxproxy/
+│   ├── boxctl/           box.db schema v15 纯 Rust 控制面
+│   └── boxbpf/rust/      纯 Rust 整应用重写版 boxbpf
 ├── toolchain/            zig + rust-lld 的 aarch64-linux-musl 交叉编译包装器
 ├── lib/                  静态链接所需的 aarch64 libc++ / libc++abi / compiler_rt 归档
 ├── config/               脱敏后的 Android 推荐配置模板（config.example.dae）
 ├── patches/              相对上游基线导出的独立补丁文件（honk-android.patch / boxctl-honk.patch）
-├── skill/honk-android/   标准化 AI Agent 自动部署与排障 Skill（含一键部署脚本）
-├── build.sh              一键交叉编译 honk-core
-├── build-boxctl.sh       一键交叉编译 boxctl
-├── vtest.sh              手机端快速验证 eBPF Verifier 辅助脚本
-├── stackmap.py           静态分析 eBPF 调用链栈深与指令数工具
-├── setup-cgroup.sh       手工升级根 cgroup legacy BPF 钩子备用脚本（已内置进 honk-core）
+├── skill/honk-android/   标准化 AI Agent 自动部署与排障 Skill
 ├── GUIDE.md              人类使用与部署完全指南
 ├── ANDROID-DATAPATH.md   Android GKI 6.6 eBPF Verifier 卡点根因与解法分析
 ├── PATCHES.md            对上游 honk 的改动技术清单

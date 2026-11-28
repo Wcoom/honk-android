@@ -1,0 +1,25 @@
+# GitHub Linguist classification for pure-Rust `honk-android`.
+# All core logic, eBPF dataplane, control plane (`boxctl`/`boxbpf`), Doona WASM WebUI,
+# build/ops CLI (`honk-xtask`), and BoxProxy MVI engine (`libboxproxy_app.so`) are pure Rust.
+# Exclude upstream `src/` CI/tooling/containers, cross-compiler wrappers, static web assets,
+# and the minimal Android OS DEX/Compose view shell from language-bar statistics.
+
+# Default non-Rust auxiliary/packaging files to non-detectable; keep all Rust sources detectable.
+* linguist-detectable=false
+*.rs linguist-detectable=true
+
+src/.github/** linguist-vendored
+src/.agents/** linguist-vendored
+src/ci/** linguist-vendored
+src/install/** linguist-vendored
+src/fuzz/seed.sh linguist-vendored
+src/fuzz/corpus/** linguist-vendored
+src/fuzz/artifacts/** linguist-vendored
+src/tools/** linguist-vendored
+src/Dockerfile linguist-vendored
+src/Justfile linguist-vendored
+toolchain/** linguist-vendored
+boxproxy/boxctl/wrappers/** linguist-vendored
+rust/doona-wasm/assets/** linguist-vendored
+rust/doona-lite-wasm/assets/** linguist-vendored
+rust/boxproxy/android-shell/** linguist-generated

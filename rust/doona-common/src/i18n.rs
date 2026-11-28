@@ -77,7 +77,7 @@ impl Lang {
 fn catalog_zh_cn() -> &'static HashMap<String, CatalogEntry> {
     static MAP: OnceLock<HashMap<String, CatalogEntry>> = OnceLock::new();
     MAP.get_or_init(|| {
-        serde_json::from_str(include_str!("../../../webui/src/i18n/locales/zh-CN.json"))
+        serde_json::from_str(include_str!("../locales/zh-CN.json"))
             .expect("valid zh-CN.json catalog")
     })
 }
@@ -85,7 +85,7 @@ fn catalog_zh_cn() -> &'static HashMap<String, CatalogEntry> {
 fn catalog_zh_tw() -> &'static HashMap<String, CatalogEntry> {
     static MAP: OnceLock<HashMap<String, CatalogEntry>> = OnceLock::new();
     MAP.get_or_init(|| {
-        serde_json::from_str(include_str!("../../../webui/src/i18n/locales/zh-TW.json"))
+        serde_json::from_str(include_str!("../locales/zh-TW.json"))
             .expect("valid zh-TW.json catalog")
     })
 }
@@ -93,7 +93,7 @@ fn catalog_zh_tw() -> &'static HashMap<String, CatalogEntry> {
 fn catalog_en() -> &'static HashMap<String, CatalogEntry> {
     static MAP: OnceLock<HashMap<String, CatalogEntry>> = OnceLock::new();
     MAP.get_or_init(|| {
-        serde_json::from_str(include_str!("../../../webui/src/i18n/locales/en.json"))
+        serde_json::from_str(include_str!("../locales/en.json"))
             .expect("valid en.json catalog")
     })
 }
