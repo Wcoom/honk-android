@@ -23,14 +23,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Port of `stackmap.py`: analyze reachable BPF subprograms and chained stack depths
+    /// Analyze reachable BPF subprograms and chained stack depths
     Stackmap { obj: PathBuf, entry: String },
-    /// Port of `build.sh`: cross-compile static ARM64 `honk-core`
+    /// Cross-compile static ARM64 `honk-core`
     BuildCore {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         cargo_args: Vec<String>,
     },
-    /// Port of `build-boxctl.sh`: cross-compile static ARM64 `boxctl`
+    /// Cross-compile static ARM64 `boxctl`
     BuildBoxctl {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         cargo_args: Vec<String>,
@@ -46,12 +46,12 @@ enum Cmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Port of `setup-cgroup.sh`: upgrade Android root cgroup BPF hooks to multi mode
+    /// Upgrade Android root cgroup BPF hooks to multi mode
     SetupCgroup {
         #[arg(short, long)]
         serial: Option<String>,
     },
-    /// Port of `vtest.sh`: build eBPF object and run verifier check on device
+    /// Build eBPF object and run verifier check on device
     Vtest {
         #[arg(long, default_value = "/data/local/tmp/honk-min.dae")]
         config: String,
@@ -60,12 +60,12 @@ enum Cmd {
         #[arg(short, long)]
         serial: Option<String>,
     },
-    /// Port of `measure.sh`: build `honk-core` and measure TC verifier cost on device
+    /// Build `honk-core` and measure TC verifier cost on device
     Measure {
         #[arg(short, long)]
         serial: Option<String>,
     },
-    /// Port of `deploy_honk_android.sh`: deploy artifacts, patch `box.db`, optional autostart
+    /// Deploy artifacts over ADB, patch `box.db`, and optionally configure boot autostart
     Deploy {
         #[arg(long)]
         honk: Option<PathBuf>,
