@@ -2,11 +2,12 @@
 //! Datapath + eBPF attachments table, and Capabilities overview.
 
 use doona_common::format::{format_bytes, format_duration_secs};
+use doona_common::i18n::Lang;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::state::use_app_state;
-use crate::ui::StatusLight;
+use crate::ui::{ConfirmSheet, StatusLight, copy_to_clipboard, download_text_file};
 
 fn datapath_label(state: &crate::state::AppState, value: &str) -> String {
     let key = match value {
@@ -43,31 +44,33 @@ fn datapath_label(state: &crate::state::AppState, value: &str) -> String {
 pub fn OverviewPage() -> impl IntoView {
     let state = use_app_state();
     let busy = RwSignal::new(false);
+    let reload_confirm = RwSignal::new(false);
 
-    let on_reload = move |_| {
+    let run_reload = Callback::new(move |()| {
         busy.set(true);
         let api = state.client();
         spawn_local(async move {
             match api.start_reload().await {
-                Ok(_) => {
-                    state.toast("positive", state.t("ov.succeeded"), None);
-                    state.refresh_all();
+                Ok(op) => {
+                    state.poll_operation(op.operation_id, state.t("ov.succeeded"));
                 }
                 Err(e) => state.toast("negative", state.t("ov.failed"), Some(e)),
             }
             busy.set(false);
         });
-    };
+    });
 
     let on_export = move |_| {
         let api = state.client();
         spawn_local(async move {
             match api.export_config_text().await {
                 Ok(text) => {
+                    let _ = download_text_file("honk-config.dae", &text, "text/plain;charset=utf-8");
+                    copy_to_clipboard(&text);
                     state.toast(
                         "positive",
                         state.t("config.backup.export"),
-                        Some(format!("{} bytes", text.len())),
+                        Some(format!("honk-config.dae · {} bytes", text.len())),
                     );
                 }
                 Err(e) => state.toast("negative", state.t("ui.failed"), Some(e)),
@@ -84,11 +87,19 @@ pub fn OverviewPage() -> impl IntoView {
                         let st = state.runtime.get().map(|r| r.state_str().to_string()).unwrap_or_else(|| "unknown".into());
                         let tone: &'static str = match st.as_str() {
                             "running" => "ok",
-                            "degraded" => "warn",
+                            "degraded" | "reloading" | "starting" => "warn",
                             "failed" => "err",
                             _ => "muted",
                         };
-                        let key = if st == "running" { "ov.running" } else { "ov.unknown" };
+                        let key = match st.as_str() {
+                            "running" => "ov.running",
+                            "degraded" => "ov.v.degraded",
+                            "failed" => "ov.failed",
+                            "suspended" => "ov.suspended",
+                            "reloading" => "ov.reloading",
+                            "starting" => "ov.starting",
+                            _ => "ov.unknown",
+                        };
                         view! { <StatusLight tone=tone text=state.t(key) /> }
                     }}
                     <div class="rp-kv inline row">
@@ -129,11 +140,24 @@ pub fn OverviewPage() -> impl IntoView {
                     <button type="button" class="rp-btn secondary sm" on:click=on_export>
                         {move || state.t("ov.export")}
                     </button>
-                    <button type="button" class="rp-btn accent sm" disabled=move || busy.get() on:click=on_reload>
+                    <button type="button" class="rp-btn accent sm" disabled=move || busy.get() on:click=move |_| reload_confirm.set(true)>
                         {move || state.t("ov.reload")}
                     </button>
                 </div>
             </div>
+
+            <ConfirmSheet
+                open=reload_confirm
+                title=Signal::derive(move || state.t("ov.reload"))
+                message=Signal::derive(move || match state.lang.get() {
+                    Lang::En => "Hot-reload active configuration? Existing connections stay intact when possible.".into(),
+                    Lang::ZhTw => "確定要熱重載目前生效的核心設定嗎？".into(),
+                    Lang::ZhCn => "确定要热重载当前生效的核心配置吗？现有连接将尽可能保持不断开。".into(),
+                })
+                confirm_label=Signal::derive(move || state.t("ov.reload"))
+                destructive=false
+                on_confirm=run_reload
+            />
 
             // 3-card row: Engine | Counters | Memory (ALL 8 METRICS!)
             <div class="rp-g3" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
@@ -164,7 +188,15 @@ pub fn OverviewPage() -> impl IntoView {
                         </div>
                         <div>
                             <span class="k">{move || state.t("ov.f.instance")}</span>
-                            <span class="v">{move || state.runtime.get().and_then(|r| r.instance_id).unwrap_or_else(|| "—".into())}</span>
+                            <span class="v">
+                                {move || {
+                                    let inst = state.runtime.get().and_then(|r| r.instance_id).unwrap_or_else(|| "—".into());
+                                    doona_logic::selectors::short_id(inst.clone())
+                                        .ok()
+                                        .and_then(|v| v.as_str().map(ToString::to_string))
+                                        .unwrap_or(inst)
+                                }}
+                            </span>
                         </div>
                         <div>
                             <span class="k">{move || state.t("ov.f.started")}</span>

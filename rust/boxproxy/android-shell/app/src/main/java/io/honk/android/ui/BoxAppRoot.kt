@@ -1,26 +1,51 @@
 package io.honk.android.ui
 
-import androidx.activity.compose.BackHandler
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import androidx.activity.BackEventCompat
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -31,6 +56,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -38,6 +65,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,9 +73,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,9 +95,11 @@ import io.honk.android.bridge.BoxEngineHolder
 import io.honk.android.webview.BoxWebViewHost
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.roundToInt
 
-internal val uiDispatchExecutor = Executors.newFixedThreadPool(2)
+internal val uiDispatchExecutor = Executors.newSingleThreadExecutor()
 
 internal fun dispatchAsync(action: String, block: JSONObject.() -> Unit = {}) {
     uiDispatchExecutor.execute {
@@ -77,8 +114,9 @@ internal fun navigateTo(routeName: String) {
 }
 
 internal fun JSONObject.strOr(key: String, fallback: String = "-"): String {
+    if (isNull(key)) return fallback
     val v = optString(key, "").trim()
-    return v.ifEmpty { fallback }
+    return if (v.isEmpty() || v.equals("null", ignoreCase = true)) fallback else v
 }
 
 /**
@@ -91,21 +129,52 @@ fun BoxAppRoot(
     onLaunchImportCore: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     val state by BoxEngineHolder.state.collectAsState()
     val prefs = state.optJSONObject("prefs") ?: JSONObject()
     val appSettings = prefs.optJSONObject("boxapp_settings") ?: JSONObject()
 
+    val uiMode = appSettings.strOr("ui_mode", "miuix")
     val themeMode = appSettings.optInt("theme_mode", 0)
     val pureBlack = appSettings.optBoolean("pure_black_dark_theme", true)
+    val monetEnabled = appSettings.optBoolean("miuix_monet_enabled", true)
+    val paletteStyle = appSettings.strOr("theme_palette_style", "TonalSpot")
+    val colorSpec = appSettings.strOr("theme_color_spec", "Spec2021")
+    val enableBlur = appSettings.optBoolean("enable_blur", true)
+    val topBarGlass = appSettings.strOr("top_bar_style", "Classic").equals("Glass", ignoreCase = true)
+    val swipeBack = appSettings.optBoolean("enable_swipe_back", true)
+    val predictiveBack = appSettings.optBoolean("enable_predictive_back_animation", true)
+    val followEdge = appSettings.optBoolean("predictive_back_animation_follow_edge", true)
+    val rawLang = appSettings.strOr("app_language", "system")
+    val resolvedLang = remember(rawLang) {
+        if (rawLang == "system") Locale.getDefault().toLanguageTag() else rawLang
+    }
+
     val isDark = when (themeMode) {
         1 -> false
         2 -> true
         else -> isSystemInDarkTheme()
     }
     val accentUseDefault = appSettings.optBoolean("accent_use_default", true)
-    val accentOverride = if (accentUseDefault) null else Color(appSettings.optInt("accent_color", 0xFF455A8A.toInt()))
-    val palette = remember(isDark, pureBlack, accentOverride) {
-        boxPaletteFor(isDark = isDark, pureBlack = pureBlack, accentOverride = accentOverride)
+    val monetAccent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && monetEnabled && accentUseDefault) {
+        if (isDark) dynamicDarkColorScheme(ctx).primary else dynamicLightColorScheme(ctx).primary
+    } else null
+    val accentOverride = when {
+        !accentUseDefault -> Color(appSettings.optInt("accent_color", 0xFF455A8A.toInt()))
+        monetAccent != null -> monetAccent
+        else -> null
+    }
+    val palette = remember(isDark, pureBlack, accentOverride, uiMode, paletteStyle, colorSpec, enableBlur, topBarGlass) {
+        boxPaletteFor(
+            isDark = isDark,
+            pureBlack = pureBlack,
+            accentOverride = accentOverride,
+            uiMode = uiMode,
+            paletteStyle = paletteStyle,
+            colorSpec = colorSpec,
+            enableBlur = enableBlur,
+            topBarGlass = topBarGlass,
+        )
     }
     val pageScale = appSettings.optDouble("page_scale", 1.0).toFloat().coerceIn(0.8f, 1.2f)
     val baseDensity = LocalDensity.current
@@ -133,16 +202,65 @@ fun BoxAppRoot(
 
     val routeObj = state.optJSONObject("current_route") ?: JSONObject().put("route", "main")
     val routeName = routeObj.optString("route", "main")
+    val routeDepth = state.optJSONArray("back_stack")?.length() ?: if (routeName == "main") 0 else 1
     val activeTab = state.optInt("active_tab", 0)
     val showPanelTab = appSettings.optBoolean("show_proxy_selector_bottom_bar_item", true)
+    val bottomBarStyle = appSettings.strOr("bottom_bar_style", "LiquidGlass")
+    val useLiquidDock = !bottomBarStyle.equals("Classic", ignoreCase = true)
 
-    BackHandler(enabled = routeName != "main" && routeName != "onboarding") {
-        dispatchAsync("pop_back")
+    val lastEffect by BoxEngineHolder.lastEffect.collectAsState()
+    var bannerText by remember { mutableStateOf<String?>(null) }
+    var bannerTone by remember { mutableStateOf("info") }
+    LaunchedEffect(lastEffect) {
+        val eff = lastEffect ?: return@LaunchedEffect
+        val kind = eff.optString("effect", eff.optString("type", ""))
+        val msg = eff.optString("message", eff.optString("text", "")).trim()
+        if (msg.isNotEmpty()) {
+            bannerText = msg
+            bannerTone = when {
+                kind.contains("error", true) || msg.contains("失败") || msg.contains("错误") -> "error"
+                kind.contains("warn", true) -> "warn"
+                msg.contains("成功") || msg.contains("已") || msg.contains("完成") -> "success"
+                else -> "info"
+            }
+        }
+    }
+
+    val motionCfg = remember { LiquidGlassRuntime.config }
+    var rawBackProgress by remember { mutableFloatStateOf(0f) }
+    var backSwipeEdge by remember { mutableIntStateOf(0) }
+    val smoothBackProgress by animateFloatAsState(
+        targetValue = rawBackProgress,
+        animationSpec = spring(dampingRatio = 0.86f, stiffness = 520f),
+        label = "iosPredictiveBack",
+    )
+
+    LaunchedEffect(routeName) {
+        rawBackProgress = 0f
+    }
+
+    PredictiveBackHandler(enabled = routeName != "main" && routeName != "onboarding") { progress ->
+        try {
+            progress.collect { event ->
+                backSwipeEdge = event.swipeEdge
+                rawBackProgress = if (predictiveBack && routeName != "web_ui" && routeName != "sub_store") {
+                    event.progress
+                } else {
+                    0f
+                }
+            }
+            rawBackProgress = 0f
+            dispatchAsync("pop_back")
+        } finally {
+            rawBackProgress = 0f
+        }
     }
 
     CompositionLocalProvider(
         LocalBoxPalette provides palette,
+        LocalAppLang provides resolvedLang,
         LocalDensity provides scaledDensity,
+        LocalLiquidDockBottomPadding provides if (useLiquidDock) 108.dp else 24.dp,
     ) {
         MaterialTheme(colorScheme = colorScheme) {
             if (routeName == "onboarding") {
@@ -150,59 +268,266 @@ fun BoxAppRoot(
                 return@MaterialTheme
             }
 
-            Scaffold(
-                containerColor = palette.background,
-                bottomBar = {
-                    if (routeName == "main") {
-                        MiuixBottomBar(
-                            activeTab = activeTab,
-                            showPanelTab = showPanelTab,
-                            onSelect = { tab -> dispatchAsync("switch_tab") { put("tab", tab) } },
-                        )
-                    }
-                },
-            ) { padding ->
-                Box(modifier = Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) {
-                    when (routeName) {
-                        "main" -> when (activeTab) {
-                            0 -> HomeTabScreen(state)
-                            1 -> PanelTabScreen(state)
-                            2 -> ToolsTabScreen(state, onLaunchImportCore = onLaunchImportCore)
-                            else -> SettingsTabScreen(
-                                state = state,
-                                onLaunchBackupExport = onLaunchBackupExport,
-                                onLaunchBackupRestore = onLaunchBackupRestore,
-                                onRequestNotificationPermission = onRequestNotificationPermission,
+            val backdropLayer = rememberGraphicsLayer()
+
+            Box(modifier = Modifier.fillMaxSize().background(palette.background)) {
+                Scaffold(
+                    containerColor = palette.background,
+                    bottomBar = {
+                        if (!useLiquidDock && routeName == "main") {
+                            MiuixBottomBar(
+                                activeTab = activeTab,
+                                showPanelTab = showPanelTab,
+                                onSelect = { tab -> dispatchAsync("switch_tab") { put("tab", tab) } },
                             )
                         }
-                        "web_ui" -> WebUiRouteScreen(state)
-                        "sub_store" -> SubStoreRouteScreen(state)
-                        "overview" -> OverviewDetailScreen(state)
-                        "proxy_selector" -> ProxySelectorDetailScreen(state)
-                        "connections_details" -> ConnectionsDetailScreen(state)
-                        "rules" -> RulesDetailScreen(state)
-                        "rule_providers" -> RuleProvidersDetailScreen(state)
-                        "subscription_details", "subscription_local_details" -> SubscriptionsDetailScreen(state)
-                        "proxy_config" -> ProxyConfigScreen(state)
-                        "other_proxy_config" -> OtherProxyConfigScreen(state)
-                        "app_management" -> AppManagementScreen(state)
-                        "cnip_settings" -> CnipSettingsScreen(state)
-                        "bypass_rules" -> BypassRulesScreen(state)
-                        "shared_network_config" -> SharedNetworkScreen(state)
-                        "network_match" -> NetworkMatchScreen(state)
-                        "shell_scripts", "js_scripts", "subscription_management" -> ScriptsHubScreen(state)
-                        "runtime_files" -> RuntimeFilesScreen(state)
-                        "runtime_file_editor" -> FileEditorScreen(state)
-                        "log_viewer" -> LogViewerScreen(state)
-                        "core_update_sources" -> CoreUpdateSourcesScreen(state)
-                        "network_test", "network_speed_history" -> NetworkDiagnosticsScreen(state)
-                        "theme_settings" -> ThemeSettingsScreen(state)
-                        "latency_targets" -> LatencyTargetsScreen(state)
-                        "notification_settings" -> NotificationSettingsScreen(state, onRequestNotificationPermission)
-                        "about", "about_libraries", "about_sponsorship" -> AboutScreen(state)
-                        else -> OverviewDetailScreen(state)
+                    },
+                ) { padding ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = if (useLiquidDock) 0.dp else padding.calculateBottomPadding())
+                            .drawWithContent {
+                                if (useLiquidDock) {
+                                    backdropLayer.record {
+                                        this@drawWithContent.drawContent()
+                                    }
+                                    drawLayer(backdropLayer)
+                                } else {
+                                    drawContent()
+                                }
+                            },
+                    ) {
+                        AnimatedContent(
+                            targetState = Pair(routeName, routeDepth),
+                            transitionSpec = {
+                                val (fromRoute, fromDepth) = initialState
+                                val (toRoute, toDepth) = targetState
+                                val isPop = toRoute == "main" && fromRoute != "main" || toDepth < fromDepth
+                                val isWebPortal = toRoute == "web_ui" || toRoute == "sub_store" || fromRoute == "web_ui" || fromRoute == "sub_store"
+                                val parallax = motionCfg.navParallaxRatio
+                                if (isWebPortal && !isPop) {
+                                    // iOS App-Card / Safari Sheet expansion transition (zero flash, smooth zoom + rise)
+                                    ContentTransform(
+                                        targetContentEnter = scaleIn(
+                                            initialScale = 0.93f,
+                                            animationSpec = tween(340, easing = IosNavEasing),
+                                        ) + slideInVertically(
+                                            animationSpec = tween(340, easing = IosNavEasing),
+                                            initialOffsetY = { h -> (h * 0.05f).roundToInt() },
+                                        ) + fadeIn(
+                                            animationSpec = tween(220, easing = IosNavEasing),
+                                        ),
+                                        initialContentExit = scaleOut(
+                                            targetScale = 0.95f,
+                                            animationSpec = tween(340, easing = IosNavEasing),
+                                        ) + fadeOut(
+                                            animationSpec = tween(300, easing = IosNavEasing),
+                                            targetAlpha = 0.72f,
+                                        ),
+                                        targetContentZIndex = 1f,
+                                    )
+                                } else if (isWebPortal && isPop) {
+                                    ContentTransform(
+                                        targetContentEnter = scaleIn(
+                                            initialScale = 0.95f,
+                                            animationSpec = tween(310, easing = IosNavEasing),
+                                        ) + fadeIn(
+                                            animationSpec = tween(260, easing = IosNavEasing),
+                                            initialAlpha = 0.75f,
+                                        ),
+                                        initialContentExit = scaleOut(
+                                            targetScale = 0.93f,
+                                            animationSpec = tween(290, easing = IosNavEasing),
+                                        ) + slideOutVertically(
+                                            animationSpec = tween(290, easing = IosNavEasing),
+                                            targetOffsetY = { h -> (h * 0.05f).roundToInt() },
+                                        ) + fadeOut(
+                                            animationSpec = tween(220, easing = IosNavEasing),
+                                        ),
+                                        targetContentZIndex = -1f,
+                                    )
+                                } else if (isPop) {
+                                    ContentTransform(
+                                        targetContentEnter = slideInHorizontally(
+                                            animationSpec = tween(motionCfg.navPopMs, easing = IosNavEasing),
+                                            initialOffsetX = { w -> -(w * parallax).roundToInt() },
+                                        ) + scaleIn(
+                                            initialScale = 0.968f,
+                                            animationSpec = tween(motionCfg.navPopMs, easing = IosNavEasing),
+                                        ) + fadeIn(
+                                            animationSpec = tween(motionCfg.navPopMs, easing = IosNavEasing),
+                                            initialAlpha = 0.80f,
+                                        ),
+                                        initialContentExit = slideOutHorizontally(
+                                            animationSpec = tween(motionCfg.navPopMs, easing = IosNavEasing),
+                                            targetOffsetX = { w -> w },
+                                        ),
+                                        targetContentZIndex = -1f,
+                                    )
+                                } else {
+                                    ContentTransform(
+                                        targetContentEnter = slideInHorizontally(
+                                            animationSpec = tween(motionCfg.navPushMs, easing = IosNavEasing),
+                                            initialOffsetX = { w -> w },
+                                        ),
+                                        initialContentExit = slideOutHorizontally(
+                                            animationSpec = tween(motionCfg.navPushMs, easing = IosNavEasing),
+                                            targetOffsetX = { w -> -(w * parallax).roundToInt() },
+                                        ) + scaleOut(
+                                            targetScale = 0.968f,
+                                            animationSpec = tween(motionCfg.navPushMs, easing = IosNavEasing),
+                                        ) + fadeOut(
+                                            animationSpec = tween(motionCfg.navPushMs, easing = IosNavEasing),
+                                            targetAlpha = 0.80f,
+                                        ),
+                                        targetContentZIndex = 1f,
+                                    )
+                                }
+                            },
+                            contentKey = { it.first },
+                            label = "iosRouteNav",
+                        ) { (currentRoute, _) ->
+                            val isPushedPage = currentRoute != "main" && currentRoute != "onboarding"
+                            val enableEdgeSwipe = swipeBack &&
+                                isPushedPage &&
+                                currentRoute != "web_ui" &&
+                                currentRoute != "sub_store"
+                            val edgeSign = if (followEdge && backSwipeEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        if (isPushedPage && smoothBackProgress > 0.001f) {
+                                            translationX = edgeSign * smoothBackProgress * size.width * 0.24f
+                                            val sc = 1f - 0.065f * smoothBackProgress
+                                            scaleX = sc
+                                            scaleY = sc
+                                            shape = RoundedCornerShape((28f * smoothBackProgress).dp)
+                                            clip = true
+                                        }
+                                    }
+                                    .drawWithContent {
+                                        drawContent()
+                                        if (isPushedPage) {
+                                            // iOS UINavigationController leading-edge card shadow
+                                            val shadowW = 14.dp.toPx()
+                                            drawRect(
+                                                brush = Brush.horizontalGradient(
+                                                    colors = listOf(Color.Black.copy(alpha = 0.16f), Color.Transparent),
+                                                    startX = 0f,
+                                                    endX = shadowW,
+                                                ),
+                                                size = Size(shadowW, size.height),
+                                            )
+                                        }
+                                    }
+                                    .iosInteractiveSwipeBack(
+                                        enabled = enableEdgeSwipe,
+                                        predictiveScale = predictiveBack,
+                                        followEdge = followEdge,
+                                        onPopBack = { dispatchAsync("pop_back") },
+                                    ),
+                            ) {
+                                when (currentRoute) {
+                                    "main" -> AnimatedContent(
+                                        targetState = activeTab,
+                                        transitionSpec = {
+                                            val dir = if (targetState >= initialState) 1 else -1
+                                            val shift = 28
+                                            (slideInHorizontally(
+                                                animationSpec = tween(motionCfg.tabSwitchMs, easing = IosNavEasing),
+                                                initialOffsetX = { dir * shift },
+                                            ) + fadeIn(
+                                                animationSpec = tween(motionCfg.tabSwitchMs, easing = IosNavEasing),
+                                            ) + scaleIn(
+                                                initialScale = 0.985f,
+                                                animationSpec = tween(motionCfg.tabSwitchMs, easing = IosNavEasing),
+                                            )) togetherWith (slideOutHorizontally(
+                                                animationSpec = tween(motionCfg.tabSwitchMs - 40, easing = IosNavEasing),
+                                                targetOffsetX = { -dir * (shift / 2) },
+                                            ) + fadeOut(
+                                                animationSpec = tween(motionCfg.tabSwitchMs - 40, easing = IosNavEasing),
+                                            ))
+                                        },
+                                        label = "iosMainTab",
+                                    ) { tab ->
+                                        when (tab) {
+                                            0 -> HomeTabScreen(state)
+                                            1 -> PanelTabScreen(state)
+                                            2 -> ToolsTabScreen(state, onLaunchImportCore = onLaunchImportCore)
+                                            else -> SettingsTabScreen(
+                                                state = state,
+                                                onLaunchBackupExport = onLaunchBackupExport,
+                                                onLaunchBackupRestore = onLaunchBackupRestore,
+                                                onRequestNotificationPermission = onRequestNotificationPermission,
+                                            )
+                                        }
+                                    }
+                                    "web_ui" -> WebUiRouteScreen(state)
+                                    "sub_store" -> SubStoreRouteScreen(state)
+                                    "overview" -> OverviewDetailScreen(state)
+                                    "proxy_selector" -> ProxySelectorDetailScreen(state)
+                                    "connections_details" -> ConnectionsDetailScreen(state)
+                                    "rules" -> RulesDetailScreen(state)
+                                    "rule_providers" -> RuleProvidersDetailScreen(state)
+                                    "subscription_details", "subscription_local_details" -> SubscriptionsDetailScreen(state)
+                                    "proxy_config" -> ProxyConfigScreen(state)
+                                    "other_proxy_config" -> OtherProxyConfigScreen(state)
+                                    "app_management" -> AppManagementScreen(state)
+                                    "cnip_settings" -> CnipSettingsScreen(state)
+                                    "bypass_rules" -> BypassRulesScreen(state)
+                                    "shared_network_config" -> SharedNetworkScreen(state)
+                                    "network_match" -> NetworkMatchScreen(state)
+                                    "shell_scripts", "js_scripts", "subscription_management" -> ScriptsHubScreen(state)
+                                    "runtime_files" -> RuntimeFilesScreen(state)
+                                    "runtime_file_editor" -> FileEditorScreen(state)
+                                    "log_viewer" -> LogViewerScreen(state)
+                                    "core_update_sources" -> CoreUpdateSourcesScreen(state)
+                                    "network_test", "network_speed_history" -> NetworkDiagnosticsScreen(state)
+                                    "theme_settings" -> ThemeSettingsScreen(state)
+                                    "latency_targets" -> LatencyTargetsScreen(state)
+                                    "notification_settings" -> NotificationSettingsScreen(state, onRequestNotificationPermission)
+                                    "about", "about_libraries", "about_sponsorship" -> AboutScreen(state)
+                                    else -> OverviewDetailScreen(state)
+                                }
+                            }
+                        }
                     }
                 }
+
+                // Floating pure-Rust Liquid Glass Bottom Bar with iOS `hidesBottomBarWhenPushed` glide.
+                if (useLiquidDock) {
+                    AnimatedVisibility(
+                        visible = routeName == "main",
+                        enter = slideInVertically(
+                            initialOffsetY = { it + 32 },
+                            animationSpec = spring(dampingRatio = 0.84f, stiffness = 420f),
+                        ) + fadeIn(tween(220, easing = IosNavEasing)),
+                        exit = slideOutVertically(
+                            targetOffsetY = { it + 32 },
+                            animationSpec = tween(220, easing = IosNavEasing),
+                        ) + fadeOut(tween(180)),
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    ) {
+                        LiquidGlassBottomBar(
+                            activeTab = activeTab,
+                            showPanelTab = showPanelTab,
+                            backdropLayer = backdropLayer,
+                            onSelect = { tab -> dispatchAsync("switch_tab") { put("tab", tab) } },
+                            barStyle = bottomBarStyle,
+                            enableBlur = enableBlur,
+                        )
+                    }
+                }
+
+                // Global transient status feedback pill (loading / success / error).
+                BoxStatusBannerOverlay(
+                    message = bannerText,
+                    tone = bannerTone,
+                    onDismiss = { bannerText = null },
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
             }
         }
     }
@@ -231,14 +556,20 @@ fun HomeTabScreen(state: JSONObject) {
     val pendingUpdate = state.optJSONObject("pending_core_update")
 
     var showSystemDetails by remember { mutableStateOf(false) }
+    var showStopConfirm by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().background(p.background)) {
         MiuixTabHeader(title = "BoxProxy Honk", collapsed = collapsed)
 
         LazyColumn(
             state = listState,
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = 8.dp,
+                bottom = LocalLiquidDockBottomPadding.current,
+            ),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
             if (pendingUpdate != null && pendingUpdate.optBoolean("update_available", false)) {
@@ -350,57 +681,62 @@ fun HomeTabScreen(state: JSONObject) {
                 }
             }
 
-            // 2. Service Action Pill Bar (启动 / 重载 | 停止 | 重启)
+            // 2. Service Action Pill Bar (single clear primary CTA when stopped; guarded Stop when running)
             item {
-                MiuixCard(modifier = Modifier.fillMaxWidth()) {
-                    if (!isRunning) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(60.dp)
-                                .clickable(enabled = !isBusy) { dispatchAsync("service_up") },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = if (isBusy) "启动中…" else "启动",
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = p.accent,
-                            )
-                        }
-                    } else {
+                if (!isRunning) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .iosPressScale(enabled = !isBusy, pressedScale = 0.975f) {
+                                dispatchAsync("service_up")
+                            }
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(if (isBusy) p.accent.copy(alpha = 0.65f) else p.accent),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = if (isBusy) "启动中…" else "启动服务",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.2.sp,
+                            color = Color.White,
+                        )
+                    }
+                } else {
+                    MiuixCard(modifier = Modifier.fillMaxWidth()) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().height(60.dp),
+                            modifier = Modifier.fillMaxWidth().height(56.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxSize()
-                                    .clickable { dispatchAsync("service_reload") },
+                                    .iosPressScale { dispatchAsync("service_reload") },
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text("重载", fontSize = 17.sp, fontWeight = FontWeight.Normal, color = p.accent)
+                                Text("重载", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = p.accent)
                             }
-                            Box(modifier = Modifier.width(1.dp).height(24.dp).background(p.divider))
+                            Box(modifier = Modifier.width(1.dp).height(22.dp).background(p.divider))
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxSize()
-                                    .clickable { dispatchAsync("service_down") },
+                                    .iosPressScale { showStopConfirm = true },
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text("停止", fontSize = 17.sp, fontWeight = FontWeight.Normal, color = p.stopRed)
+                                Text("停止", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = p.stopRed)
                             }
-                            Box(modifier = Modifier.width(1.dp).height(24.dp).background(p.divider))
+                            Box(modifier = Modifier.width(1.dp).height(22.dp).background(p.divider))
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxSize()
-                                    .clickable { dispatchAsync("service_restart") },
+                                    .iosPressScale { dispatchAsync("service_restart") },
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text("重启", fontSize = 17.sp, fontWeight = FontWeight.Normal, color = p.restartAmber)
+                                Text("重启", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = p.restartAmber)
                             }
                         }
                     }
@@ -660,6 +996,17 @@ fun HomeTabScreen(state: JSONObject) {
             onDismiss = { showSystemDetails = false },
         )
     }
+
+    if (showStopConfirm) {
+        MiuixConfirmDialog(
+            title = "停止代理服务？",
+            message = "停止后将断开透明代理接管，你可以随时再次启动服务。",
+            confirmLabel = "确认停止",
+            destructive = true,
+            onConfirm = { dispatchAsync("service_down") },
+            onDismiss = { showStopConfirm = false },
+        )
+    }
 }
 
 @Composable
@@ -671,77 +1018,45 @@ private fun HomeSystemDetailsDialog(state: JSONObject, onDismiss: () -> Unit) {
     val mode = state.strOr("outbound_mode", "rule")
     val rootOk = state.optBoolean("root_granted", false)
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable(onClick = onDismiss)
-                .padding(horizontal = 16.dp, vertical = 24.dp),
-            contentAlignment = Alignment.BottomCenter,
-        ) {
-            Column(
+    IosBottomSheetDialog(onDismiss = onDismiss) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                "运行系统详情",
+                fontSize = 19.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = p.textPrimary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            DetailKvRow("核心 / 模式", "${coreDisplayName(profile.strOr("core_name", "honk"))} · ${modeDisplayName(profile.strOr("mode", "ebpf"))}")
+            DetailKvRow("配置文件", profile.strOr("config_name", "config.dae"))
+            DetailKvRow("进程 PID", proc.optInt("pid", 0).let { if (it > 0) it.toString() else "-" })
+            DetailKvRow("运行时长", formatUptimeZh(proc.optLong("uptime_secs", 0L)))
+            DetailKvRow("CPU / 内存", "${"%.1f".format(proc.optDouble("cpu_percent", 0.0))}% · ${proc.optDouble("pss_mb", 0.0).toInt()} MB")
+            DetailKvRow("API 接口", "${api.strOr("kind", "honk_native")} (${api.strOr("base_url")})")
+            DetailKvRow("Root 授权", if (rootOk) "已授权 (uid=0)" else "未授权")
+
+            HorizontalDivider(color = p.divider, modifier = Modifier.padding(vertical = 4.dp))
+            Text("出站模式快速切换", fontSize = 14.sp, color = p.textSecondary)
+            val modes = listOf("rule", "direct", "global")
+            IosSegmentedControl(
+                items = listOf("规则", "直连", "全局"),
+                selectedIndex = modes.indexOfFirst { it.equals(mode, true) }.coerceAtLeast(0),
+                onSelect = { idx -> dispatchAsync("switch_outbound_mode") { put("mode", modes[idx]) } },
+                modifier = Modifier.fillMaxWidth(),
+                trackColor = p.background,
+            )
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(p.card)
-                    .clickable(enabled = false) {}
-                    .padding(22.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                    .padding(top = 4.dp)
+                    .height(46.dp)
+                    .iosPressScale(onClick = onDismiss)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(p.background),
+                contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    "运行系统详情",
-                    fontSize = 19.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = p.textPrimary,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                DetailKvRow("核心 / 模式", "${coreDisplayName(profile.strOr("core_name", "honk"))} · ${modeDisplayName(profile.strOr("mode", "ebpf"))}")
-                DetailKvRow("配置文件", profile.strOr("config_name", "config.dae"))
-                DetailKvRow("进程 PID", proc.optInt("pid", 0).let { if (it > 0) it.toString() else "-" })
-                DetailKvRow("运行时长", formatUptimeZh(proc.optLong("uptime_secs", 0L)))
-                DetailKvRow("CPU / 内存", "${"%.1f".format(proc.optDouble("cpu_percent", 0.0))}% · ${proc.optDouble("pss_mb", 0.0).toInt()} MB")
-                DetailKvRow("API 接口", "${api.strOr("kind", "honk_native")} (${api.strOr("base_url")})")
-                DetailKvRow("Root 授权", if (rootOk) "已授权 (uid=0)" else "未授权")
-
-                HorizontalDivider(color = p.divider, modifier = Modifier.padding(vertical = 4.dp))
-                Text("出站模式快速切换 (M04)", fontSize = 14.sp, color = p.textSecondary)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("rule" to "规则", "direct" to "直连", "global" to "全局").forEach { (id, label) ->
-                        val active = mode.equals(id, true)
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(40.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(if (active) p.accentSoft else p.background)
-                                .clickable { dispatchAsync("switch_outbound_mode") { put("mode", id) } },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                label,
-                                fontSize = 15.sp,
-                                fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
-                                color = if (active) p.accent else p.textPrimary,
-                            )
-                        }
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp)
-                        .height(46.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(p.background)
-                        .clickable(onClick = onDismiss),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("关闭", fontSize = 16.sp, color = p.textSecondary)
-                }
+                Text("关闭", fontSize = 16.sp, color = p.textSecondary)
             }
         }
     }
@@ -830,46 +1145,41 @@ fun PanelTabScreen(state: JSONObject) {
             },
         )
 
-        // 4-segment pill switcher: 概览 | 策略 | 订阅 | 连接
+        // 4-segment spring-gliding iOS pill switcher: 概览 | 策略 | 订阅 | 连接
         Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(50))
-                    .background(p.card)
-                    .padding(4.dp),
-            ) {
-                listOf("概览", "策略", "订阅", "连接").forEachIndexed { idx, label ->
-                    val active = segment == idx
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(40.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(if (active) p.accentSoft else Color.Transparent)
-                            .clickable { segment = idx },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = label,
-                            fontSize = 15.sp,
-                            fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
-                            color = if (active) p.accent else p.textPrimary,
-                        )
-                    }
-                }
-            }
+            IosSegmentedControl(
+                items = listOf("概览", "策略", "订阅", "连接"),
+                selectedIndex = segment,
+                onSelect = { segment = it },
+                modifier = Modifier.fillMaxWidth(),
+                height = 46.dp,
+            )
         }
 
-        when (segment) {
-            0 -> PanelOverviewContent(
-                state = state,
-                listState = listState,
-                onJumpSegment = { segment = it },
-            )
-            1 -> ProxySelectorInlineBody(state = state)
-            2 -> SubscriptionsInlineBody(state = state)
-            else -> ConnectionsInlineBody(state = state)
+        AnimatedContent(
+            targetState = segment,
+            transitionSpec = {
+                val dir = if (targetState >= initialState) 1 else -1
+                (slideInHorizontally(
+                    animationSpec = tween(220, easing = IosNavEasing),
+                    initialOffsetX = { dir * 24 },
+                ) + fadeIn(tween(220, easing = IosNavEasing))) togetherWith (slideOutHorizontally(
+                    animationSpec = tween(180, easing = IosNavEasing),
+                    targetOffsetX = { -dir * 14 },
+                ) + fadeOut(tween(180)))
+            },
+            label = "panelSegment",
+        ) { seg ->
+            when (seg) {
+                0 -> PanelOverviewContent(
+                    state = state,
+                    listState = listState,
+                    onJumpSegment = { segment = it },
+                )
+                1 -> ProxySelectorInlineBody(state = state)
+                2 -> SubscriptionsInlineBody(state = state)
+                else -> ConnectionsInlineBody(state = state)
+            }
         }
     }
 
@@ -915,8 +1225,13 @@ private fun PanelOverviewContent(
 
     LazyColumn(
         state = listState,
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 8.dp,
+            bottom = LocalLiquidDockBottomPadding.current,
+        ),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
         // 1. 运行概况 (策略 / 规则 / 连接)
@@ -975,37 +1290,53 @@ private fun PanelOverviewContent(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 MiuixCard(modifier = Modifier.weight(1f)) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 15.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Box(
-                            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(p.upGreenSoft),
+                            modifier = Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(p.upGreenSoft),
                             contentAlignment = Alignment.Center,
                         ) {
-                            ToolRowGlyph("arrow_up", p.upGreen, size = 20.dp)
+                            ToolRowGlyph("arrow_up", p.upGreen, size = 18.dp)
                         }
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text("上行速度", fontSize = 13.sp, color = p.textSecondary)
-                            Text(formatRateCompact(upBps), fontSize = 19.sp, fontWeight = FontWeight.Medium, color = p.upGreen, maxLines = 1)
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("上行速度", fontSize = 12.sp, color = p.textSecondary, maxLines = 1)
+                            Text(
+                                formatRateCompact(upBps),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = p.upGreen,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }
                 MiuixCard(modifier = Modifier.weight(1f)) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 15.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Box(
-                            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(p.accentSoft),
+                            modifier = Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(p.accentSoft),
                             contentAlignment = Alignment.Center,
                         ) {
-                            ToolRowGlyph("arrow_down", p.accent, size = 20.dp)
+                            ToolRowGlyph("arrow_down", p.accent, size = 18.dp)
                         }
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text("下行速度", fontSize = 13.sp, color = p.textSecondary)
-                            Text(formatRateCompact(downBps), fontSize = 19.sp, fontWeight = FontWeight.Medium, color = p.accent, maxLines = 1)
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("下行速度", fontSize = 12.sp, color = p.textSecondary, maxLines = 1)
+                            Text(
+                                formatRateCompact(downBps),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = p.accent,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }
@@ -1092,8 +1423,13 @@ fun ToolsTabScreen(
 
         LazyColumn(
             state = listState,
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = 8.dp,
+                bottom = LocalLiquidDockBottomPadding.current,
+            ),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
             // Card 1: 网络测试
@@ -1118,6 +1454,7 @@ fun ToolsTabScreen(
                             navigateTo("runtime_files")
                         },
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "脚本",
                         icon = { ToolRowGlyph("script", p.textPrimary) },
@@ -1166,6 +1503,7 @@ fun ToolsTabScreen(
                         icon = { ToolRowGlyph("wifi", p.textPrimary) },
                         onClick = { navigateTo("network_match") },
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "共享网络",
                         icon = { ToolRowGlyph("hotspot", p.textPrimary) },
@@ -1174,6 +1512,7 @@ fun ToolsTabScreen(
                             navigateTo("shared_network_config")
                         },
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "绕过规则",
                         icon = { ToolRowGlyph("branch", p.textPrimary) },
@@ -1190,6 +1529,7 @@ fun ToolsTabScreen(
                         icon = { ToolRowGlyph("link", p.textPrimary) },
                         onClick = { navigateTo("subscription_management") },
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "CNIP 设置",
                         icon = { ToolRowGlyph("pin", p.textPrimary) },
@@ -1206,16 +1546,19 @@ fun ToolsTabScreen(
                         icon = { ToolRowGlyph("globe", p.textPrimary) },
                         onClick = { showWebUiUpdateDialog = true },
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "更新核心",
                         icon = { ToolRowGlyph("download", p.textPrimary) },
                         onClick = { navigateTo("core_update_sources") },
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "从文件安装核心",
                         icon = { ToolRowGlyph("folder", p.textPrimary) },
                         onClick = onLaunchImportCore,
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "Sub-Store",
                         icon = { ToolRowGlyph("layers", p.textPrimary) },
@@ -1301,60 +1644,325 @@ private fun QuickSheetPill(label: String, primary: Boolean, modifier: Modifier, 
     }
 }
 
+@Composable
+private fun CollapsibleGlassWebCapsule(
+    label: String,
+    expanded: Boolean,
+    onBack: () -> Unit,
+    onToggleExpand: () -> Unit,
+    onReload: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val p = LocalBoxPalette.current
+    val stripBg = if (p.isDark) {
+        Color(0xFF10131A).copy(alpha = if (p.enableBlur) 0.88f else 0.96f)
+    } else {
+        Color(0xFFF6F7FA).copy(alpha = if (p.enableBlur) 0.90f else 0.98f)
+    }
+    val pillBg = if (p.isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.05f)
+    val borderCol = if (p.isDark) Color.White.copy(alpha = 0.12f) else p.divider
+    Column(modifier = modifier.fillMaxWidth().background(stripBg)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(38.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .iosPressScale(pressedScale = 0.9f, onClick = onBack)
+                    .clip(CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                ToolRowGlyph("back", p.textPrimary, size = 18.dp)
+            }
+
+            Row(
+                modifier = Modifier
+                    .height(28.dp)
+                    .iosPressScale(pressedScale = 0.96f, onClick = onToggleExpand)
+                    .clip(CircleShape)
+                    .background(if (expanded) p.accentSoft else pillBg)
+                    .border(0.7.dp, if (expanded) p.accent.copy(alpha = 0.4f) else borderCol, CircleShape)
+                    .padding(horizontal = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (expanded) p.accent else p.textPrimary,
+                    maxLines = 1,
+                )
+                Text(
+                    text = if (expanded) "▴" else "▾",
+                    fontSize = 11.sp,
+                    color = p.accent,
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .iosPressScale(pressedScale = 0.9f, onClick = onReload)
+                    .clip(CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                ToolRowGlyph("refresh", p.textSecondary, size = 16.dp)
+            }
+        }
+        if (!expanded) {
+            HorizontalDivider(thickness = 0.5.dp, color = p.divider.copy(alpha = 0.55f))
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WebUiRouteScreen(state: JSONObject) {
     val p = LocalBoxPalette.current
+    val ctx = LocalContext.current
     val prefs = state.optJSONObject("prefs") ?: JSONObject()
     val webPanel = prefs.optJSONObject("web_panel") ?: JSONObject()
     val selected = webPanel.strOr("webui_selected_panel", "local")
+    val localMode = webPanel.strOr("webui_local_panel_mode", "full")
+    val customArr = webPanel.optJSONArray("webui_custom_panels") ?: JSONArray()
     val url = state.strOr("webui_resolved_url", "http://127.0.0.1:9527/ui/")
     val token = state.optString("webui_one_time_token", "")
 
-    Column(modifier = Modifier.fillMaxSize().background(p.background)) {
-        MiuixSubPageTopBar(
-            title = "WebUI",
-            collapsed = true,
-            onBack = { dispatchAsync("pop_back") },
-        )
-        FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            listOf(
-                "local" to "本地 Doona",
-                "zashboard" to "Zashboard",
-                "metacubexd" to "MetaCubeXD",
-                "sing_box" to "Sing-Box",
-            ).forEach { (id, label) ->
-                val active = selected == id
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(if (active) p.accentSoft else p.card)
-                        .clickable { dispatchAsync("select_web_panel") { put("panel_id", id) } }
-                        .padding(horizontal = 14.dp, vertical = 7.dp),
-                ) {
-                    Text(label, fontSize = 13.sp, color = if (active) p.accent else p.textPrimary, fontWeight = if (active) FontWeight.Medium else FontWeight.Normal)
+    var topExpanded by remember { mutableStateOf(false) }
+    var reloadNonce by remember { mutableIntStateOf(0) }
+    var showAddCustomDialog by remember { mutableStateOf(false) }
+
+    val panelItems = remember(selected, localMode, customArr.toString()) {
+        buildList {
+            add(Triple("local_full", "本地 Doona", selected == "local" && localMode != "lite"))
+            add(Triple("local_lite", "Doona Lite", selected == "local" && localMode == "lite"))
+            add(Triple("zashboard", "Zashboard", selected == "zashboard"))
+            add(Triple("metacubexd", "MetaCubeXD", selected == "metacubexd"))
+            add(Triple("sing_box", "Sing-Box", selected == "sing_box"))
+            for (i in 0 until customArr.length()) {
+                val obj = customArr.optJSONObject(i) ?: continue
+                val cid = obj.optString("id", "").trim()
+                val cname = obj.optString("name", cid).trim()
+                if (cid.isNotEmpty()) {
+                    add(Triple("custom:$cid", cname, selected == cid))
                 }
             }
         }
-        BoxWebViewHost(url = url, oneTimeToken = token, modifier = Modifier.fillMaxSize())
+    }
+    val activeLabel = panelItems.firstOrNull { it.third }?.second ?: "本地 Doona"
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(p.background)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+    ) {
+        CollapsibleGlassWebCapsule(
+            label = activeLabel,
+            expanded = topExpanded,
+            onBack = { dispatchAsync("pop_back") },
+            onToggleExpand = { topExpanded = !topExpanded },
+            onReload = { reloadNonce++ },
+        )
+
+        // Collapsible iOS Glass Panel Switcher Drawer (collapsed by default; zero overlap with WebView!)
+        AnimatedVisibility(
+            visible = topExpanded,
+            enter = expandVertically(tween(240, easing = IosNavEasing)) + fadeIn(tween(180)),
+            exit = shrinkVertically(tween(200, easing = IosNavEasing)) + fadeOut(tween(140)),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(p.card.copy(alpha = 0.95f)),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(start = 12.dp, end = 12.dp, bottom = 8.dp, top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    panelItems.forEach { (key, label, active) ->
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(if (active) p.accentSoft else p.background)
+                                .clickable {
+                                    when {
+                                        key == "local_full" -> {
+                                            dispatchAsync("select_web_panel") { put("panel_id", "local") }
+                                            dispatchAsync("set_web_ui_local_mode") { put("mode", "full") }
+                                        }
+                                        key == "local_lite" -> {
+                                            dispatchAsync("select_web_panel") { put("panel_id", "local") }
+                                            dispatchAsync("set_web_ui_local_mode") { put("mode", "lite") }
+                                        }
+                                        key.startsWith("custom:") -> {
+                                            val cid = key.removePrefix("custom:")
+                                            dispatchAsync("select_web_panel") { put("panel_id", cid) }
+                                        }
+                                        else -> {
+                                            dispatchAsync("select_web_panel") { put("panel_id", key) }
+                                        }
+                                    }
+                                    topExpanded = false
+                                }
+                                .padding(horizontal = 13.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                color = if (active) p.accent else p.textPrimary,
+                                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(p.background)
+                            .clickable { showAddCustomDialog = true }
+                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                    ) {
+                        Text("+ 面板", fontSize = 12.sp, color = p.textSecondary, maxLines = 1)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(p.background)
+                            .clickable {
+                                runCatching {
+                                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                }
+                            }
+                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                    ) {
+                        Text("浏览器 ↗", fontSize = 12.sp, color = p.textSecondary, maxLines = 1)
+                    }
+                }
+                HorizontalDivider(thickness = 0.5.dp, color = p.divider.copy(alpha = 0.7f))
+            }
+        }
+
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            BoxWebViewHost(
+                url = url,
+                oneTimeToken = token,
+                reloadNonce = reloadNonce,
+                onScrollCollapse = { if (topExpanded) topExpanded = false },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+
+    if (showAddCustomDialog) {
+        MiuixTextInputDialog(
+            title = "添加自定义面板 URL",
+            subtitle = "输入任意本地或远程 WebUI 地址（例如 http://127.0.0.1:9090/ui/）",
+            initialValue = "http://127.0.0.1:9527/ui/",
+            placeholder = "https://...",
+            confirmLabel = "添加并切换",
+            onConfirm = { customUrl ->
+                if (customUrl.isNotBlank()) {
+                    val id = "p_${System.currentTimeMillis()}"
+                    val host = runCatching { Uri.parse(customUrl).host ?: "自定义" }.getOrDefault("自定义")
+                    dispatchAsync("add_custom_web_panel") {
+                        put("is_substore", false)
+                        put(
+                            "panel",
+                            JSONObject()
+                                .put("id", id)
+                                .put("name", host)
+                                .put("url", customUrl.trim()),
+                        )
+                    }
+                    dispatchAsync("select_web_panel") { put("panel_id", id) }
+                }
+            },
+            onDismiss = { showAddCustomDialog = false },
+        )
     }
 }
 
 @Composable
 fun SubStoreRouteScreen(state: JSONObject) {
     val p = LocalBoxPalette.current
+    val ctx = LocalContext.current
     val env = state.optJSONObject("substore_env") ?: JSONObject()
-    Column(modifier = Modifier.fillMaxSize().background(p.background)) {
-        MiuixSubPageTopBar(title = "Sub-Store", collapsed = true, onBack = { dispatchAsync("pop_back") })
-        BoxWebViewHost(
-            url = env.strOr("resolved_url", "http://127.0.0.1:3001/"),
-            oneTimeToken = "",
-            modifier = Modifier.fillMaxSize(),
+    val url = env.strOr("resolved_url", "http://127.0.0.1:3001/")
+    var topExpanded by remember { mutableStateOf(false) }
+    var reloadNonce by remember { mutableIntStateOf(0) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(p.background)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+    ) {
+        CollapsibleGlassWebCapsule(
+            label = "Sub-Store",
+            expanded = topExpanded,
+            onBack = { dispatchAsync("pop_back") },
+            onToggleExpand = { topExpanded = !topExpanded },
+            onReload = { reloadNonce++ },
         )
+
+        AnimatedVisibility(
+            visible = topExpanded,
+            enter = expandVertically(tween(240, easing = IosNavEasing)) + fadeIn(tween(180)),
+            exit = shrinkVertically(tween(200, easing = IosNavEasing)) + fadeOut(tween(140)),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().background(p.card.copy(alpha = 0.95f))) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        url,
+                        fontSize = 12.sp,
+                        color = p.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(p.background)
+                            .clickable {
+                                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                            }
+                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                    ) {
+                        Text("浏览器 ↗", fontSize = 12.sp, color = p.textSecondary)
+                    }
+                }
+                HorizontalDivider(thickness = 0.5.dp, color = p.divider.copy(alpha = 0.7f))
+            }
+        }
+
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            BoxWebViewHost(
+                url = url,
+                oneTimeToken = "",
+                reloadNonce = reloadNonce,
+                onScrollCollapse = { if (topExpanded) topExpanded = false },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
@@ -1427,17 +2035,12 @@ private fun CustomApiConfigDialog(
     var en by remember { mutableStateOf(enabled) }
     var ep by remember { mutableStateOf(endpoint) }
     var sec by remember { mutableStateOf(secret) }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    IosBottomSheetDialog(onDismiss = onDismiss) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp)
-                .clip(RoundedCornerShape(28.dp))
-                .background(p.card)
-                .padding(22.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("自定义 API 配置 (M16)", fontSize = 19.sp, fontWeight = FontWeight.Medium, color = p.textPrimary, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            Text("自定义 API 配置", fontSize = 19.sp, fontWeight = FontWeight.SemiBold, color = p.textPrimary, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             MiuixSettingSwitchRow("启用自定义 API 覆盖", en) { en = it }
             OutlinedTextField(value = ep, onValueChange = { ep = it }, label = { Text("API Endpoint") }, singleLine = true, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth())
             OutlinedTextField(value = sec, onValueChange = { sec = it }, label = { Text("Secret") }, singleLine = true, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth())
@@ -1452,7 +2055,7 @@ private fun CustomApiConfigDialog(
                         onDismiss()
                     },
                     contentAlignment = Alignment.Center,
-                ) { Text("保存", color = p.accent, fontWeight = FontWeight.Medium) }
+                ) { Text("保存", color = p.accent, fontWeight = FontWeight.SemiBold) }
             }
         }
     }

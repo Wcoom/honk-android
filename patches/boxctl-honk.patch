@@ -1,3 +1,43 @@
+diff --git a/boxctl/Cargo.lock b/boxctl/Cargo.lock
+index c81be90..d4d6097 100644
+--- a/boxctl/Cargo.lock
++++ b/boxctl/Cargo.lock
+@@ -68,6 +68,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
+ name = "boxctl"
+ version = "0.1.0"
+ dependencies = [
++ "boxproxy-schema",
+  "clap",
+  "getrandom",
+  "jsonc-parser",
+@@ -80,6 +81,15 @@ dependencies = [
+  "yaml-rust2",
+ ]
+ 
++[[package]]
++name = "boxproxy-schema"
++version = "0.1.0"
++dependencies = [
++ "rusqlite",
++ "serde",
++ "serde_json",
++]
++
+ [[package]]
+ name = "bytes"
+ version = "1.12.1"
+diff --git a/boxctl/Cargo.toml b/boxctl/Cargo.toml
+index adc2dfc..10010a3 100644
+--- a/boxctl/Cargo.toml
++++ b/boxctl/Cargo.toml
+@@ -11,6 +11,7 @@ panic = "abort"
+ strip = true
+ 
+ [dependencies]
++boxproxy-schema = { path = "../../rust/boxproxy/crates/boxproxy-schema" }
+ clap = { version = "4.5", features = ["derive"] }
+ getrandom = "0.4.3"
+ jsonc-parser = { version = "0.33.0", features = ["serde", "serde_json"] }
 diff --git a/boxctl/src/cli.rs b/boxctl/src/cli.rs
 index a1be89c..bd0480b 100644
 --- a/boxctl/src/cli.rs
@@ -35,18 +75,29 @@ index a1be89c..bd0480b 100644
      }
  }
 diff --git a/boxctl/src/config.rs b/boxctl/src/config.rs
-index 6eb281a..9a49903 100644
+index 6eb281a..2243a68 100644
 --- a/boxctl/src/config.rs
 +++ b/boxctl/src/config.rs
-@@ -136,7 +136,14 @@ impl BoxPaths {
+@@ -108,6 +108,7 @@ pub struct Config {
+     pub wifi_list_mode: String,
+     pub wifi_ssids: Vec<String>,
+     pub wifi_bssids: Vec<String>,
++    pub network_rule_groups: Vec<boxproxy_schema::NetworkRuleGroup>,
+     pub tun_device: String,
+     pub fake_ip_range: String,
+     pub fake_ip6_range: String,
+@@ -136,7 +137,17 @@ impl BoxPaths {
                  })
              })
              .or_else(infer_home_from_current_exe)
 -            .unwrap_or_else(|| "/data/user/0/com.boxproxy.box/files/box".to_string());
 +            .unwrap_or_else(|| {
 +                let honk_home = "/data/user/0/com.boxproxy.honk/files/box";
++                let pure_rust_home = "/data/user/0/io.honk.android/files/box";
 +                if std::path::Path::new(honk_home).exists() {
 +                    honk_home.to_string()
++                } else if std::path::Path::new(pure_rust_home).exists() {
++                    pure_rust_home.to_string()
 +                } else {
 +                    "/data/user/0/com.boxproxy.box/files/box".to_string()
 +                }
@@ -54,25 +105,59 @@ index 6eb281a..9a49903 100644
          let home = PathBuf::from(home_str);
          let db = db_arg.unwrap_or_else(|| home.join("box.db"));
          Ok(Self {
-@@ -269,7 +276,7 @@ impl Config {
+@@ -225,7 +236,7 @@ impl Config {
+             &db_mihomo_dns_port,
+             &core_values.mihomo_dns_port,
+             &default_mihomo_dns_port,
+-            bin_name == "mihomo",
++            matches!(bin_name.as_str(), "mihomo" | "meow"),
+         );
+         let resolved_tun_device = resolve_value(
+             &overrides.tun_device,
+@@ -239,14 +250,14 @@ impl Config {
+             &db_fake_ip_range,
+             &core_values.fake_ip_range,
+             &default_fake_ip_range,
+-            matches!(bin_name.as_str(), "mihomo" | "sing-box"),
++            matches!(bin_name.as_str(), "mihomo" | "meow" | "sing-box"),
+         );
+         let resolved_fake_ip6_range = resolve_value(
+             &overrides.fake_ip6_range,
+             &db_fake_ip6_range,
+             &core_values.fake_ip6_range,
+             &default_fake_ip6_range,
+-            matches!(bin_name.as_str(), "mihomo" | "sing-box"),
++            matches!(bin_name.as_str(), "mihomo" | "meow" | "sing-box"),
+         );
+         let sources = CoreConfigSources {
+             read_status: core_values.read_status.clone(),
+@@ -269,7 +280,7 @@ impl Config {
              box_log: paths.run.join("runs.log"),
              box_user_group: "root:net_admin".to_string(),
              bin_name: bin_name.clone(),
 -            bin_list: ["mihomo", "sing-box", "xray", "v2fly", "hysteria"]
-+            bin_list: ["mihomo", "sing-box", "xray", "v2fly", "hysteria", "honk"]
++            bin_list: ["mihomo", "meow", "sing-box", "xray", "v2fly", "hysteria", "honk"]
                  .iter()
                  .map(|value| value.to_string())
                  .collect(),
-@@ -396,7 +403,7 @@ impl Config {
+@@ -348,6 +359,7 @@ impl Config {
+             wifi_list_mode: db_data.wifi_list_mode,
+             wifi_ssids: db_data.wifi_ssids,
+             wifi_bssids: db_data.wifi_bssids,
++            network_rule_groups: db_data.network_rule_groups,
+             tun_device: resolved_tun_device.value,
+             fake_ip_range: resolved_fake_ip_range.value,
+             fake_ip6_range: resolved_fake_ip6_range.value,
+@@ -396,7 +408,7 @@ impl Config {
          self.bin_name = normalize_choice(
              "core",
              &self.bin_name,
 -            &["mihomo", "sing-box", "xray", "v2fly", "hysteria"],
-+            &["mihomo", "sing-box", "xray", "v2fly", "hysteria", "honk"],
++            &["mihomo", "meow", "sing-box", "xray", "v2fly", "hysteria", "honk"],
          )?;
          self.dns_hijack_mode = normalize_choice(
              "DNS hijack mode",
-@@ -438,7 +445,7 @@ impl Config {
+@@ -438,11 +450,11 @@ impl Config {
  }
  
  fn runtime_config_file_path(paths: &BoxPaths) -> PathBuf {
@@ -81,7 +166,12 @@ index 6eb281a..9a49903 100644
  }
  
  fn core_uses_runtime_config(bin_name: &str) -> bool {
-@@ -461,7 +468,7 @@ mod tests {
+-    matches!(bin_name, "mihomo" | "sing-box")
++    matches!(bin_name, "mihomo" | "meow" | "sing-box")
+ }
+ 
+ #[cfg(test)]
+@@ -461,7 +473,7 @@ mod tests {
  
          assert_eq!(
              runtime_config_file_path(&paths),
@@ -90,13 +180,73 @@ index 6eb281a..9a49903 100644
          );
      }
  
+@@ -496,7 +508,7 @@ mod tests {
+ }
+ 
+ fn core_config_values_needed(bin_name: &str) -> bool {
+-    matches!(bin_name, "mihomo" | "sing-box")
++    matches!(bin_name, "mihomo" | "meow" | "sing-box")
+ }
+ 
+ #[derive(Clone, Debug)]
+diff --git a/boxctl/src/config/core_values.rs b/boxctl/src/config/core_values.rs
+index 6739c15..da84363 100644
+--- a/boxctl/src/config/core_values.rs
++++ b/boxctl/src/config/core_values.rs
+@@ -39,7 +39,7 @@ impl CoreConfigValues {
+             }
+         };
+         match bin_name {
+-            "mihomo" => Self::read_mihomo(&text, network_mode),
++            "mihomo" | "meow" => Self::read_mihomo(&text, network_mode),
+             "sing-box" => Self::read_sing_box(&text, network_mode),
+             _ => Self {
+                 read_status: format!("{bin_name} does not support automatic parsing"),
+@@ -242,7 +242,7 @@ pub(super) fn non_empty_value(value: &str) -> Option<String> {
+ }
+ 
+ pub(super) fn default_mihomo_dns_port(bin_name: &str) -> String {
+-    if bin_name == "mihomo" {
++    if matches!(bin_name, "mihomo" | "meow") {
+         "1053".to_string()
+     } else {
+         String::new()
+@@ -254,14 +254,14 @@ pub(super) fn default_tun_device(bin_name: &str, network_mode: &str) -> String {
+         return String::new();
+     }
+     match bin_name {
+-        "mihomo" => "meta".to_string(),
++        "mihomo" | "meow" => "meta".to_string(),
+         "sing-box" => "sing".to_string(),
+         _ => String::new(),
+     }
+ }
+ 
+ pub(super) fn default_fake_ip_range(bin_name: &str) -> String {
+-    if bin_name == "mihomo" {
++    if matches!(bin_name, "mihomo" | "meow") {
+         "198.18.0.1/16".to_string()
+     } else {
+         String::new()
+@@ -269,7 +269,7 @@ pub(super) fn default_fake_ip_range(bin_name: &str) -> String {
+ }
+ 
+ pub(super) fn default_fake_ip6_range(bin_name: &str) -> String {
+-    if bin_name == "mihomo" {
++    if matches!(bin_name, "mihomo" | "meow") {
+         "fc00::/18".to_string()
+     } else {
+         String::new()
 diff --git a/boxctl/src/core_config.rs b/boxctl/src/core_config.rs
-index 3101563..fabe34e 100644
+index 3101563..c73dce1 100644
 --- a/boxctl/src/core_config.rs
 +++ b/boxctl/src/core_config.rs
-@@ -27,6 +27,17 @@ pub fn sync(config: &Config) -> Result<()> {
+@@ -25,8 +25,19 @@ pub fn sync(config: &Config) -> Result<()> {
+     }
+ 
      match config.bin_name.as_str() {
-         "mihomo" => sync_mihomo(config),
+-        "mihomo" => sync_mihomo(config),
++        "mihomo" | "meow" => sync_mihomo(config),
          "sing-box" => sync_sing_box(config),
 +        "honk" => {
 +            let source = config.source_config_path();
@@ -119,14 +269,51 @@ index 3101563..fabe34e 100644
 -    if config.network_mode == crate::config::NetworkMode::Ebpf && config.bin_name != "sing-box" {
 -        return Err("eBPF network mode is only supported by sing-box".to_string());
 +    if config.network_mode == crate::config::NetworkMode::Ebpf
-+        && !matches!(config.bin_name.as_str(), "sing-box" | "mihomo" | "honk")
++        && !matches!(config.bin_name.as_str(), "sing-box" | "mihomo" | "meow" | "honk")
 +    {
-+        return Err("eBPF network mode is only supported by mihomo, sing-box, and honk".to_string());
++        return Err("eBPF network mode is only supported by mihomo, meow, sing-box, and honk".to_string());
      }
      Ok(())
  }
+diff --git a/boxctl/src/db.rs b/boxctl/src/db.rs
+index ab3c5a7..1f1cde7 100644
+--- a/boxctl/src/db.rs
++++ b/boxctl/src/db.rs
+@@ -53,6 +53,7 @@ pub struct RuntimeData {
+     pub wifi_list_mode: String,
+     pub wifi_ssids: Vec<String>,
+     pub wifi_bssids: Vec<String>,
++    pub network_rule_groups: Vec<boxproxy_schema::NetworkRuleGroup>,
+     pub hotspot_ap_interfaces: Vec<String>,
+     pub blocked_interfaces: Vec<String>,
+     pub mac_filter: bool,
+@@ -81,14 +82,20 @@ pub fn load_runtime_data(db_path: &Path) -> Result<RuntimeData> {
+     profile.wifi_enable_ssid_matching = wifi_settings.enable_ssid_matching;
+     profile.wifi_enable_log = wifi_settings.enable_network_control_log;
+     profile.wifi_list_mode = wifi_settings.list_mode;
+-    profile.wifi_ssids = read_string_list(&conn, "wifi_match_ssids", "value")?;
+-    profile.wifi_bssids = read_string_list(&conn, "wifi_match_bssids", "value")?;
+-    profile.hotspot_ap_interfaces = read_string_list(&conn, "hotspot_ap_interfaces", "value")?;
++    profile.wifi_ssids = read_string_list_preferred(&conn, "network_match_ssids", "wifi_match_ssids", "value")?;
++    profile.wifi_bssids = read_string_list_preferred(&conn, "network_match_bssids", "wifi_match_bssids", "value")?;
++    profile.network_rule_groups = read_network_rule_groups(&conn);
++    profile.hotspot_ap_interfaces = read_string_list_preferred(
++        &conn,
++        "shared_network_interfaces",
++        "hotspot_ap_interfaces",
++        "value",
++    )?;
+     profile.blocked_interfaces = read_string_list(&conn, "blocked_interfaces", "value")?;
+     let hotspot_settings = read_hotspot_settings(&conn)?;
+     profile.mac_filter = hotspot_settings.mac_filter;
+     profile.mac_mode = hotspot_settings.mac_mode;
+-    profile.macs_list = read_string_list(&conn, "hotspot_macs", "value")?;
++    profile.macs_list = read_string_list_preferred(&conn, "shared_network_macs", "hotspot_macs", "value")?;
+     profile.intranet_cidrs4 = read_string_list(&conn, "intranet_ipv4_cidrs", "value")?;
+     profile.intranet_cidrs6 = read_string_list(&conn, "intranet_ipv6_cidrs", "value")?;
+     Ok(profile)
 diff --git a/boxctl/src/db/read.rs b/boxctl/src/db/read.rs
-index 8ca9272..9978bc4 100644
+index 8ca9272..e628bbc 100644
 --- a/boxctl/src/db/read.rs
 +++ b/boxctl/src/db/read.rs
 @@ -16,21 +16,41 @@ pub(super) struct HotspotSettings {
@@ -184,37 +371,182 @@ index 8ca9272..9978bc4 100644
              [],
              |row| {
                  Ok(RuntimeData {
-@@ -154,7 +174,7 @@ pub(super) fn read_wifi_settings(conn: &Connection) -> Result<WifiSettings> {
-             enable_network_control_log: enable_network_control_log != 0,
-             list_mode,
-         }),
+@@ -79,6 +99,7 @@ pub(super) fn load_profile(conn: &Connection) -> Result<RuntimeData> {
+                     wifi_list_mode: "blacklist".to_string(),
+                     wifi_ssids: Vec::new(),
+                     wifi_bssids: Vec::new(),
++                    network_rule_groups: Vec::new(),
+                     hotspot_ap_interfaces: Vec::new(),
+                     blocked_interfaces: Vec::new(),
+                     mac_filter: false,
+@@ -122,12 +143,20 @@ pub(super) fn read_uid_list(conn: &Connection, table: &str, column: &str) -> Vec
+ }
+ 
+ pub(super) fn read_wifi_settings(conn: &Connection) -> Result<WifiSettings> {
+-    let values = conn.query_row(
+-        "SELECT network_control_enabled, use_on_wifi_disconnect, use_on_wifi_connect, \
+-         enable_ssid_matching, enable_network_control_log, list_mode \
+-         FROM wifi_match_settings WHERE id = 1",
+-        [],
+-        |row| {
++    for table in ["network_match_settings", "wifi_match_settings"] {
++        let sql = format!(
++            "SELECT network_control_enabled, use_on_wifi_disconnect, use_on_wifi_connect, \
++             enable_ssid_matching, enable_network_control_log, list_mode \
++             FROM {table} WHERE id = 1"
++        );
++        if let Ok((
++            network_control_enabled,
++            use_on_wifi_disconnect,
++            use_on_wifi_connect,
++            enable_ssid_matching,
++            enable_network_control_log,
++            list_mode,
++        )) = conn.query_row(&sql, [], |row| {
+             Ok((
+                 row.get::<_, i64>(0)?,
+                 row.get::<_, i64>(1)?,
+@@ -136,53 +165,97 @@ pub(super) fn read_wifi_settings(conn: &Connection) -> Result<WifiSettings> {
+                 row.get::<_, i64>(4)?,
+                 row.get::<_, String>(5)?,
+             ))
+-        },
+-    );
+-    match values {
+-        Ok((
+-            network_control_enabled,
+-            use_on_wifi_disconnect,
+-            use_on_wifi_connect,
+-            enable_ssid_matching,
+-            enable_network_control_log,
+-            list_mode,
+-        )) => Ok(WifiSettings {
+-            network_control_enabled: network_control_enabled != 0,
+-            use_on_wifi_disconnect: use_on_wifi_disconnect != 0,
+-            use_on_wifi_connect: use_on_wifi_connect != 0,
+-            enable_ssid_matching: enable_ssid_matching != 0,
+-            enable_network_control_log: enable_network_control_log != 0,
+-            list_mode,
+-        }),
 -        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(WifiSettings {
-+        Err(_) => Ok(WifiSettings {
-             network_control_enabled: false,
-             use_on_wifi_disconnect: true,
-             use_on_wifi_connect: true,
-@@ -162,7 +182,6 @@ pub(super) fn read_wifi_settings(conn: &Connection) -> Result<WifiSettings> {
-             enable_network_control_log: true,
-             list_mode: "blacklist".to_string(),
-         }),
+-            network_control_enabled: false,
+-            use_on_wifi_disconnect: true,
+-            use_on_wifi_connect: true,
+-            enable_ssid_matching: false,
+-            enable_network_control_log: true,
+-            list_mode: "blacklist".to_string(),
+-        }),
 -        Err(err) => Err(format!("read wifi_match_settings failed: {err}")),
++        }) {
++            return Ok(WifiSettings {
++                network_control_enabled: network_control_enabled != 0,
++                use_on_wifi_disconnect: use_on_wifi_disconnect != 0,
++                use_on_wifi_connect: use_on_wifi_connect != 0,
++                enable_ssid_matching: enable_ssid_matching != 0,
++                enable_network_control_log: enable_network_control_log != 0,
++                list_mode,
++            });
++        }
      }
++    Ok(WifiSettings {
++        network_control_enabled: false,
++        use_on_wifi_disconnect: true,
++        use_on_wifi_connect: true,
++        enable_ssid_matching: false,
++        enable_network_control_log: true,
++        list_mode: "blacklist".to_string(),
++    })
  }
  
-@@ -177,11 +196,10 @@ pub(super) fn read_hotspot_settings(conn: &Connection) -> Result<HotspotSettings
-             mac_filter: mac_filter != 0,
-             mac_mode,
-         }),
+ pub(super) fn read_hotspot_settings(conn: &Connection) -> Result<HotspotSettings> {
+-    let values = conn.query_row(
+-        "SELECT mac_filter, mac_mode FROM hotspot_settings WHERE id = 1",
+-        [],
+-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+-    );
+-    match values {
+-        Ok((mac_filter, mac_mode)) => Ok(HotspotSettings {
+-            mac_filter: mac_filter != 0,
+-            mac_mode,
+-        }),
 -        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(HotspotSettings {
-+        Err(_) => Ok(HotspotSettings {
-             mac_filter: false,
-             mac_mode: "blacklist".to_string(),
-         }),
+-            mac_filter: false,
+-            mac_mode: "blacklist".to_string(),
+-        }),
 -        Err(err) => Err(format!("read hotspot_settings failed: {err}")),
++    for table in ["shared_network_settings", "hotspot_settings"] {
++        let sql = format!("SELECT mac_filter, mac_mode FROM {table} WHERE id = 1");
++        if let Ok((mac_filter, mac_mode)) =
++            conn.query_row(&sql, [], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
++        {
++            return Ok(HotspotSettings {
++                mac_filter: mac_filter != 0,
++                mac_mode,
++            });
++        }
      }
++    Ok(HotspotSettings {
++        mac_filter: false,
++        mac_mode: "blacklist".to_string(),
++    })
++}
++
++pub(super) fn read_string_list_preferred(
++    conn: &Connection,
++    preferred: &str,
++    legacy: &str,
++    column: &str,
++) -> Result<Vec<String>> {
++    let primary = read_string_list(conn, preferred, column)?;
++    if !primary.is_empty() {
++        return Ok(primary);
++    }
++    read_string_list(conn, legacy, column)
++}
++
++pub(super) fn read_network_rule_groups(conn: &Connection) -> Vec<boxproxy_schema::NetworkRuleGroup> {
++    let Ok(mut stmt) = conn.prepare(
++        "SELECT id, name, enabled, priority, expression FROM network_rule_groups ORDER BY priority ASC, id ASC",
++    ) else {
++        return Vec::new();
++    };
++    let Ok(rows) = stmt.query_map([], |row| {
++        Ok(boxproxy_schema::NetworkRuleGroup {
++            id: row.get(0)?,
++            name: row.get(1)?,
++            enabled: row.get::<_, i64>(2)? != 0,
++            priority: row.get(3)?,
++            expression: row.get(4)?,
++            actions: Vec::new(),
++        })
++    }) else {
++        return Vec::new();
++    };
++    let mut groups: Vec<boxproxy_schema::NetworkRuleGroup> = rows.filter_map(|r| r.ok()).collect();
++    if let Ok(mut act_stmt) = conn.prepare(
++        "SELECT id, group_id, sort_order, type, target, continue_on_error \
++         FROM network_rule_actions WHERE group_id = ?1 ORDER BY sort_order ASC, id ASC",
++    ) {
++        for group in &mut groups {
++            if let Ok(act_rows) = act_stmt.query_map([group.id], |row| {
++                Ok(boxproxy_schema::NetworkRuleAction {
++                    id: row.get(0)?,
++                    group_id: row.get(1)?,
++                    sort_order: row.get(2)?,
++                    action_type: row.get(3)?,
++                    target: row.get(4)?,
++                    continue_on_error: row.get::<_, i64>(5)? != 0,
++                })
++            }) {
++                group.actions = act_rows.filter_map(|r| r.ok()).collect();
++            }
++        }
++    }
++    groups
  }
  
-@@ -191,9 +209,9 @@ pub(super) fn read_string_list(
+ pub(super) fn read_string_list(
+@@ -191,9 +264,9 @@ pub(super) fn read_string_list(
      column: &str,
  ) -> Result<Vec<String>> {
      let sql = format!("SELECT {column} FROM {table} ORDER BY id");
@@ -227,6 +559,229 @@ index 8ca9272..9978bc4 100644
      let rows = stmt
          .query_map([], |row| {
              let value: String = row.get(0)?;
+diff --git a/boxctl/src/db/schema.rs b/boxctl/src/db/schema.rs
+index d041cb8..66c6ce2 100644
+--- a/boxctl/src/db/schema.rs
++++ b/boxctl/src/db/schema.rs
+@@ -1,201 +1,7 @@
+ use super::*;
+ 
+-const SCHEMA_VERSION: i64 = 3;
+-
+ pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
+-    let current: i64 = conn
+-        .query_row("PRAGMA user_version", [], |row| row.get(0))
+-        .map_err(|err| format!("read database schema version failed: {err}"))?;
+-    if current >= SCHEMA_VERSION {
+-        return Ok(());
+-    }
+-
+-    conn.execute_batch("BEGIN IMMEDIATE")
+-        .map_err(|err| format!("begin database schema migration failed: {err}"))?;
+-    let migration = migrate_schema(conn, current).and_then(|()| {
+-        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
+-            .map_err(|err| format!("update database schema version failed: {err}"))
+-    });
+-    match migration {
+-        Ok(()) => conn
+-            .execute_batch("COMMIT")
+-            .map_err(|err| format!("commit database schema migration failed: {err}")),
+-        Err(err) => {
+-            let _ = conn.execute_batch("ROLLBACK");
+-            Err(err)
+-        }
+-    }
+-}
+-
+-fn migrate_schema(conn: &Connection, current: i64) -> Result<()> {
+-    if current < 1 {
+-        initialize_schema(conn)?;
+-    }
+-    if current < 2 {
+-        migrate_v2(conn)?;
+-    }
+-    Ok(())
+-}
+-
+-fn initialize_schema(conn: &Connection) -> Result<()> {
+-    conn.execute_batch(
+-        r#"
+-        CREATE TABLE IF NOT EXISTS runtime_profile (
+-            id INTEGER PRIMARY KEY CHECK(id = 1),
+-            core_name TEXT NOT NULL,
+-            mode TEXT NOT NULL,
+-            proxy_mode TEXT NOT NULL,
+-            auto_sync_config INTEGER NOT NULL,
+-            performance_mode INTEGER NOT NULL,
+-            clean_vendor_firewall INTEGER NOT NULL DEFAULT 0,
+-            ipv6_mode TEXT NOT NULL DEFAULT 'enable',
+-            config_name TEXT NOT NULL,
+-            tproxy_port TEXT NOT NULL,
+-            redir_port TEXT NOT NULL,
+-            quic TEXT NOT NULL,
+-            mihomo_dns_forward TEXT NOT NULL,
+-            mihomo_dns_port TEXT NOT NULL,
+-            proxy_tcp INTEGER NOT NULL,
+-            proxy_udp INTEGER NOT NULL,
+-            dns_hijack_tcp INTEGER NOT NULL,
+-            dns_hijack_udp INTEGER NOT NULL,
+-            dns_hijack_mode TEXT NOT NULL,
+-            cgroup_memcg INTEGER NOT NULL,
+-            memcg_limit TEXT NOT NULL,
+-            taskset_cpu INTEGER NOT NULL DEFAULT 0,
+-            allow_cpu TEXT NOT NULL,
+-            cgroup_blkio INTEGER NOT NULL,
+-            weight TEXT NOT NULL,
+-            bypass_cn INTEGER NOT NULL,
+-            tun_device TEXT NOT NULL,
+-            fake_ip_range TEXT NOT NULL,
+-            fake_ip6_range TEXT NOT NULL,
+-            boot_auto_start INTEGER NOT NULL DEFAULT 0
+-        );
+-        CREATE TABLE IF NOT EXISTS app_selection (
+-            uid INTEGER PRIMARY KEY
+-        );
+-        CREATE TABLE IF NOT EXISTS app_settings (
+-            key TEXT PRIMARY KEY,
+-            value TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS app_gid_list (
+-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+-            value TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS cnip_force_uids (
+-            uid INTEGER PRIMARY KEY
+-        );
+-        CREATE TABLE IF NOT EXISTS cnip_settings (
+-            id INTEGER PRIMARY KEY CHECK(id = 1),
+-            bypass_cnip INTEGER NOT NULL,
+-            cnip_mode TEXT NOT NULL DEFAULT 'ipset',
+-            bypass_ipv4 INTEGER NOT NULL,
+-            bypass_ipv6 INTEGER NOT NULL,
+-            ipv4_file TEXT NOT NULL,
+-            ipv4_url TEXT NOT NULL,
+-            ipv6_file TEXT NOT NULL,
+-            ipv6_url TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS wifi_match_settings (
+-            id INTEGER PRIMARY KEY CHECK(id = 1),
+-            network_control_enabled INTEGER NOT NULL,
+-            use_on_wifi_disconnect INTEGER NOT NULL,
+-            use_on_wifi_connect INTEGER NOT NULL,
+-            enable_ssid_matching INTEGER NOT NULL,
+-            enable_network_control_log INTEGER NOT NULL,
+-            list_mode TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS wifi_match_ssids (
+-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+-            value TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS wifi_match_bssids (
+-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+-            value TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS hotspot_settings (
+-            id INTEGER PRIMARY KEY CHECK(id = 1),
+-            mac_filter INTEGER NOT NULL,
+-            mac_mode TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS hotspot_ap_interfaces (
+-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+-            value TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS blocked_interfaces (
+-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+-            value TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS hotspot_macs (
+-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+-            value TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS intranet_bypass_settings (
+-            id INTEGER PRIMARY KEY CHECK(id = 1),
+-            initialized INTEGER NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS intranet_ipv4_cidrs (
+-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+-            value TEXT NOT NULL
+-        );
+-        CREATE TABLE IF NOT EXISTS intranet_ipv6_cidrs (
+-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+-            value TEXT NOT NULL
+-        );
+-        "#,
+-    )
+-    .map_err(|err| format!("initialize database schema failed: {err}"))?;
+-    Ok(())
+-}
+-
+-fn migrate_v2(conn: &Connection) -> Result<()> {
+-    ensure_columns(
+-        conn,
+-        "runtime_profile",
+-        &[
+-            ("boot_auto_start", "INTEGER NOT NULL DEFAULT 0"),
+-            ("clean_vendor_firewall", "INTEGER NOT NULL DEFAULT 0"),
+-            ("ipv6_mode", "TEXT NOT NULL DEFAULT 'enable'"),
+-            ("taskset_cpu", "INTEGER NOT NULL DEFAULT 0"),
+-        ],
+-    )?;
+-    ensure_columns(
+-        conn,
+-        "cnip_settings",
+-        &[("cnip_mode", "TEXT NOT NULL DEFAULT 'ipset'")],
+-    )?;
+-    Ok(())
+-}
+-
+-fn ensure_columns(conn: &Connection, table: &str, columns: &[(&str, &str)]) -> Result<()> {
+-    let existing = table_columns(conn, table)?;
+-    for (column, definition) in columns {
+-        if existing
+-            .iter()
+-            .any(|existing| existing.eq_ignore_ascii_case(column))
+-        {
+-            continue;
+-        }
+-        let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {definition}");
+-        conn.execute(&sql, [])
+-            .map_err(|err| format!("update {table}.{column} failed: {err}"))?;
+-    }
+-    Ok(())
+-}
+-
+-fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
+-    let pragma = format!("PRAGMA table_info({table})");
+-    let mut stmt = conn
+-        .prepare(&pragma)
+-        .map_err(|err| format!("read {table} schema failed: {err}"))?;
+-    let columns = stmt
+-        .query_map([], |row| row.get::<_, String>(1))
+-        .map_err(|err| format!("read {table} schema failed: {err}"))?;
+-
+-    columns
+-        .collect::<std::result::Result<Vec<_>, _>>()
+-        .map_err(|err| format!("read {table} schema failed: {err}"))
++    boxproxy_schema::ensure_schema_v15(conn)
+ }
+ 
+ #[cfg(test)]
+@@ -219,10 +25,12 @@ mod tests {
+         let version: i64 = conn
+             .query_row("PRAGMA user_version", [], |row| row.get(0))
+             .unwrap();
+-        assert_eq!(version, SCHEMA_VERSION);
+-        let profile_columns = table_columns(&conn, "runtime_profile").unwrap();
++        assert_eq!(version, boxproxy_schema::SCHEMA_VERSION);
++        let profile_columns = boxproxy_schema::table_columns(&conn, "runtime_profile").unwrap();
+         assert!(profile_columns.iter().any(|column| column == "taskset_cpu"));
+-        let cnip_columns = table_columns(&conn, "cnip_settings").unwrap();
++        let cnip_columns = boxproxy_schema::table_columns(&conn, "cnip_settings").unwrap();
+         assert!(cnip_columns.iter().any(|column| column == "cnip_mode"));
++        assert!(boxproxy_schema::table_exists(&conn, "network_rule_groups"));
++        assert!(boxproxy_schema::table_exists(&conn, "shared_network_settings"));
+     }
+ }
 diff --git a/boxctl/src/main.rs b/boxctl/src/main.rs
 index 432f78d..d6eb6f5 100644
 --- a/boxctl/src/main.rs
@@ -238,6 +793,38 @@ index 432f78d..d6eb6f5 100644
 +        Command::Clashapi => Ok(()),
      }
  }
+diff --git a/boxctl/src/monitor/policy.rs b/boxctl/src/monitor/policy.rs
+index efaf745..5b5958e 100644
+--- a/boxctl/src/monitor/policy.rs
++++ b/boxctl/src/monitor/policy.rs
+@@ -243,6 +243,27 @@ pub(super) fn refresh_local_ip_rules_if_running(config: &Config, runner: &Runner
+ }
+ 
+ pub(super) fn should_enable_service(config: &Config, observation: &WifiObservation) -> bool {
++    if !config.network_rule_groups.is_empty() {
++        let obs = boxproxy_schema::NetworkObservation {
++            wifi_connected: observation.connected,
++            wifi_ssid: observation.ssid.clone(),
++            wifi_bssid: observation.bssid.clone(),
++            cellular_connected: !observation.connected,
++            ..Default::default()
++        };
++        if let Some(group) =
++            boxproxy_schema::match_first_rule_group(&config.network_rule_groups, &obs)
++        {
++            for act in &group.actions {
++                match act.action_type.trim().to_ascii_lowercase().as_str() {
++                    "stop" | "disable" | "down" => return false,
++                    "start" | "enable" | "up" | "restart" => return true,
++                    _ => {}
++                }
++            }
++        }
++    }
++
+     if !observation.connected {
+         return config.wifi_use_on_disconnect;
+     }
 diff --git a/boxctl/src/resource.rs b/boxctl/src/resource.rs
 index b200b5c..43fafb1 100644
 --- a/boxctl/src/resource.rs
@@ -319,7 +906,7 @@ index b200b5c..43fafb1 100644
      } else {
          format!("-> {}, inherited weight", target.display())
 diff --git a/boxctl/src/service.rs b/boxctl/src/service.rs
-index 995521e..9b6a73e 100644
+index 995521e..16a2a38 100644
 --- a/boxctl/src/service.rs
 +++ b/boxctl/src/service.rs
 @@ -24,6 +24,8 @@ const STOP_WAIT_TOTAL_MS: u64 = 1500;
@@ -387,14 +974,23 @@ index 995521e..9b6a73e 100644
  
      match config.bin_name.as_str() {
 -        "mihomo" | "sing-box" | "xray" | "v2fly" | "hysteria" => {}
-+        "mihomo" | "sing-box" | "xray" | "v2fly" | "hysteria" | "honk" => {}
++        "mihomo" | "meow" | "sing-box" | "xray" | "v2fly" | "hysteria" | "honk" => {}
          other => return Err(format!("unknown core: {other}")),
      }
  
 diff --git a/boxctl/src/service/command.rs b/boxctl/src/service/command.rs
-index 6dede90..87003d6 100644
+index 6dede90..1510369 100644
 --- a/boxctl/src/service/command.rs
 +++ b/boxctl/src/service/command.rs
+@@ -6,7 +6,7 @@ pub(super) fn core_check_command(config: &Config) -> (String, Vec<String>) {
+     let file = config.launch_config_path().to_string_lossy().to_string();
+ 
+     match config.bin_name.as_str() {
+-        "mihomo" => (bin, vec!["-t".into(), "-d".into(), dir, "-f".into(), file]),
++        "mihomo" | "meow" => (bin, vec!["-t".into(), "-d".into(), dir, "-f".into(), file]),
+         "sing-box" => (
+             bin,
+             vec!["check".into(), "-c".into(), file, "-D".into(), dir],
 @@ -14,6 +14,7 @@ pub(super) fn core_check_command(config: &Config) -> (String, Vec<String>) {
          "xray" => (bin, vec!["-test".into(), "-confdir".into(), dir]),
          "v2fly" => (bin, vec!["test".into(), "-d".into(), dir]),
@@ -403,7 +999,13 @@ index 6dede90..87003d6 100644
          _ => (String::new(), Vec::new()),
      }
  }
-@@ -30,6 +31,14 @@ pub(super) fn core_run_command(config: &Config) -> (String, Vec<String>) {
+@@ -25,11 +26,19 @@ pub(super) fn core_run_command(config: &Config) -> (String, Vec<String>) {
+     let bin = config.bin_path.to_string_lossy().to_string();
+ 
+     match config.bin_name.as_str() {
+-        "mihomo" => args.extend(["-d".into(), dir, "-f".into(), file]),
++        "mihomo" | "meow" => args.extend(["-d".into(), dir, "-f".into(), file]),
+         "sing-box" => args.extend(["run".into(), "-c".into(), file, "-D".into(), dir]),
          "xray" => args.extend(["run".into(), "-confdir".into(), dir]),
          "v2fly" => args.extend(["run".into(), "-d".into(), dir]),
          "hysteria" => args.extend(["-c".into(), file]),
@@ -418,7 +1020,7 @@ index 6dede90..87003d6 100644
          _ => {}
      }
  
-@@ -51,9 +60,15 @@ pub(super) fn core_run_command(config: &Config) -> (String, Vec<String>) {
+@@ -51,9 +60,14 @@ pub(super) fn core_run_command(config: &Config) -> (String, Vec<String>) {
  
  pub(super) fn core_env(config: &Config) -> Vec<(&'static str, String)> {
      let asset_dir = config.core_dir().to_string_lossy().to_string();
@@ -428,7 +1030,6 @@ index 6dede90..87003d6 100644
          "v2fly" => vec![("V2RAY_LOCATION_ASSET", asset_dir)],
 +        "honk" => vec![
 +            ("HONK_RUN_DIR", run_dir),
-+            ("HONK_RECORD_ALWAYS", "1".to_string()),
 +            ("SSL_CERT_DIR", "/apex/com.android.conscrypt/cacerts".to_string()),
 +        ],
          _ => Vec::new(),

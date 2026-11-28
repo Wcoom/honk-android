@@ -21,7 +21,10 @@ const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 pub(super) enum Ui {
     Directory(Box<(ServeDir, ServeFile)>),
     #[cfg(feature = "native-ui")]
-    Embedded(&'static [(&'static str, EmbeddedAsset)]),
+    Embedded {
+        primary: &'static [(&'static str, EmbeddedAsset)],
+        lite: Option<&'static [(&'static str, EmbeddedAsset)]>,
+    },
 }
 
 pub(super) async fn load(path: &str) -> anyhow::Result<Option<Ui>> {
@@ -35,11 +38,17 @@ pub(super) async fn load(path: &str) -> anyhow::Result<Option<Ui>> {
                 include!(concat!(env!("OUT_DIR"), "/native_ui_assets.rs"));
             static LITE: &[(&str, EmbeddedAsset)] =
                 include!(concat!(env!("OUT_DIR"), "/native_ui_lite_assets.rs"));
-            return Ok(Some(Ui::Embedded(if path == "embedded-lite" {
-                LITE
+            return Ok(Some(if path == "embedded-lite" {
+                Ui::Embedded {
+                    primary: LITE,
+                    lite: None,
+                }
             } else {
-                STANDARD
-            })));
+                Ui::Embedded {
+                    primary: STANDARD,
+                    lite: Some(LITE),
+                }
+            }));
         }
         #[cfg(not(feature = "native-ui"))]
         anyhow::bail!("{path} native UI requires the native-ui feature");
@@ -81,7 +90,8 @@ impl Ui {
         let hashed = request
             .uri()
             .path()
-            .strip_prefix("/ui/")
+            .strip_prefix("/ui/lite/")
+            .or_else(|| request.uri().path().strip_prefix("/ui/"))
             .is_some_and(is_hashed_asset);
         let mut response = self.respond(request).await;
         let cache = cache_control(hashed, response.status());
@@ -130,11 +140,32 @@ impl Ui {
         let (files, index) = match self {
             Self::Directory(directory) => (&directory.0, &directory.1),
             #[cfg(feature = "native-ui")]
-            Self::Embedded(files) => {
+            Self::Embedded { primary, lite } => {
+                if let Some(lite_files) = lite {
+                    if decoded == "lite" {
+                        return Redirect::temporary("/ui/lite/").into_response();
+                    }
+                    if let Some(lite_rel) = decoded.strip_prefix("lite/") {
+                        let lite_nav = !lite_rel.contains('.')
+                            && !matches!(
+                                lite_rel.split('/').next(),
+                                Some("assets" | "fonts" | "icons")
+                            );
+                        return embedded_response(
+                            lite_files,
+                            lite_rel,
+                            lite_nav,
+                            "/ui/lite/",
+                            request.method() == Method::HEAD,
+                            negotiate(request.headers()),
+                        );
+                    }
+                }
                 return embedded_response(
-                    files,
+                    primary,
                     &decoded,
                     navigation,
+                    "/ui/",
                     request.method() == Method::HEAD,
                     negotiate(request.headers()),
                 );
@@ -313,6 +344,7 @@ fn embedded_response(
     files: &'static [(&'static str, EmbeddedAsset)],
     path: &str,
     navigation: bool,
+    fallback_root: &'static str,
     head: bool,
     encoding: Encoding,
 ) -> Response {
@@ -321,8 +353,8 @@ fn embedded_response(
     let path = if path.is_empty() { "index.html" } else { path };
     let Ok(index) = files.binary_search_by(|(name, _)| name.cmp(&path)) else {
         return if navigation {
-            // The hash router's relative assets and service worker require /ui/.
-            Redirect::temporary("/ui/").into_response()
+            // The hash router's relative assets and service worker require trailing slash root.
+            Redirect::temporary(fallback_root).into_response()
         } else {
             StatusCode::NOT_FOUND.into_response()
         };

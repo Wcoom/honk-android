@@ -5,12 +5,16 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import io.honk.android.MainActivity
 import io.honk.android.PanelSheetActivity
 import io.honk.android.R
@@ -35,21 +39,44 @@ class BoxPersistentNotificationService : Service() {
     private val worker = Executors.newSingleThreadExecutor()
     @Volatile
     private var running = false
+    @Volatile
+    private var screenInteractive = true
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    screenInteractive = false
+                    handler.removeCallbacks(refreshTick)
+                }
+                Intent.ACTION_SCREEN_ON -> {
+                    screenInteractive = true
+                    if (running) {
+                        handler.removeCallbacks(refreshTick)
+                        handler.post(refreshTick)
+                    }
+                }
+            }
+        }
+    }
 
     private val refreshTick: Runnable = object : Runnable {
         override fun run() {
-            if (!running) return
+            if (!running || !screenInteractive) return
             worker.execute {
                 val snap = BoxEngineHolder.renderNotification(forceRefresh = true)
                 handler.post {
+                    if (!running) return@post
                     if (!snap.optBoolean("should_show", false)) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf()
                         return@post
                     }
                     postNotification(snap)
-                    val delayMs = snap.optInt("refresh_interval_seconds", 5).coerceAtLeast(1) * 1000L
-                    handler.postDelayed(this@BoxPersistentNotificationService.refreshTick, delayMs)
+                    if (screenInteractive) {
+                        val delayMs = snap.optInt("refresh_interval_seconds", 5).coerceAtLeast(2) * 1000L
+                        handler.postDelayed(this@BoxPersistentNotificationService.refreshTick, delayMs)
+                    }
                 }
             }
         }
@@ -60,6 +87,12 @@ class BoxPersistentNotificationService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
+        screenInteractive = getSystemService(PowerManager::class.java)?.isInteractive ?: true
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
+        registerReceiver(screenReceiver, filter)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -77,7 +110,9 @@ class BoxPersistentNotificationService : Service() {
         }
         if (!running) {
             running = true
-            handler.postDelayed(refreshTick, 1000L)
+            if (screenInteractive) {
+                handler.postDelayed(refreshTick, 1500L)
+            }
         }
         return START_STICKY
     }
@@ -85,6 +120,7 @@ class BoxPersistentNotificationService : Service() {
     override fun onDestroy() {
         running = false
         handler.removeCallbacks(refreshTick)
+        runCatching { unregisterReceiver(screenReceiver) }
         worker.shutdownNow()
         super.onDestroy()
     }
@@ -174,13 +210,13 @@ class BoxPersistentNotificationService : Service() {
                 Intent(this, BoxPersistentNotificationService::class.java).setAction(ACTION_STOP),
                 flags,
             )
-            "open_panel" -> PendingIntent.getActivity(
+            "open_panel", "panel" -> PendingIntent.getActivity(
                 this,
                 requestCode,
                 Intent(this, PanelSheetActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 flags,
             )
-            "open_web_ui" -> PendingIntent.getActivity(
+            "open_web_ui", "web_ui" -> PendingIntent.getActivity(
                 this,
                 requestCode,
                 Intent(this, MainActivity::class.java)

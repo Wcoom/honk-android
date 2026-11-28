@@ -128,38 +128,124 @@ fun ProxySelectorInlineBody(state: JSONObject) {
         list
     }
 
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
+    LazyColumn(
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 12.dp,
+            bottom = LocalLiquidDockBottomPadding.current,
+        ),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
         item {
             MiuixCard(modifier = Modifier.fillMaxWidth()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    listOf("rule" to "规则", "direct" to "直连", "global" to "全局").forEach { (id, label) ->
-                        val active = mode.equals(id, true)
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(38.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (active) p.accentSoft else p.background)
-                                .clickable { dispatchAsync("switch_outbound_mode") { put("mode", id) } },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(label, fontSize = 14.sp, color = if (active) p.accent else p.textPrimary, fontWeight = if (active) FontWeight.Medium else FontWeight.Normal)
-                        }
-                    }
+                    val modes = listOf("rule", "direct", "global")
+                    IosSegmentedControl(
+                        items = listOf("规则", "直连", "全局"),
+                        selectedIndex = modes.indexOfFirst { it.equals(mode, true) }.coerceAtLeast(0),
+                        onSelect = { idx -> dispatchAsync("switch_outbound_mode") { put("mode", modes[idx]) } },
+                        modifier = Modifier.weight(1f),
+                        height = 40.dp,
+                        trackColor = p.background,
+                    )
                     MiuixPillBtn("刷新", primary = true) { dispatchAsync("refresh_proxies") }
                 }
             }
         }
 
-        if (selectorGroups.isNotEmpty()) {
+        if (honkGroups != null && honkGroups.length() > 0) {
+            items(honkGroups.length()) { idx ->
+                val g = honkGroups.optJSONObject(idx) ?: JSONObject()
+                val gId = g.strOr("id", "")
+                val gName = g.strOr("name", gId)
+                val count = g.optInt("member_count", 0)
+                val policyKind = g.optJSONObject("policy")?.strOr("kind", "") ?: ""
+                val members = g.optJSONArray("members")
+                val activeMemberId = g.optJSONObject("runtime")
+                    ?.optJSONObject("selection")
+                    ?.optJSONObject("tcp")
+                    ?.strOr("member_id", "")
+                    ?.ifEmpty { null }
+                    ?: g.optJSONObject("selection")?.strOr("tcp_member_id", "").orEmpty()
+                val canSelect = g.optJSONObject("capabilities")?.let {
+                    it.optBoolean("can_select", true) || it.optBoolean("can_override", false)
+                } ?: true
+
+                MiuixCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(gName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = p.textPrimary)
+                                Text(
+                                    "策略: ${policyKind.ifEmpty { "selector" }} · $count 个成员",
+                                    fontSize = 12.sp,
+                                    color = p.textSecondary,
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                if (gId.isNotEmpty()) {
+                                    MiuixPillBtn("测速") {
+                                        dispatchAsync("test_group_delay") { put("group", gId) }
+                                        dispatchAsync("refresh_proxies")
+                                    }
+                                }
+                                MiuixPillBtn("WebUI", primary = true) { navigateTo("web_ui") }
+                            }
+                        }
+                        if (members != null && members.length() > 0) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                for (mIdx in 0 until members.length().coerceAtMost(48)) {
+                                    val m = members.optJSONObject(mIdx) ?: continue
+                                    val mId = m.strOr("id", "")
+                                    val mName = m.strOr("name", mId)
+                                    val active = mId.isNotEmpty() && mId == activeMemberId
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(if (active) p.accentSoft else p.background)
+                                            .clickable(enabled = canSelect && gId.isNotEmpty() && mId.isNotEmpty()) {
+                                                dispatchAsync("select_proxy") {
+                                                    put("group", gId)
+                                                    put("node", mId)
+                                                }
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    ) {
+                                        Text(
+                                            text = mName,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                                            color = if (active) p.accent else p.textPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (selectorGroups.isNotEmpty()) {
             items(selectorGroups.size) { idx ->
                 val g = selectorGroups[idx]
                 val gName = g.strOr("_key", g.strOr("name"))
-                val now = g.optString("now", "")
+                val now = g.strOr("now", "")
                 val all = g.optJSONArray("all") ?: JSONArray()
                 MiuixCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -171,7 +257,7 @@ fun ProxySelectorInlineBody(state: JSONObject) {
                             MiuixPillBtn("测速") { dispatchAsync("test_group_delay") { put("group", gName) } }
                         }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            for (mIdx in 0 until all.length().coerceAtMost(24)) {
+                            for (mIdx in 0 until all.length().coerceAtMost(48)) {
                                 val node = all.optString(mIdx)
                                 val active = node == now
                                 Box(
@@ -183,7 +269,6 @@ fun ProxySelectorInlineBody(state: JSONObject) {
                                                 put("group", gName)
                                                 put("node", node)
                                             }
-                                            dispatchAsync("refresh_proxies")
                                         }
                                         .padding(horizontal = 10.dp, vertical = 6.dp),
                                 ) {
@@ -191,25 +276,6 @@ fun ProxySelectorInlineBody(state: JSONObject) {
                                 }
                             }
                         }
-                    }
-                }
-            }
-        } else if (honkGroups != null && honkGroups.length() > 0) {
-            items(honkGroups.length()) { idx ->
-                val g = honkGroups.optJSONObject(idx) ?: JSONObject()
-                val gName = g.strOr("name", g.strOr("id"))
-                val count = g.optInt("member_count", 0)
-                val policyKind = g.optJSONObject("policy")?.strOr("kind", "") ?: ""
-                MiuixCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(18.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(gName, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = p.textPrimary)
-                            Text("策略: ${policyKind.ifEmpty { "selector" }} · $count 个成员", fontSize = 13.sp, color = p.textSecondary)
-                        }
-                        MiuixPillBtn("WebUI") { navigateTo("web_ui") }
                     }
                 }
             }
@@ -243,13 +309,25 @@ fun ConnectionsInlineBody(state: JSONObject) {
     val snap = state.optJSONObject("connections_snapshot") ?: JSONObject()
     val conns = snap.optJSONArray("connections")
     val paused = state.optBoolean("connections_paused", false)
+    var showCloseAllConfirm by remember { mutableStateOf(false) }
 
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize()) {
+    LazyColumn(
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 12.dp,
+            bottom = LocalLiquidDockBottomPadding.current,
+        ),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiuixPillBtn("刷新", primary = true) { dispatchAsync("refresh_connections") }
                 MiuixPillBtn(if (paused) "恢复" else "暂停") { dispatchAsync("set_connections_paused") { put("paused", !paused) } }
-                MiuixPillBtn("全部断开") { dispatchAsync("close_all_connections") }
+                MiuixPillBtn("全部断开", enabled = conns != null && conns.length() > 0) {
+                    showCloseAllConfirm = true
+                }
             }
         }
         if (conns != null && conns.length() > 0) {
@@ -280,6 +358,17 @@ fun ConnectionsInlineBody(state: JSONObject) {
             }
         }
     }
+
+    if (showCloseAllConfirm) {
+        MiuixConfirmDialog(
+            title = "断开全部连接？",
+            message = "将立即关闭当前所有活跃的 TCP 与 UDP 会话。",
+            confirmLabel = "全部断开",
+            destructive = true,
+            onConfirm = { dispatchAsync("close_all_connections") },
+            onDismiss = { showCloseAllConfirm = false },
+        )
+    }
 }
 
 @Composable
@@ -294,20 +383,148 @@ fun SubscriptionsDetailScreen(state: JSONObject) {
 @Composable
 fun SubscriptionsInlineBody(state: JSONObject) {
     val p = LocalBoxPalette.current
-    val raw = state.opt("proxy_providers_data")?.toString().orEmpty()
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
-        item {
-            MiuixPillBtn("刷新订阅配额 (M13/M14)", primary = true) { dispatchAsync("refresh_subscriptions") }
+    val dataObj = state.optJSONObject("proxy_providers_data")
+    val parsedCards = remember(dataObj?.toString()) {
+        val out = mutableListOf<JSONObject>()
+        if (dataObj != null) {
+            val honkArr = dataObj.optJSONArray("providers")
+            val clashMap = dataObj.optJSONObject("providers")
+            if (honkArr != null) {
+                for (i in 0 until honkArr.length()) {
+                    val item = honkArr.optJSONObject(i) ?: continue
+                    val traffic = item.optJSONObject("traffic")
+                    val upBytes = traffic?.strOr("upload_bytes", "")?.toLongOrNull() ?: 0L
+                    val downBytes = traffic?.strOr("download_bytes", "")?.toLongOrNull() ?: 0L
+                    val totalBytes = traffic?.strOr("total_bytes", "")?.toLongOrNull() ?: 0L
+                    out.add(
+                        JSONObject()
+                            .put("id", item.strOr("id", ""))
+                            .put("name", item.strOr("name", item.strOr("id")))
+                            .put("kind", item.strOr("kind", "subscription"))
+                            .put("count", item.optInt("node_count", 0))
+                            .put("updated", item.strOr("updated_at", item.strOr("last_refresh_at", "")))
+                            .put("used", upBytes + downBytes)
+                            .put("total", totalBytes),
+                    )
+                }
+            } else if (clashMap != null) {
+                val keys = clashMap.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val item = clashMap.optJSONObject(k) ?: continue
+                    val vType = item.optString("vehicleType", "")
+                    if (vType.equals("Compatible", true)) continue
+                    val subInfo = item.optJSONObject("subscriptionInfo")
+                    val used = (subInfo?.optLong("Upload", 0L) ?: 0L) + (subInfo?.optLong("Download", 0L) ?: 0L)
+                    val total = subInfo?.optLong("Total", 0L) ?: 0L
+                    out.add(
+                        JSONObject()
+                            .put("id", k)
+                            .put("name", k)
+                            .put("kind", vType.ifEmpty { "HTTP" })
+                            .put("count", item.optJSONArray("proxies")?.length() ?: 0)
+                            .put("updated", item.optString("updatedAt", ""))
+                            .put("used", used)
+                            .put("total", total),
+                    )
+                }
+            }
         }
+        out
+    }
+
+    LazyColumn(
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 12.dp,
+            bottom = LocalLiquidDockBottomPadding.current,
+        ),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
         item {
-            MiuixCard(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    if (raw.isEmpty() || raw == "null") "刷新后显示订阅与流量数据" else raw.take(2000),
-                    fontSize = 13.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = p.textSecondary,
-                    modifier = Modifier.padding(18.dp),
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MiuixPillBtn("刷新订阅配额", primary = true) { dispatchAsync("refresh_subscriptions") }
+                MiuixPillBtn("在 WebUI 中添加订阅") { navigateTo("web_ui") }
+            }
+        }
+        if (parsedCards.isEmpty()) {
+            item {
+                MiuixCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text("暂无外部订阅源", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = p.textPrimary)
+                        Text(
+                            "当前配置使用内联节点（Inline Nodes）或尚未拉取订阅。可点击“刷新订阅配额”或前往 WebUI 添加远程订阅。",
+                            fontSize = 13.sp,
+                            color = p.textSecondary,
+                        )
+                    }
+                }
+            }
+        } else {
+            items(parsedCards.size) { idx ->
+                val item = parsedCards[idx]
+                val rawPid = item.strOr("id")
+                val rawName = item.strOr("name")
+                val rawKind = item.strOr("kind")
+                val isInline = rawKind.equals("inline", ignoreCase = true) || rawPid.equals("inline", ignoreCase = true)
+                val pid = if (isInline) "" else rawPid
+                val name = if (isInline && rawName.equals("inline", ignoreCase = true)) "内置节点 (Inline)" else rawName
+                val kind = if (isInline) "本地配置" else rawKind
+                val count = item.optInt("count", 0)
+                val used = item.optLong("used", 0L)
+                val total = item.optLong("total", 0L)
+                val updated = item.strOr("updated", "")
+                MiuixCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = p.textPrimary)
+                                Text(
+                                    "$kind · $count 个节点" + if (updated.isNotEmpty()) " · $updated" else "",
+                                    fontSize = 12.sp,
+                                    color = p.textSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (pid.isNotEmpty()) {
+                                MiuixPillBtn("更新", primary = true) {
+                                    dispatchAsync("update_proxy_provider") { put("name", pid) }
+                                    dispatchAsync("refresh_subscriptions")
+                                }
+                            }
+                        }
+                        if (total > 0L) {
+                            val frac = (used.toDouble() / total.toDouble()).toFloat().coerceIn(0.02f, 1f)
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("已用 ${formatBytesCompact(used)}", fontSize = 12.sp, color = p.textSecondary)
+                                    Text("总计 ${formatBytesCompact(total)}", fontSize = 12.sp, color = p.textSecondary)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(p.accentSoft),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(frac)
+                                            .height(6.dp)
+                                            .clip(RoundedCornerShape(50))
+                                            .background(p.accent),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -317,9 +534,23 @@ fun SubscriptionsInlineBody(state: JSONObject) {
 fun RulesDetailScreen(state: JSONObject) {
     val p = LocalBoxPalette.current
     var domain by remember { mutableStateOf("www.google.com") }
-    val trace = state.opt("route_trace_result")?.toString().orEmpty()
+    var ruleQuery by remember { mutableStateOf("") }
+    val traceObj = state.optJSONObject("route_trace_result")
     val rulesObj = state.optJSONObject("rules_data")
     val rulesArr = rulesObj?.optJSONArray("rules") ?: state.optJSONArray("rules_data")
+
+    val filteredRules = remember(rulesArr?.toString(), ruleQuery) {
+        val out = mutableListOf<JSONObject>()
+        if (rulesArr != null) {
+            for (i in 0 until rulesArr.length()) {
+                val r = rulesArr.optJSONObject(i) ?: continue
+                if (ruleQuery.isBlank() || r.toString().contains(ruleQuery, ignoreCase = true)) {
+                    out.add(r)
+                }
+            }
+        }
+        out
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(p.background)) {
         MiuixSubPageTopBar(title = "分流规则与追踪", collapsed = false, onBack = { dispatchAsync("pop_back") })
@@ -330,7 +561,7 @@ fun RulesDetailScreen(state: JSONObject) {
                         OutlinedTextField(
                             value = domain,
                             onValueChange = { domain = it },
-                            label = { Text("路由追踪目标域名 (M11)") },
+                            label = { Text("路由追踪目标域名") },
                             singleLine = true,
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.fillMaxWidth(),
@@ -338,7 +569,7 @@ fun RulesDetailScreen(state: JSONObject) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             MiuixPillBtn("追踪路由", primary = true) {
                                 dispatchAsync("trace_route") {
-                                    put("request", JSONObject().put("domain", domain).put("dst_port", 443).put("protocol", "tcp"))
+                                    put("request", JSONObject().put("domain", domain.trim()).put("dst_port", 443).put("protocol", "tcp"))
                                 }
                             }
                             MiuixPillBtn("刷新规则") { dispatchAsync("refresh_rules") }
@@ -346,20 +577,76 @@ fun RulesDetailScreen(state: JSONObject) {
                     }
                 }
             }
-            if (trace.isNotEmpty() && trace != "null") {
+            if (traceObj != null) {
                 item {
-                    MiuixCard(modifier = Modifier.fillMaxWidth()) {
-                        Text(trace.take(1400), modifier = Modifier.padding(16.dp), fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = p.textPrimary)
+                    val eval0 = traceObj.optJSONArray("evaluations")?.optJSONObject(0)
+                    val dec = eval0 ?: traceObj.optJSONObject("decision") ?: traceObj
+                    val outObj = dec.optJSONObject("outbound")
+                    val outbound = outObj?.strOr("name", "")?.ifEmpty { null }
+                        ?: dec.strOr("outbound", "").ifEmpty { traceObj.strOr("outbound", "-") }
+                    var matchedExpr: String? = null
+                    val evalRules = eval0?.optJSONArray("rules")
+                    if (evalRules != null) {
+                        for (ri in 0 until evalRules.length()) {
+                            val ro = evalRules.optJSONObject(ri) ?: continue
+                            val resStr = ro.strOr("result", ro.strOr("outcome", ""))
+                            if (ro.optBoolean("matched", false) || resStr == "matched" || resStr == "match") {
+                                matchedExpr = ro.strOr("expression", "")
+                                break
+                            }
+                        }
+                    }
+                    val ruleObj = traceObj.optJSONObject("matched_rule") ?: dec.optJSONObject("matched_rule")
+                    val matchedRule = matchedExpr?.ifEmpty { null }
+                        ?: ruleObj?.strOr("expression", "")?.ifEmpty { null }
+                        ?: traceObj.strOr("matched_rule", "fallback")
+                    val selNode = dec.optJSONObject("selected_node")?.strOr("name", "-")
+                        ?: dec.strOr("selected_node", dec.strOr("dst_ip", "-"))
+                    MiuixCard(modifier = Modifier.fillMaxWidth(), backgroundColor = p.accentSoft) {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("出站决策: $outbound", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = p.accent)
+                            Text("命中规则: $matchedRule", fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = p.textPrimary)
+                            if (selNode != "-" && selNode.isNotEmpty()) {
+                                Text("选定节点: $selNode", fontSize = 13.sp, color = p.textSecondary)
+                            }
+                        }
                     }
                 }
             }
-            if (rulesArr != null && rulesArr.length() > 0) {
-                items(rulesArr.length().coerceAtMost(80)) { idx ->
-                    val r = rulesArr.optJSONObject(idx) ?: JSONObject()
+            item {
+                OutlinedTextField(
+                    value = ruleQuery,
+                    onValueChange = { ruleQuery = it },
+                    placeholder = { Text("搜索分流规则 (${filteredRules.size})", color = p.textMuted) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (filteredRules.isNotEmpty()) {
+                items(filteredRules.size.coerceAtMost(120)) { idx ->
+                    val r = filteredRules[idx]
                     MiuixCard(modifier = Modifier.fillMaxWidth()) {
-                        Row(modifier = Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(r.strOr("expression", r.strOr("payload")), fontSize = 13.sp, color = p.textPrimary, modifier = Modifier.weight(1f), maxLines = 2)
-                            Text(r.strOr("outbound", r.strOr("proxy")), fontSize = 13.sp, color = p.accent, fontWeight = FontWeight.Medium)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = r.strOr("expression", r.strOr("payload")),
+                                fontSize = 13.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = p.textPrimary,
+                                modifier = Modifier.weight(1f).padding(end = 10.dp),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = r.strOr("outbound", r.strOr("proxy")),
+                                fontSize = 13.sp,
+                                color = p.accent,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     }
                 }
@@ -371,19 +658,66 @@ fun RulesDetailScreen(state: JSONObject) {
 @Composable
 fun RuleProvidersDetailScreen(state: JSONObject) {
     val p = LocalBoxPalette.current
-    val raw = state.opt("rule_providers_data")?.toString().orEmpty()
+    val dataObj = state.optJSONObject("rule_providers_data")
+    val providers = remember(dataObj?.toString()) {
+        val list = mutableListOf<JSONObject>()
+        val map = dataObj?.optJSONObject("providers")
+        if (map != null) {
+            val keys = map.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val obj = map.optJSONObject(k) ?: continue
+                list.add(JSONObject(obj.toString()).put("_name", k))
+            }
+        }
+        list
+    }
     Column(modifier = Modifier.fillMaxSize().background(p.background)) {
         MiuixSubPageTopBar(title = "规则集", collapsed = false, onBack = { dispatchAsync("pop_back") })
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MiuixPillBtn("刷新规则集", primary = true) { dispatchAsync("refresh_rule_providers") }
-                    MiuixPillBtn("全部更新") { dispatchAsync("update_all_rule_providers") }
+                    if (providers.isNotEmpty()) {
+                        MiuixPillBtn("全部更新") { dispatchAsync("update_all_rule_providers") }
+                    }
+                    MiuixPillBtn("GeoData 管理") { navigateTo("web_ui") }
                 }
             }
-            item {
-                MiuixCard(modifier = Modifier.fillMaxWidth()) {
-                    Text(if (raw.isEmpty() || raw == "null") "(暂无规则集数据)" else raw.take(1800), modifier = Modifier.padding(16.dp), fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = p.textSecondary)
+            if (providers.isEmpty()) {
+                item {
+                    MiuixCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("未配置 Clash 外部规则集", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = p.textPrimary)
+                            Text(
+                                "Honk 核心直接通过高性能 eBPF 与 GeoSite / GeoIP 编译匹配分流规则，可在 WebUI -> 设置 -> GeoData 中一键更新规则库。",
+                                fontSize = 13.sp,
+                                color = p.textSecondary,
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(providers.size) { idx ->
+                    val rp = providers[idx]
+                    val name = rp.strOr("_name", rp.strOr("name"))
+                    val behavior = rp.strOr("behavior", "classical")
+                    val cnt = rp.optInt("ruleCount", 0)
+                    MiuixCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = p.textPrimary)
+                                Text("$behavior · $cnt 条规则", fontSize = 12.sp, color = p.textSecondary)
+                            }
+                            MiuixPillBtn("更新") {
+                                dispatchAsync("update_rule_provider") { put("name", name) }
+                                dispatchAsync("refresh_rule_providers")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -409,28 +743,21 @@ fun AppManagementScreen(state: JSONObject) {
             item {
                 MiuixCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf("core" to "核心接管", "blacklist" to "黑名单", "whitelist" to "白名单").forEach { (id, label) ->
-                                val active = proxyMode == id
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(38.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(if (active) p.accentSoft else p.background)
-                                        .clickable {
-                                            dispatchAsync("save_app_selection") {
-                                                put("uids", selectedArr)
-                                                put("gids", state.optJSONArray("gid_list") ?: JSONArray())
-                                                put("proxy_mode", id)
-                                            }
-                                        },
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(label, fontSize = 14.sp, color = if (active) p.accent else p.textPrimary)
+                        val appModes = listOf("core", "blacklist", "whitelist")
+                        IosSegmentedControl(
+                            items = listOf("核心接管", "黑名单", "白名单"),
+                            selectedIndex = appModes.indexOf(proxyMode).coerceAtLeast(0),
+                            onSelect = { idx ->
+                                dispatchAsync("save_app_selection") {
+                                    put("uids", selectedArr)
+                                    put("gids", state.optJSONArray("gid_list") ?: JSONArray())
+                                    put("proxy_mode", appModes[idx])
                                 }
-                            }
-                        }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            height = 40.dp,
+                            trackColor = p.background,
+                        )
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             MiuixPillBtn("智能选国内常用") { dispatchAsync("run_smart_select") { put("mode", "cn_common_apps") } }
                             MiuixPillBtn("选系统应用") { dispatchAsync("run_smart_select") { put("mode", "system_apps") } }

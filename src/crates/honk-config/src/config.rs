@@ -299,12 +299,31 @@ pub fn default_route_interface() -> Option<String> {
 }
 
 /// Probe the outbound interface chosen by Android netd's policy routing tables:
-///  1. Read `/proc/thread-self/net/fib_trie` for a per-interface policy table
-///     `Id <1000 + ifindex>:` containing `/0 universe UNICAST` (netd's exact
-///     table numbering convention: `ROUTE_TABLE_OFFSET_FROM_INDEX = 1000`);
-///  2. Or connect a UDP socket (`223.5.5.5:53`, no wire traffic) to get the
-///     chosen source IPv4 and match it via rtnetlink `RTM_GETADDR` or `getifaddrs`.
+///  1. Connect non-transmitting UDP sockets (`AF_INET` `223.5.5.5:53` and `AF_INET6`
+///     `[2400:3200::1]:53`) so the Linux kernel evaluates netd's active `ip rule`
+///     priorities; if IPv4 lands on a 464XLAT `v4-*` CLAT interface, prefer the
+///     underlying physical `AF_INET6` interface (`rmnet_data*` / `wlan*`).
+///  2. Fall back to `/proc/thread-self/net/fib_trie` per-interface policy tables
+///     (`Id <1000 + ifindex>:` containing `/0 universe UNICAST`), skipping IMS/tunnel
+///     pseudo-interfaces and supporting arbitrary `ifindex` values (`> 1000`).
 pub fn default_route_interface_by_socket_probe() -> Option<String> {
+    let v4_iface = socket_probe_v4();
+    if let Some(ref name) = v4_iface
+        && !name.starts_with("v4-")
+    {
+        return v4_iface;
+    }
+    if let Some(v6_iface) = socket_probe_v6() {
+        return Some(v6_iface);
+    }
+    if let Some(v4) = v4_iface {
+        if let Some(phys) = v4.strip_prefix("v4-")
+            && nix::if_name_exists(phys)
+        {
+            return Some(phys.to_string());
+        }
+        return Some(v4);
+    }
     if let Ok(trie) = std::fs::read_to_string("/proc/thread-self/net/fib_trie")
         .or_else(|_| std::fs::read_to_string("/proc/net/fib_trie"))
         && let Some(ifindex) = parse_android_netd_default_ifindex(&trie)
@@ -312,6 +331,29 @@ pub fn default_route_interface_by_socket_probe() -> Option<String> {
     {
         return Some(name);
     }
+    None
+}
+
+fn is_candidate_wan_iface(name: &str) -> bool {
+    !name.is_empty()
+        && name != "lo"
+        && name != "dummy0"
+        && !name.starts_with("dae")
+        && !name.starts_with("tun")
+        && !name.starts_with("ims")
+        && !name.starts_with("r_rmnet")
+}
+
+mod nix {
+    pub fn if_name_exists(name: &str) -> bool {
+        let Ok(cstr) = std::ffi::CString::new(name) else {
+            return false;
+        };
+        unsafe { libc::if_nametoindex(cstr.as_ptr()) != 0 }
+    }
+}
+
+fn socket_probe_v4() -> Option<String> {
     use std::net::UdpSocket;
     let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.connect("223.5.5.5:53").ok()?;
@@ -341,7 +383,49 @@ pub fn default_route_interface_by_socket_probe() -> Option<String> {
                     let name = std::ffi::CStr::from_ptr(ifa.ifa_name)
                         .to_string_lossy()
                         .into_owned();
-                    if name != "lo" && !name.starts_with("dae") {
+                    if is_candidate_wan_iface(&name) {
+                        found = Some(name);
+                        break;
+                    }
+                }
+            }
+            cur = ifa.ifa_next;
+        }
+        libc::freeifaddrs(head);
+        found
+    }
+}
+
+fn socket_probe_v6() -> Option<String> {
+    use std::net::UdpSocket;
+    let sock = UdpSocket::bind("[::]:0").ok()?;
+    sock.connect("[2400:3200::1]:53").ok()?;
+    let local_ip = match sock.local_addr().ok()? {
+        std::net::SocketAddr::V6(v6) => *v6.ip(),
+        _ => return None,
+    };
+    if local_ip.is_unspecified() || local_ip.is_loopback() || local_ip.is_unicast_link_local() {
+        return None;
+    }
+    let target = local_ip.octets();
+    unsafe {
+        let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut head) != 0 {
+            return None;
+        }
+        let mut found: Option<String> = None;
+        let mut cur = head;
+        while !cur.is_null() {
+            let ifa = &*cur;
+            if !ifa.ifa_addr.is_null() && (*ifa.ifa_addr).sa_family as i32 == libc::AF_INET6 {
+                let a = (*(ifa.ifa_addr as *const libc::sockaddr_in6))
+                    .sin6_addr
+                    .s6_addr;
+                if a == target {
+                    let name = std::ffi::CStr::from_ptr(ifa.ifa_name)
+                        .to_string_lossy()
+                        .into_owned();
+                    if is_candidate_wan_iface(&name) && !name.starts_with("v4-") {
                         found = Some(name);
                         break;
                     }
@@ -359,6 +443,7 @@ pub fn default_route_interface_by_socket_probe() -> Option<String> {
 pub fn parse_android_netd_default_ifindex(trie: &str) -> Option<u32> {
     let mut current_table: Option<u32> = None;
     let mut prev_zero = false;
+    let mut fallback_ifindex: Option<u32> = None;
     for line in trie.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("Id ") {
@@ -372,18 +457,28 @@ pub fn parse_android_netd_default_ifindex(trie: &str) -> Option<u32> {
             continue;
         }
         if let Some(table_id) = current_table
-            && (1001..2000).contains(&table_id)
+            && table_id > 1000
         {
             if trimmed == "|-- 0.0.0.0" {
                 prev_zero = true;
             } else if prev_zero && trimmed.starts_with("/0 universe UNICAST") {
-                return Some(table_id - 1000);
+                let idx = table_id - 1000;
+                if let Some(name) = ifindex_to_name(idx) {
+                    if !name.starts_with("v4-") {
+                        return Some(idx);
+                    }
+                    fallback_ifindex.get_or_insert(idx);
+                } else if fallback_ifindex.is_none() {
+                    // Unit-test / offline trie without live kernel interfaces
+                    fallback_ifindex = Some(idx);
+                }
+                prev_zero = false;
             } else {
                 prev_zero = false;
             }
         }
     }
-    None
+    fallback_ifindex
 }
 
 fn ifindex_to_name(ifindex: u32) -> Option<String> {
@@ -395,10 +490,10 @@ fn ifindex_to_name(ifindex: u32) -> Option<String> {
     let name = unsafe { std::ffi::CStr::from_ptr(ptr) }
         .to_string_lossy()
         .into_owned();
-    if name.is_empty() || name == "lo" || name == "dummy0" || name.starts_with("dae") {
-        None
-    } else {
+    if is_candidate_wan_iface(&name) {
         Some(name)
+    } else {
+        None
     }
 }
 

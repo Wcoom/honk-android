@@ -588,21 +588,59 @@ fn ebpf_bytes(proc_self: &Path) -> Option<u64> {
 }
 
 async fn read_memory(proc_self: &Path) -> MemoryReading {
+    static CACHED_MOUNTS: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    static CACHED_EBPF: parking_lot::Mutex<Option<(Instant, Option<(u64, SystemTime)>)>> =
+        parking_lot::Mutex::new(None);
+
+    let is_real_self = proc_self == Path::new("/proc/self");
     let fds = proc_self.to_path_buf();
-    let (status, membership, mounts, ebpf) = tokio::join!(
+    let cached_ebpf = if is_real_self {
+        let guard = CACHED_EBPF.lock();
+        guard
+            .filter(|(ts, _)| ts.elapsed() < Duration::from_secs(10))
+            .map(|(_, val)| val)
+    } else {
+        None
+    };
+
+    let (status, membership, mounts_fresh, ebpf_fresh) = tokio::join!(
         bounded_read(proc_self.join("status"), 64 * 1024),
         bounded_read(proc_self.join("cgroup"), 64 * 1024),
-        bounded_read(proc_self.join("mountinfo"), 256 * 1024),
-        tokio::task::spawn_blocking(
-            move || ebpf_bytes(&fds).map(|bytes| (bytes, SystemTime::now()))
-        ),
+        async {
+            if is_real_self && CACHED_MOUNTS.get().is_some() {
+                None
+            } else {
+                bounded_read(proc_self.join("mountinfo"), 256 * 1024).await
+            }
+        },
+        async {
+            if let Some(val) = cached_ebpf {
+                Ok(val)
+            } else {
+                tokio::task::spawn_blocking(move || {
+                    ebpf_bytes(&fds).map(|bytes| (bytes, SystemTime::now()))
+                })
+                .await
+            }
+        },
     );
+
+    let mounts_opt: Option<&str> = if is_real_self {
+        CACHED_MOUNTS.get_or_init(|| mounts_fresh).as_deref()
+    } else {
+        mounts_fresh.as_deref()
+    };
+    let ebpf_val = ebpf_fresh.ok().flatten();
+    if is_real_self && cached_ebpf.is_none() {
+        *CACHED_EBPF.lock() = Some((Instant::now(), ebpf_val));
+    }
+
     let mut reading = MemoryReading {
         rss: status.as_deref().and_then(rss),
         cgroup: None,
-        ebpf: ebpf.ok().flatten(),
+        ebpf: ebpf_val,
     };
-    let (Some(membership_text), Some(mounts_text)) = (membership.as_deref(), mounts.as_deref())
+    let (Some(membership_text), Some(mounts_text)) = (membership.as_deref(), mounts_opt)
     else {
         return reading;
     };

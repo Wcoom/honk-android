@@ -57,7 +57,7 @@
 - `crates/honk-config/src/experimental.rs`、`crates/honk-core/src/native_api/{config.rs,settings.rs,store/startup.rs}`、`crates/honk-core/src/lib.rs`：
   - 新增 `NativeApiConfig::admin_authorized()`：允许仅监听本机回环且开启 `allow_anonymous_loopback: true` 的实例直接启用 `config_write: true` 与 `--store db`，在手机内置 WebView 免登录即可使用配置编辑、导入、节点/规则/订阅管理、修订历史与地理数据更新。
   - 允许 `--store db` 与本机回环 `clash_api`（`127.0.0.1:9090`）共存，同时驱动 BoxProxy 原生「面板」与「WebUI（Doona）」。
-  - Android 平台（非 `/var/lib` 数据目录）在满足管理授权时自动提升为 `ConfigStore::Db` 并默认启用常驻后台流程记录（`RecorderMode::On`）。
+  - Android 平台（非 `/var/lib` 数据目录）在满足管理授权时自动提升为 `ConfigStore::Db`，并采用按需流程记录（`RecorderMode::Auto`）兼顾面板观测与后台低功耗。
 
 ## 7. Android 独立叶子 cgroup 内存遥测、并发观测防抖与双端核心在线更新（v1.0.6）
 
@@ -67,11 +67,16 @@
 - `crates/honk-core/src/ebpf/real/{programs.rs,observation.rs}`：
   - `ProgramLoader::try_object()` 改为 `try_lock_for(5ms)`，`observe_backend()` 在 `programs` 仍为 `DatapathCheck::Unknown` 时保持未确认而不误判为 `DatapathObservationError::Hooks`，消除并发轮询 `/api/v1/runtime` 与 `/api/v1/datapath` 时偶发的 `hook_observation_incomplete`。
 - `crates/honk-core/src/native_api/{core_update.rs,handlers.rs,types.rs}`、`crates/honk-core/src/{main.rs,native_api.rs}` 与 `webui/`：
-  - 同步 `Zakkaus/doona` 主线至 `0ed10b6`（含代理链管理、策略组出口节点编辑、「节点策略选择」规则分流中枢联动及内存/核心更新扩展）并接入 [`build.sh`](./build.sh) 自动内嵌标准版与 Lite 版 WebUI。
+  - 同步 `Zakkaus/doona` 功能模型（含代理链管理、策略组出口节点编辑、「节点策略选择」规则分流中枢联动及内存/核心更新扩展）并接入 [`rust/xtask`](./rust/xtask/src/main.rs) 自动构建内嵌标准版与 Lite 版纯 Rust WASM WebUI。
   - 新增 `GET/POST /api/v1/x-honk/core/update`，支持检测 `Wcoom/honk-android` GitHub Releases、下载 `honk-android-arm64` 与 `SHA256SUMS.txt`、校验 SHA-256 与 ARM64 ELF64 头并原子替换后分离重启（复用 `record_startup_args()`）；同步适配 Doona 标准版/Lite 版核心更新卡片与 `BoxProxy Honk` 客户端内更新源。
 
-## 8. 内嵌纯 Rust WASM Doona WebUI 静态托管与预压缩支持（v1.1.0）
+## 8. 内嵌纯 Rust WASM Doona WebUI 静态托管与预压缩支持（v1.1.0 – v1.2.0）
 
-- `crates/honk-core/build.rs`、`crates/honk-core/src/native_api/ui.rs`：
-  - 将 `wasm` 扩展名纳入 `build.rs` 静态资源 Brotli/Gzip 预压缩白名单，并在 `embedded_response()` 补齐 `"wasm" => "application/wasm"` MIME 类型映射，支撑纯 Rust Leptos WASM 版 Doona（`/ui/` 与 `/ui/lite/`）零外部依赖直接内嵌编译进 `honk-core`。
-  - 改动已同步写入 [`patches/honk-android.patch`](./patches/honk-android.patch) 并通过 `git apply --check` 校验。
+- `crates/honk-core/build.rs`、`crates/honk-core/src/native_api/ui.rs`、`crates/honk-core/src/native_api.rs`：
+  - 将 `wasm` 扩展名纳入 `build.rs` 静态资源 Brotli/Gzip 预压缩白名单，并在 `embedded_response()` 补齐 `"wasm" => "application/wasm"` MIME 类型映射；
+  - `ui: "embedded"` 同时挂载标准版（`/ui/`）与轻量版（`/ui/lite/` 及 `/lite` 重定向），实现双面板零额外配置无缝切换。
+- **手机端低功耗与双栈网络加固（v1.2.0）**：
+  - `crates/honk-core/src/native_api/settings.rs`、`crates/honk-core/src/native_api.rs`：恢复默认按需录制（`RecorderMode::Auto`），无面板观察时自动休眠内核流追踪与事件广播，同时 `/api/v1/connections` 直接回退读取 `ConnectionEntry` 链路与规则；
+  - `crates/honk-core/src/native_api/telemetry.rs`、`clash_api.rs`、`control/runtime.rs`、`subscription/supervisor.rs`：缓存 `mountinfo` 与 BPF `fdinfo` 扫描结果、零订阅者自动退出 Clash 1Hz 采样协程、收敛空闲 FD 扫描与订阅调度唤醒频率；
+  - `crates/honk-config/src/config.rs`、`crates/honk-core/src/ebpf/real/attach.rs`、`crates/honk-outbound/src/bootstrap.rs`：升级双栈 `AF_INET`/`AF_INET6` 默认 WAN 接口探测（穿透 464XLAT `v4-*` 并解除 `ifindex < 1000` 限制）、动态扩容 ColorOS/OPlus 根 cgroup BPF 升级槽位与失败回滚、前置 `/etc/hosts` 并为主/备 Bootstrap DNS 分配独立超时预算。
+  - 改动已同步写入 [`patches/honk-android.patch`](./patches/honk-android.patch) 与 [`patches/boxctl-honk.patch`](./patches/boxctl-honk.patch) 并通过 `git apply --check -R` 校验。

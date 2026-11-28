@@ -569,25 +569,190 @@ impl NodeItem {
     pub fn best_latency_ms(&self) -> Option<f64> {
         self.health
             .iter()
-            .filter(|h| h.state.as_deref() == Some("alive") || h.state.as_deref() == Some("ok"))
-            .filter_map(|h| h.latency_ms.or(h.moving_avg_ms))
+            .filter(|h| {
+                matches!(
+                    h.state.as_deref(),
+                    Some("healthy" | "alive" | "ok")
+                )
+            })
+            .filter_map(|h| h.latency_ms.or(h.moving_avg_ms).or(h.avg10_ms))
             .fold(None, |acc, v| Some(acc.map_or(v, |a: f64| a.min(v))))
     }
 
     pub fn health_state(&self) -> &str {
         if self.health.iter().any(|h| {
-            matches!(h.state.as_deref(), Some("alive") | Some("ok") | Some("healthy"))
+            matches!(h.state.as_deref(), Some("alive" | "ok" | "healthy"))
         }) {
             "alive"
         } else if self.health.iter().any(|h| {
             matches!(
                 h.state.as_deref(),
-                Some("dead") | Some("error") | Some("unreachable") | Some("unhealthy")
+                Some("unavailable" | "dead" | "error" | "timeout" | "unreachable" | "unhealthy")
             )
         }) {
             "dead"
         } else {
             "unknown"
+        }
+    }
+}
+
+/// Resolves the effective display label for any group policy (`selector`, `score`, `urltest`,
+/// `fallback`, `loadbalance`), including nested child groups and idle `urltest`/`fallback`/`loadbalance`
+/// groups where `honk-core` reports `selection.tcp_member_id: null`.
+pub fn resolve_group_effective_summary(
+    group: &GroupSummary,
+    detail: Option<&GroupDetail>,
+    all_groups: &[GroupSummary],
+    all_nodes: &[NodeItem],
+    lang: crate::i18n::Lang,
+) -> String {
+    use crate::format::format_latency;
+    use crate::i18n::Lang;
+
+    let sel_id = detail
+        .and_then(|d| d.runtime.selection.tcp.as_ref())
+        .and_then(|s| s.member_id.as_deref())
+        .or(group.selection.tcp_member_id.as_deref())
+        .unwrap_or("");
+    let leaf_id = detail
+        .and_then(|d| d.runtime.selection.tcp.as_ref())
+        .and_then(|s| s.resolved_leaf_node_id.as_deref())
+        .unwrap_or("");
+
+    // 1. Direct or overridden member selection present
+    if !sel_id.is_empty() {
+        if let Some(node) = all_nodes.iter().find(|n| n.id == sel_id) {
+            return match node.best_latency_ms() {
+                Some(ms) => format!("{} ({})", node.name, format_latency(Some(ms))),
+                None => node.name.clone(),
+            };
+        }
+        if let Some(child_grp) = all_groups.iter().find(|cg| cg.id == sel_id) {
+            if !leaf_id.is_empty()
+                && let Some(leaf) = all_nodes.iter().find(|n| n.id == leaf_id)
+            {
+                return match leaf.best_latency_ms() {
+                    Some(ms) => format!("{} → {} ({})", child_grp.name, leaf.name, format_latency(Some(ms))),
+                    None => format!("{} → {}", child_grp.name, leaf.name),
+                };
+            }
+            if let Some(child_sel) = child_grp.selection.tcp_member_id.as_deref()
+                && let Some(leaf) = all_nodes.iter().find(|n| n.id == child_sel)
+            {
+                return match leaf.best_latency_ms() {
+                    Some(ms) => format!("{} → {} ({})", child_grp.name, leaf.name, format_latency(Some(ms))),
+                    None => format!("{} → {}", child_grp.name, leaf.name),
+                };
+            }
+            return child_grp.name.clone();
+        }
+        if let Some(m) = detail.and_then(|d| d.members.iter().find(|m| m.id == sel_id)) {
+            return m.name.clone();
+        }
+    }
+
+    // 2. Collect candidate leaf nodes in exact group member order when GroupDetail is available,
+    //    or via `node.group_ids` membership fallback.
+    let candidates: Vec<&NodeItem> = if let Some(det) = detail {
+        let mut out = Vec::with_capacity(det.members.len());
+        for m in &det.members {
+            if m.kind == "node" {
+                if let Some(n) = all_nodes.iter().find(|n| n.id == m.id) {
+                    out.push(n);
+                }
+            } else if m.kind == "group" {
+                for n in all_nodes.iter().filter(|n| n.group_ids.iter().any(|gid| gid == &m.id)) {
+                    out.push(n);
+                }
+            }
+        }
+        out
+    } else {
+        all_nodes
+            .iter()
+            .filter(|n| n.group_ids.iter().any(|gid| gid == &group.id))
+            .collect()
+    };
+
+    let kind = group.policy.kind.as_str();
+    match kind {
+        "urltest" | "min" | "min_moving_avg" | "min_avg10" | "score" => {
+            let best = candidates
+                .iter()
+                .copied()
+                .filter(|n| n.health_state() != "dead")
+                .filter_map(|n| n.best_latency_ms().map(|ms| (n, ms)))
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            if let Some((winner, ms)) = best {
+                format!("{} ({})", winner.name, format_latency(Some(ms)))
+            } else if let Some(first) = candidates.iter().copied().find(|n| n.health_state() != "dead").or_else(|| candidates.first().copied()) {
+                let tag = match lang {
+                    Lang::En => "unprobed",
+                    Lang::ZhTw => "待測速",
+                    Lang::ZhCn => "待测速",
+                };
+                format!("{} ({tag})", first.name)
+            } else {
+                "—".to_string()
+            }
+        }
+        "fallback" | "failover" => {
+            // Exact declaration priority order: first alive member, else first non-dead member.
+            let primary = candidates
+                .iter()
+                .copied()
+                .find(|n| n.health_state() == "alive")
+                .or_else(|| candidates.iter().copied().find(|n| n.health_state() != "dead"))
+                .or_else(|| candidates.first().copied());
+            if let Some(node) = primary {
+                match node.best_latency_ms() {
+                    Some(ms) => format!("{} ({})", node.name, format_latency(Some(ms))),
+                    None => node.name.clone(),
+                }
+            } else {
+                "—".to_string()
+            }
+        }
+        "loadbalance" | "random" | "rr" | "hash" => {
+            let total = candidates.len().max(group.member_count);
+            if total == 0 {
+                return "—".to_string();
+            }
+            let alive_nodes: Vec<&NodeItem> = candidates
+                .iter()
+                .copied()
+                .filter(|n| n.health_state() == "alive")
+                .collect();
+            let best_ms = alive_nodes
+                .iter()
+                .filter_map(|n| n.best_latency_ms())
+                .fold(None, |acc, v| Some(acc.map_or(v, |a: f64| a.min(v))));
+            if !alive_nodes.is_empty() {
+                match (lang, best_ms) {
+                    (Lang::En, Some(ms)) => format!("Balanced · {}/{total} up ({})", alive_nodes.len(), format_latency(Some(ms))),
+                    (Lang::En, None) => format!("Balanced · {}/{total} up", alive_nodes.len()),
+                    (Lang::ZhTw, Some(ms)) => format!("均衡 · {}/{total} 可用 ({})", alive_nodes.len(), format_latency(Some(ms))),
+                    (Lang::ZhTw, None) => format!("均衡 · {}/{total} 可用", alive_nodes.len()),
+                    (Lang::ZhCn, Some(ms)) => format!("均衡 · {}/{total} 可用 ({})", alive_nodes.len(), format_latency(Some(ms))),
+                    (Lang::ZhCn, None) => format!("均衡 · {}/{total} 可用", alive_nodes.len()),
+                }
+            } else {
+                let non_dead = candidates.iter().filter(|n| n.health_state() != "dead").count();
+                let pool = if non_dead > 0 { non_dead } else { total };
+                match lang {
+                    Lang::En => format!("Balanced · {pool} nodes"),
+                    Lang::ZhTw => format!("均衡 · {pool} 節點池"),
+                    Lang::ZhCn => format!("均衡 · {pool} 节点池"),
+                }
+            }
+        }
+        _ => {
+            if let Some(first) = candidates.first() {
+                first.name.clone()
+            } else {
+                "—".to_string()
+            }
         }
     }
 }
@@ -605,6 +770,7 @@ pub struct ProviderItem {
     pub id: String,
     pub name: String,
     pub kind: Option<String>,
+    #[serde(default, alias = "url_redacted")]
     pub url: Option<String>,
     pub status: Option<String>,
     pub node_count: Option<u64>,
@@ -731,21 +897,38 @@ pub struct CoreUpdateError {
     pub message: String,
 }
 
+fn null_to_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CoreUpdateStatus {
+    #[serde(default, deserialize_with = "null_to_empty_string")]
     pub observed_at: String,
+    #[serde(default, deserialize_with = "null_to_empty_string")]
     pub repo: String,
+    #[serde(default, deserialize_with = "null_to_empty_string")]
     pub current_version: String,
+    #[serde(default, deserialize_with = "null_to_empty_string")]
     pub current_revision: String,
+    #[serde(default, deserialize_with = "null_to_empty_string")]
     pub target: String,
+    #[serde(default, deserialize_with = "null_to_empty_string")]
     pub asset_name: String,
+    #[serde(default, deserialize_with = "null_to_empty_string")]
     pub executable_path: String,
+    #[serde(default)]
     pub can_apply: bool,
     pub cannot_apply_reason: Option<String>,
+    #[serde(default)]
     pub applying: bool,
     pub checked_at: Option<String>,
     pub source: Option<String>,
     pub latest_version: Option<String>,
+    #[serde(default)]
     pub has_update: bool,
     pub release_url: Option<String>,
     pub published_at: Option<String>,
@@ -773,6 +956,7 @@ pub struct CoreUpdateApplyResult {
 pub struct LogEntry {
     pub id: Option<String>,
     pub observed_at: Option<String>,
+    #[serde(default, alias = "ts")]
     pub timestamp: Option<String>,
     pub level: Option<String>,
     pub target: Option<String>,

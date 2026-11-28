@@ -218,10 +218,35 @@ where
         });
     }
     let mut configured_error: Option<io::Error> = None;
+    if let Ok(contents) = tokio::fs::read_to_string("/etc/hosts").await {
+        let mut addrs = hosts_addresses(&contents, host);
+        addrs.retain(|ip| families.matches(*ip));
+        if !addrs.is_empty() {
+            if let Some(mut observation) =
+                LookupObservation::start(host, "UNKNOWN", LookupOrigin::Hosts)
+            {
+                observation.finish(Ok::<_, &io::Error>(addrs.iter().copied()));
+            }
+            return Ok(ResolvedRecords {
+                ips: addrs,
+                min_ttl: None,
+            });
+        }
+    }
+    let has_distinct_fallback = global_fallback().is_some_and(|fb| Some(fb) != resolver);
     if let Some(resolver) = resolver {
+        let now = tokio::time::Instant::now();
+        let primary_deadline = match deadline {
+            Some(dl) if has_distinct_fallback && dl > now => {
+                let rem = dl - now;
+                let half = (rem / 2).max(Duration::from_millis(800)).min(rem);
+                Some(now + half)
+            }
+            other => other,
+        };
         let result = {
             let _guard = admit().await?;
-            resolver.query_records(host, families, deadline).await
+            resolver.query_records(host, families, primary_deadline).await
         };
         match result {
             Ok(records) if !records.ips.is_empty() => return Ok(records),
@@ -250,21 +275,6 @@ where
                 tracing::debug!("fallback bootstrap resolution of '{}' failed: {}", host, e);
                 configured_error = Some(e);
             }
-        }
-    }
-    if let Ok(contents) = tokio::fs::read_to_string("/etc/hosts").await {
-        let mut addrs = hosts_addresses(&contents, host);
-        addrs.retain(|ip| families.matches(*ip));
-        if !addrs.is_empty() {
-            if let Some(mut observation) =
-                LookupObservation::start(host, "UNKNOWN", LookupOrigin::Hosts)
-            {
-                observation.finish(Ok::<_, &io::Error>(addrs.iter().copied()));
-            }
-            return Ok(ResolvedRecords {
-                ips: addrs,
-                min_ttl: None,
-            });
         }
     }
     // Short-circuit after local /etc/hosts lookup and again after reading

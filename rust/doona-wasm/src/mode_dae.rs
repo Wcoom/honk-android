@@ -28,6 +28,29 @@ impl OutboundMode {
     }
 }
 
+fn strip_dae_quotes(raw: &str) -> String {
+    let t = raw.trim();
+    if t.len() >= 2
+        && ((t.starts_with('\'') && t.ends_with('\'')) || (t.starts_with('"') && t.ends_with('"')))
+    {
+        t[1..t.len() - 1].to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+fn format_dae_outbound_ident(target: &str) -> String {
+    let clean = strip_dae_quotes(target);
+    let needs_quote = clean.chars().any(|c| {
+        c.is_whitespace() || matches!(c, '/' | ':' | '(' | ')' | '{' | '}' | ',' | '#' | '\'' | '"')
+    });
+    if needs_quote {
+        format!("'{}'", clean.replace('\'', "\\'"))
+    } else {
+        clean
+    }
+}
+
 pub fn read_mode(content: &str) -> OutboundMode {
     match doona_logic::dae::read_mode(content.to_string()) {
         Ok(val) => match val.get("mode").and_then(Value::as_str) {
@@ -36,8 +59,8 @@ pub fn read_mode(content: &str) -> OutboundMode {
                 let target = val
                     .get("target")
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
+                    .map(strip_dae_quotes)
+                    .unwrap_or_default();
                 OutboundMode::Global(target)
             }
             _ => OutboundMode::Rule,
@@ -47,14 +70,18 @@ pub fn read_mode(content: &str) -> OutboundMode {
 }
 
 pub fn read_rule_fallback(content: &str) -> String {
-    doona_logic::dae::read_rule_fallback(content.to_string()).unwrap_or_default()
+    doona_logic::dae::read_rule_fallback(content.to_string())
+        .map(|s| strip_dae_quotes(&s))
+        .unwrap_or_default()
 }
 
 pub fn write_mode(content: &str, mode: &OutboundMode) -> Result<String, String> {
     let next = match mode {
         OutboundMode::Rule => json!({ "mode": "rule" }),
         OutboundMode::Direct => json!({ "mode": "direct" }),
-        OutboundMode::Global(target) => json!({ "mode": "global", "target": target }),
+        OutboundMode::Global(target) => {
+            json!({ "mode": "global", "target": format_dae_outbound_ident(target) })
+        }
     };
     doona_logic::dae::write_mode(content.to_string(), next).map_err(|err| {
         if err.contains("act.modeInterleaved") {
@@ -68,7 +95,7 @@ pub fn write_mode(content: &str, mode: &OutboundMode) -> Result<String, String> 
 }
 
 pub fn write_rule_fallback(content: &str, target: &str) -> Result<String, String> {
-    doona_logic::dae::write_rule_fallback(content.to_string(), target.to_string())
+    doona_logic::dae::write_rule_fallback(content.to_string(), format_dae_outbound_ident(target))
 }
 
 /// Pure-Rust `.dae` syntax tokenizer returning `(css_class, text)` spans matching Doona's `.rp-dae-*` tokens.
@@ -153,9 +180,9 @@ pub fn highlight_dae(source: &str) -> Vec<(&'static str, String)> {
             let cls = if KEYWORDS.contains(&word) {
                 "rp-dae-keyword"
             } else if i < bytes.len() && bytes[i] == b':' {
-                "rp-dae-property"
+                "rp-dae-propertyName"
             } else {
-                "rp-dae-variable"
+                "rp-dae-variableName"
             };
             out.push((cls, word.to_string()));
         } else {

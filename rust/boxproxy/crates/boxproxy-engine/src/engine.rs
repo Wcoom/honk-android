@@ -32,7 +32,7 @@ use boxproxy_tools::{
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -98,6 +98,8 @@ pub struct BoxProxyEngine {
     listeners: Arc<RwLock<ListenerMap>>,
     next_sub_id: AtomicU64,
     version_counter: AtomicU64,
+    root_checked: AtomicBool,
+    root_granted_cached: AtomicBool,
     runtime: tokio::runtime::Runtime,
 }
 
@@ -178,6 +180,8 @@ impl BoxProxyEngine {
             listeners: Arc::new(RwLock::new(BTreeMap::new())),
             next_sub_id: AtomicU64::new(1),
             version_counter: AtomicU64::new(1),
+            root_checked: AtomicBool::new(false),
+            root_granted_cached: AtomicBool::new(false),
             runtime,
         };
 
@@ -316,8 +320,10 @@ impl BoxProxyEngine {
             AppAction::RefreshStatus => {
                 let box_home = self.box_home.clone();
                 let root = self.root.clone();
-                let (api_kind, base_url, secret, clash_url, core_name, need_history) = {
+                let (api_kind, base_url, secret, clash_url, core_name, need_history, need_catalog) = {
                     let st = self.state.read().expect("state");
+                    let on_panel = st.active_tab == 1
+                        || !matches!(st.current_route, AppRoute::Main | AppRoute::Onboarding);
                     (
                         st.active_api.kind,
                         st.active_api.base_url.clone(),
@@ -325,29 +331,47 @@ impl BoxProxyEngine {
                         st.active_api.clash_fallback_url.clone(),
                         st.runtime_profile.core_name.clone(),
                         st.net_speed_history.len() < 3,
+                        on_panel || st.groups_count == 0 || st.rules_count == 0,
                     )
                 };
-                let granted = self.runtime.block_on(check_root_granted(root.as_ref()));
+                let granted = if self.root_checked.load(Ordering::Acquire) {
+                    self.root_granted_cached.load(Ordering::Acquire)
+                } else {
+                    let ok = self.runtime.block_on(check_root_granted(root.as_ref()));
+                    self.root_granted_cached.store(ok, Ordering::Release);
+                    self.root_checked.store(true, Ordering::Release);
+                    ok
+                };
                 let mut proc_metrics = sample_process(&box_home, None, 1.0);
                 let cfg_files = list_core_config_files(&box_home, &core_name);
 
-                // Enrich live metrics from Honk Native API / Clash API if reachable.
+                // Enrich live metrics from Honk Native API / Clash API if reachable (lightweight when on Home/Settings!).
                 let live_snap = self.runtime.block_on(async {
                     if api_kind == ApiKind::HonkNative {
                         if let Ok(client) = HonkNativeClient::new(&base_url, &secret) {
                             if let Ok(rt) = client.runtime().await {
                                 let mem = client.runtime_memory().await.ok();
-                                let groups = client.groups().await.ok();
-                                let rules = client.rules().await.ok();
-                                let conns = client.connections().await.ok();
+                                let (groups, rules, conns) = if need_catalog {
+                                    tokio::join!(
+                                        async { client.groups().await.ok() },
+                                        async { client.rules().await.ok() },
+                                        async { client.connections().await.ok() },
+                                    )
+                                } else {
+                                    (None, None, None)
+                                };
                                 let hist = if need_history {
                                     client.traffic_history(60, 60).await.ok()
                                 } else {
                                     None
                                 };
-                                let clash_cfg = if let Some(ref cu) = clash_url {
-                                    if let Ok(cc) = ClashApiClient::new(cu, &secret) {
-                                        cc.get_configs().await.ok()
+                                let clash_cfg = if need_catalog {
+                                    if let Some(ref cu) = clash_url {
+                                        if let Ok(cc) = ClashApiClient::new(cu, &secret) {
+                                            cc.get_configs().await.ok()
+                                        } else {
+                                            None
+                                        }
                                     } else {
                                         None
                                     }
@@ -355,6 +379,12 @@ impl BoxProxyEngine {
                                     None
                                 };
                                 return Some((rt, mem, groups, rules, conns, hist, clash_cfg));
+                            }
+                        }
+                    } else if let Some(cu) = clash_url.as_ref().or(Some(&base_url)) {
+                        if let Ok(cc) = ClashApiClient::new(cu, &secret) {
+                            if cc.get_configs().await.is_ok() {
+                                proc_metrics.running = true;
                             }
                         }
                     }
@@ -1028,9 +1058,28 @@ impl BoxProxyEngine {
                 };
                 if api_kind == ApiKind::HonkNative {
                     let (groups, proxies) = self.runtime.block_on(async {
-                        let g = HonkNativeClient::new(&base_url, &secret)?
-                            .groups()
-                            .await?;
+                        let hc = HonkNativeClient::new(&base_url, &secret)?;
+                        let mut g = hc.groups().await?;
+                        if let Some(arr) = g.as_array_mut() {
+                            for item in arr.iter_mut() {
+                                let gid_opt = item.get("id").and_then(|v| v.as_str()).map(str::to_owned);
+                                if let Some(gid) = gid_opt {
+                                    if let Ok(det) = hc.group_detail(&gid).await {
+                                        if let Some(obj) = item.as_object_mut() {
+                                            if let Some(members) = det.get("members") {
+                                                obj.insert("members".into(), members.clone());
+                                            }
+                                            if let Some(rt) = det.get("runtime") {
+                                                obj.insert("runtime".into(), rt.clone());
+                                            }
+                                            if let Some(caps) = det.get("capabilities") {
+                                                obj.insert("capabilities".into(), caps.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         let p = if let Some(ref cu) = clash_url {
                             if let Ok(cc) = ClashApiClient::new(cu, &secret) {
                                 cc.get_proxies().await.unwrap_or_default()
@@ -1060,20 +1109,49 @@ impl BoxProxyEngine {
                 Ok(self.mutate_and_broadcast(|st| st.proxies_data = proxies))
             }
             AppAction::SelectProxy { group, node } => {
-                let (api_kind, base_url, secret, clash_url, disconnect) = {
+                let (api_kind, base_url, secret, clash_url, disconnect, resolved_ids) = {
                     let st = self.state.read().expect("state");
+                    let mut gid_resolved = group.clone();
+                    let mut nid_resolved = node.clone();
+                    if let Some(arr) = st.honk_groups_data.as_array() {
+                        if let Some(g_obj) = arr.iter().find(|g| {
+                            g.get("id").and_then(|x| x.as_str()) == Some(group.as_str())
+                                || g.get("name").and_then(|x| x.as_str()) == Some(group.as_str())
+                        }) {
+                            if let Some(id_s) = g_obj.get("id").and_then(|x| x.as_str()) {
+                                gid_resolved = id_s.to_string();
+                            }
+                            if let Some(members) = g_obj.get("members").and_then(|x| x.as_array()) {
+                                if let Some(m_obj) = members.iter().find(|m| {
+                                    m.get("id").and_then(|x| x.as_str()) == Some(node.as_str())
+                                        || m.get("name").and_then(|x| x.as_str()) == Some(node.as_str())
+                                }) {
+                                    if let Some(mid_s) = m_obj.get("id").and_then(|x| x.as_str()) {
+                                        nid_resolved = mid_s.to_string();
+                                    }
+                                }
+                            }
+                        }
+                    }
                     (
                         st.active_api.kind,
                         st.active_api.base_url.clone(),
                         st.active_api.secret.clone(),
                         st.active_api.clash_fallback_url.clone(),
                         st.prefs.proxy_selector.disconnect_on_select,
+                        (gid_resolved, nid_resolved),
                     )
                 };
                 self.runtime.block_on(async {
                     if api_kind == ApiKind::HonkNative {
                         let c = HonkNativeClient::new(&base_url, &secret)?;
-                        c.select_group_member(&group, &node).await?;
+                        if c.select_group_member(&resolved_ids.0, &resolved_ids.1).await.is_err() {
+                            if let Some(ref cu) = clash_url {
+                                ClashApiClient::new(cu, &secret)?
+                                    .select_proxy(&group, &node)
+                                    .await?;
+                            }
+                        }
                         if disconnect {
                             let _ = c.close_all_connections().await;
                         }
@@ -1086,6 +1164,7 @@ impl BoxProxyEngine {
                     }
                     Ok::<_, String>(())
                 })?;
+                let _ = self.dispatch(AppAction::RefreshProxies);
                 Ok(self.snapshot_bytes().1)
             }
             AppAction::TestProxyDelay { node } => {
@@ -1119,20 +1198,30 @@ impl BoxProxyEngine {
                 }))
             }
             AppAction::TestGroupDelay { group } => {
-                let (base_url, secret, clash_url, test_url) = {
+                let (api_kind, base_url, secret, clash_url, test_url) = {
                     let st = self.state.read().expect("state");
                     (
+                        st.active_api.kind,
                         st.active_api.base_url.clone(),
                         st.active_api.secret.clone(),
                         st.active_api.clash_fallback_url.clone(),
                         st.prefs.proxy_selector.custom_latency_test_url.clone(),
                     )
                 };
-                let url = clash_url.unwrap_or(base_url);
                 self.runtime.block_on(async {
+                    if api_kind == ApiKind::HonkNative
+                        && HonkNativeClient::new(&base_url, &secret)?
+                            .probe_group(&group)
+                            .await
+                            .is_ok()
+                    {
+                        return Ok::<_, String>(());
+                    }
+                    let url = clash_url.unwrap_or(base_url);
                     ClashApiClient::new(&url, &secret)?
                         .test_group_delay(&group, &test_url, 3000)
                         .await
+                        .map(|_| ())
                 })?;
                 Ok(self.snapshot_bytes().1)
             }
@@ -1469,7 +1558,11 @@ impl BoxProxyEngine {
                     st.editor_path = relative_path.clone();
                     st.editor_content = content;
                     st.editor_diagnostics = diags;
-                    st.current_route = AppRoute::RuntimeFileEditor { relative_path };
+                    let next = AppRoute::RuntimeFileEditor { relative_path };
+                    if st.current_route != next {
+                        st.back_stack.push(st.current_route.clone());
+                        st.current_route = next;
+                    }
                 }))
             }
             AppAction::SaveEditorFile {
@@ -1570,7 +1663,8 @@ impl BoxProxyEngine {
                                     download_url: String::new(),
                                     sha256_expected: None,
                                     update_available: v
-                                        .get("update_available")
+                                        .get("has_update")
+                                        .or_else(|| v.get("update_available"))
                                         .and_then(|x| x.as_bool())
                                         .unwrap_or(false),
                                 });
@@ -2134,8 +2228,14 @@ fn refresh_api_and_webui_url(st: &mut AppState, box_home: &Path) {
         "metacubexd" => "http://metacubex.github.io/metacubexd".into(),
         "sing_box" => "http://sing-box-dashboard.sagernet.org".into(),
         "local" => {
+            let is_lite = st
+                .prefs
+                .web_panel
+                .webui_local_panel_mode
+                .eq_ignore_ascii_case("lite");
             if core == CoreKind::Honk {
-                format!("{}/ui/", st.active_api.base_url.trim_end_matches('/'))
+                let suffix = if is_lite { "/ui/lite/" } else { "/ui/" };
+                format!("{}{suffix}", st.active_api.base_url.trim_end_matches('/'))
             } else {
                 format!(
                     "{}/ui/",

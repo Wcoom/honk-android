@@ -79,10 +79,10 @@ adb install apk/BoxProxy-honk-arm64.apk
 
 ### 第 3 步：一键推送并部署到手机
 
-方式 A（推荐）：直接运行随包附带的一键部署脚本：
+方式 A（推荐）：直接运行纯 Rust `honk-xtask` 一键部署工具：
 
 ```bash
-bash skill/honk-android/scripts/deploy_honk_android.sh \
+cargo run --manifest-path rust/xtask/Cargo.toml -- deploy \
   --honk bin/honk-android-arm64 \
   --boxctl bin/boxctl-android-arm64 \
   --config /路径/到你的/config.dae \

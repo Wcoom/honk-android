@@ -129,8 +129,18 @@ pub(super) async fn run_tcp_admission_scaler(
     let mut target = target_cell.load(std::sync::atomic::Ordering::Acquire);
     let mut interval = tokio::time::interval(TCP_ADMISSION_SCALE_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut idle_ticks: u64 = 0;
     loop {
         interval.tick().await;
+        let active_permits = target.saturating_sub(semaphore.available_permits());
+        if active_permits == 0 {
+            idle_ticks = idle_ticks.wrapping_add(1);
+            if !idle_ticks.is_multiple_of(10) {
+                continue;
+            }
+        } else {
+            idle_ticks = 0;
+        }
         if let Some(open_fds) = open_fd_count() {
             resize_tcp_admission(&semaphore, &mut target, budget, &stats, open_fds);
             target_cell.store(target, std::sync::atomic::Ordering::Release);

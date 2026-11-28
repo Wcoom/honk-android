@@ -1470,7 +1470,17 @@ fn ensure_traffic_sampler(s: &Arc<ClashState>) {
         loop {
             tick.tick().await;
             if tx.receiver_count() == 0 {
-                continue;
+                state
+                    .stream_samplers
+                    .traffic_started
+                    .store(false, std::sync::atomic::Ordering::Release);
+                if tx.receiver_count() == 0 {
+                    break;
+                }
+                state
+                    .stream_samplers
+                    .traffic_started
+                    .store(true, std::sync::atomic::Ordering::Release);
             }
             let current = traffic_totals(&state).await;
             let frame = Arc::new(Bytes::from(
@@ -1517,14 +1527,25 @@ fn ensure_memory_sampler(s: &Arc<ClashState>) {
     {
         return;
     }
-    let tx = s.stream_samplers.memory.clone();
+    let state = Arc::clone(s);
+    let tx = state.stream_samplers.memory.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
             if tx.receiver_count() == 0 {
-                continue;
+                state
+                    .stream_samplers
+                    .memory_started
+                    .store(false, std::sync::atomic::Ordering::Release);
+                if tx.receiver_count() == 0 {
+                    break;
+                }
+                state
+                    .stream_samplers
+                    .memory_started
+                    .store(true, std::sync::atomic::Ordering::Release);
             }
             let frame = Arc::new(Bytes::from(
                 serde_json::json!({

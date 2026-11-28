@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.2.0 (2026-11-28)
+
+### 纯 Rust 液态玻璃（Liquid Glass）+ 统一 iOS 120Hz 交互设计 + 手机端低功耗与全链路契约打磨
+- **纯 Rust 光学液态玻璃引擎 [`rust/liquid-glass/`](./rust/liquid-glass/)（参考 `@Kyant0/AndroidLiquidGlass`）**：
+  - 100% 纯 Rust 实现圆角胶囊有向距离场（SDF）曲面折射法线、7 频段 RGB 色散 AGSL 着色器生成、临界阻尼弹簧物理步进器（`LiquidTabPhysics`）及内联 BMP 位移贴图生成，同时驱动 Android 客户端（JNI + AGSL `RuntimeShader`）与 Doona WebUI（WASM + SVG `<feDisplacementMap>`）。
+  - Android 端 `LiquidGlassBottomBar` 采用 `Channel.CONFLATED` 单驻留 VSync 协程 + 纯 GPU `graphicsLayer`/`drawWithContent` 零重组架构与静态 `RenderEffect` 缓存，触控拖拽与切换全程锁满 120Hz、静止态 0% CPU 空转。
+- **统一 iOS 视觉体系与零白屏过渡动画（[`rust/boxproxy/android-shell/`](./rust/boxproxy/android-shell/)、[`rust/doona-wasm/`](./rust/doona-wasm/)）**：
+  - **App ↔ WebUI 零白屏丝滑打开**：`BoxWebViewHost` 预着色精确对齐 Doona Rosé Pine 底色（`#191724` / `#FAF4ED`），结合 `onPageCommitVisible` 硬件图层淡入缩放与 iOS Safari Sheet 卡片展开过渡，彻底消除打开 WebUI 时的全屏白闪；支持可折叠半透明胶囊顶栏（滚动自动收起，零遮挡）与 `/ui/` ↔ `/ui/lite/` 双模即时切换。
+  - **单屏紧凑型 Doona 首页（`#activity`）**：移除与观测重复的冗余卡片，将引擎状态、出站模式（规则/直连/全局）、节点策略选择、上下行实时速率与累计流量、TCP/UDP 连接数、CPU/PID、内存/BPF 及实时滚动双面积趋势图完整浓缩于手机单屏内（零滚动即可总览全局）。
+  - **全站交互补齐与 iOS 底部抽屉（Bottom Sheet）**：修复分段选择器（`.rp-seg`）高亮与禁用态样式、`.dae` 含空格/`/` 策略组名引号转义、策略组卡片原位手风琴折叠/展开与 `urltest`/`fallback`/`loadbalance` 生效节点推导、`DNS 缓存`（`?detail=full` 解析结果与精确剩余 TTL）、`事件/日志` SSE 完整流式卡片与连接/流详情 iOS 底部弹出抽屉（自动将 `chain` UUID 映射为可读策略组与节点名）。
+- **前后端 Native API 契约 100% 对齐**：
+  - 修复双端节点/策略组测速（`POST /api/v1/probes` 完整 `ProbeRequest` + 异步 `Operation` 轮询）、节点健康延迟状态识别（`healthy`/`unavailable`）、断开全部连接（`DELETE /api/v1/connections?all=true`）、订阅刷新与 Geodata 更新（0 字节空请求体 + `Idempotency-Key`）、路由追踪（`evaluations` 解析）、流诊断（`?detail=full` `/input/*` 与 `trace.steps`）、实时运行时覆盖（`PATCH /api/v1/runtime/settings` 即点即生效）及 APK 覆写项键名对齐。
+- **手机端深度省电与 Android GKI 核心加固（[`src/`](./src/)、[`boxproxy/boxctl/`](./boxproxy/boxctl/)）**：
+  - **恢复按需休眠架构（`RecorderMode::Auto`）**：移除后台强制常开录制，无面板观察时自动关闭内核流追踪与事件广播（`/api/v1/connections` 无缝回退读取 `ConnectionEntry` 链路与规则）；缓存 `mountinfo` 与 BPF `fdinfo` 扫描、零监听自动退出 Clash 1Hz 采样任务、收敛空闲 FD 扫描与订阅 Cron 唤醒频率。
+  - **客户端息屏/后台零唤醒**：`BoxWebViewHost` 接入生命周期 `onPause`/`pauseTimers` 与销毁释放；Doona WASM 接入 `document.hidden()` 休眠与 SSE `AbortController` 自动断连释放 `StreamLease`；常驻通知服务接入 `ACTION_SCREEN_OFF`/`ON` 息屏停更与 `root_granted` 缓存（消除后台 `su` 轮询）。
+  - **Android 双栈切网与 ColorOS cgroup 加固**：升级双栈 `AF_INET` + `AF_INET6` 默认 WAN 接口探测（穿透 464XLAT `v4-*` 获取物理 `rmnet_data*` 并解除 `ifindex < 1000` 上限）、动态扩容根 cgroup legacy BPF 升级槽位与失败回滚、前置 `/etc/hosts` 并隔离主/备 Bootstrap DNS 超时预算。
+
 ## v1.1.0 (2026-11-28)
 
 ### 全项目纯 Rust 化重构与 `BoxProxy Honk` 1:1 复刻

@@ -360,6 +360,9 @@ async fn ui_fallback(
     Extension(id): Extension<RequestId>,
     request: Request,
 ) -> Response {
+    if matches!(request.uri().path(), "/lite" | "/lite/") {
+        return axum::response::Redirect::temporary("/ui/lite/").into_response();
+    }
     if matches!(request.uri().path(), "/" | "/ui") || request.uri().path().starts_with("/ui/") {
         return state
             .ui
@@ -561,6 +564,11 @@ fn connection(state: &NativeState, entry: &ConnectionEntry, full: bool) -> Conne
         .native_flow_id
         .as_deref()
         .and_then(|id| state.observation.core.flows.connection_evidence(id));
+    let fallback_started = || {
+        SystemTime::now()
+            .checked_sub(entry.start_time.elapsed())
+            .map(timestamp)
+    };
     Connection {
         id: entry.id.clone(),
         flow_id: entry.native_flow_id.clone(),
@@ -569,18 +577,23 @@ fn connection(state: &NativeState, entry: &ConnectionEntry, full: bool) -> Conne
         src: full.then(|| entry.source.clone()),
         dst: full.then(|| entry.destination.clone()),
         domain: full.then(|| entry.domain.clone()),
-        outbound: entry.routed_outbound.clone(),
+        outbound: entry
+            .routed_outbound
+            .clone()
+            .or_else(|| (!entry.proxy.is_empty()).then(|| entry.proxy.clone())),
         chain: evidence
             .as_ref()
             .map(|value| value.chain.clone())
-            .unwrap_or_default(),
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| entry.chains.clone()),
         chain_source: evidence
             .as_ref()
-            .map_or("unknown", |value| value.chain_source),
+            .map_or("evaluation", |value| value.chain_source),
         rule_id: evidence.as_ref().and_then(|value| value.rule_id.clone()),
         rule_expression: evidence
             .as_ref()
-            .and_then(|value| value.rule_expression.clone()),
+            .and_then(|value| value.rule_expression.clone())
+            .or_else(|| (!entry.rule.is_empty()).then(|| entry.rule.clone())),
         rule_source: evidence
             .as_ref()
             .map_or(crate::observe::vocab::RuleSource::Unknown, |value| {
@@ -588,7 +601,9 @@ fn connection(state: &NativeState, entry: &ConnectionEntry, full: bool) -> Conne
             }),
         ingress: None,
         domain_source: evidence.as_ref().and_then(|value| value.domain_source),
-        started_at: evidence.map(|value| value.started_at),
+        started_at: evidence
+            .map(|value| value.started_at)
+            .or_else(fallback_started),
         observed_by: "userspace",
         upload_bytes: Some(entry.upload.load(Ordering::Relaxed).to_string()),
         download_bytes: Some(entry.download.load(Ordering::Relaxed).to_string()),

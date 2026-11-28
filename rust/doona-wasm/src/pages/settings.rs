@@ -1,6 +1,6 @@
-//! Settings Hub pages: Multi-source `.dae` Config Editor (with pure-Rust syntax highlighting,
-//! validate, save, import/export, revisions) & Settings Page (CoreUpdateCard, Appearance 16 palettes,
-//! Language, Backend profile, Geodata, Runtime Settings).
+//! Settings Hub pages: Multi-source `.dae` Config Editor (create source, dirty tracking, upload/download,
+//! structured validation diagnostics, revisions) & Settings Page (CoreUpdateCard, Appearance 16 palettes,
+//! Language, Backend profile, structured Geodata cards, interactive Runtime Settings PATCH form).
 
 use doona_common::format::format_bytes;
 use doona_common::i18n::Lang;
@@ -8,21 +8,29 @@ use doona_common::model::{ConfigRevisionList, CoreUpdateStatus, value_u64};
 use doona_common::palettes::PALETTES;
 use leptos::prelude::*;
 use serde_json::{Value, json};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::mode_dae::highlight_dae;
 use crate::state::use_app_state;
-use crate::ui::StatusLight;
+use crate::ui::{ConfirmSheet, StatusLight, download_text_file};
 
 #[component]
 pub fn ConfigPage() -> impl IntoView {
     let state = use_app_state();
     let selected_id = RwSignal::new(String::new());
     let draft = RwSignal::new(String::new());
+    let baseline = RwSignal::new(String::new());
     let preview_mode = RwSignal::new(false);
     let validation = RwSignal::new(None::<Value>);
     let revisions = RwSignal::new(None::<ConfigRevisionList>);
     let busy = RwSignal::new(false);
+    let import_confirm = RwSignal::new(false);
+    let new_src_open = RwSignal::new(false);
+    let new_src_path = RwSignal::new("custom.dae".to_string());
+    let new_src_content = RwSignal::new("# custom config fragment\n".to_string());
+    let file_input_ref = NodeRef::<leptos::html::Input>::new();
 
     Effect::new(move |_| {
         if let Some(cfg) = state.config.get() {
@@ -34,11 +42,15 @@ pub fn ConfigPage() -> impl IntoView {
                 .or_else(|| cfg.sources.iter().find(|s| s.kind.as_deref() == Some("main")))
                 .or_else(|| cfg.sources.first());
             if let Some(src) = chosen {
+                let text = src.content.clone().unwrap_or_default();
+                let was_clean = draft.get_untracked() == baseline.get_untracked();
                 if cur != src.id {
                     selected_id.set(src.id.clone());
-                }
-                if let Some(ref text) = src.content {
-                    draft.set(text.clone());
+                    baseline.set(text.clone());
+                    draft.set(text);
+                } else if was_clean {
+                    baseline.set(text.clone());
+                    draft.set(text);
                 }
             }
         }
@@ -49,6 +61,8 @@ pub fn ConfigPage() -> impl IntoView {
             }
         });
     });
+
+    let is_dirty = Signal::derive(move || draft.get() != baseline.get());
 
     let on_validate = move |_| {
         let sid = selected_id.get_untracked();
@@ -61,14 +75,15 @@ pub fn ConfigPage() -> impl IntoView {
                 .map(|c| {
                     c.sources
                         .into_iter()
-                        .map(|s| {
+                        .enumerate()
+                        .map(|(idx, s)| {
                             let content = if s.id == sid {
                                 text.clone()
                             } else {
                                 s.content.unwrap_or_default()
                             };
                             json!({
-                                "path": s.path.unwrap_or_else(|| "config.dae".into()),
+                                "path": s.path.unwrap_or_else(|| if idx == 0 { "config.dae".into() } else { format!("fragment-{idx}.dae") }),
                                 "content": content,
                             })
                         })
@@ -101,9 +116,9 @@ pub fn ConfigPage() -> impl IntoView {
                         format!("\"{}\"", src.content_sha256.or(src.sha256).unwrap_or_default())
                     });
                     match api.replace_config_source(&sid, &text, &if_match).await {
-                        Ok(_) => {
-                            state.toast("positive", state.t("ui.saved"), None);
-                            state.refresh_all();
+                        Ok(op) => {
+                            baseline.set(text);
+                            state.poll_operation(op.operation_id, state.t("ui.saved"));
                         }
                         Err(e) => state.toast("negative", state.t("ui.writeFailed"), Some(e)),
                     }
@@ -114,16 +129,73 @@ pub fn ConfigPage() -> impl IntoView {
         });
     };
 
-    let on_import = move |_| {
+    let on_import_disk = Callback::new(move |()| {
         busy.set(true);
         let api = state.client();
         spawn_local(async move {
-            match api.import_config().await {
-                Ok(_) => {
-                    state.toast("positive", state.t("config.backup.imported"), None);
-                    state.refresh_all();
+            match api.import_config_replace(true).await {
+                Ok(op) => {
+                    state.poll_operation(op.operation_id, state.t("config.backup.imported"));
                 }
                 Err(e) => state.toast("negative", state.t("ui.failed"), Some(e)),
+            }
+            busy.set(false);
+        });
+    });
+
+    let on_export_file = move |_| {
+        let api = state.client();
+        spawn_local(async move {
+            match api.export_config_text().await {
+                Ok(text) => {
+                    let _ = download_text_file("honk-config.dae", &text, "text/plain;charset=utf-8");
+                    state.toast("positive", state.t("config.backup.export"), Some("honk-config.dae".into()));
+                }
+                Err(e) => state.toast("negative", state.t("ui.failed"), Some(e)),
+            }
+        });
+    };
+
+    let on_file_selected = move |ev: web_sys::Event| {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(target) = ev.target()
+                && let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>()
+                && let Some(files) = input.files()
+                && let Some(file) = files.get(0)
+            {
+                let promise = file.text();
+                spawn_local(async move {
+                    if let Ok(val) = wasm_bindgen_futures::JsFuture::from(promise).await
+                        && let Some(txt) = val.as_string()
+                    {
+                        draft.set(txt);
+                        state.toast("neutral", "已载入文件内容至编辑器，点击保存生效", None);
+                    }
+                });
+                input.set_value("");
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = ev;
+    };
+
+    let create_source = move |ev: web_sys::SubmitEvent| {
+        ev.prevent_default();
+        let path = new_src_path.get_untracked().trim().to_string();
+        let content = new_src_content.get_untracked();
+        if path.is_empty() {
+            return;
+        }
+        busy.set(true);
+        let api = state.client();
+        spawn_local(async move {
+            match api.create_config_source(&path, &content).await {
+                Ok(op) => {
+                    new_src_open.set(false);
+                    state.poll_operation(op.operation_id, state.t("ui.saved"));
+                }
+                Err(e) => state.toast("negative", state.t("ui.writeFailed"), Some(e)),
             }
             busy.set(false);
         });
@@ -132,35 +204,75 @@ pub fn ConfigPage() -> impl IntoView {
     view! {
         <div class="rp-page" style="display:flex;flex-direction:column;gap:12px;">
             <div class="rp-between" style="flex-wrap:wrap;gap:8px;">
-                <select
-                    class="rp-input"
-                    prop:value=move || selected_id.get()
-                    on:change=move |ev| {
-                        let id = event_target_value(&ev);
-                        selected_id.set(id.clone());
-                        if let Some(cfg) = state.config.get_untracked()
-                            && let Some(src) = cfg.sources.into_iter().find(|s| s.id == id)
-                        {
-                            draft.set(src.content.unwrap_or_default());
+                <div class="rp-cluster" style="flex-wrap:wrap;">
+                    <select
+                        class="rp-input"
+                        prop:value=move || selected_id.get()
+                        on:change=move |ev| {
+                            let id = event_target_value(&ev);
+                            selected_id.set(id.clone());
+                            if let Some(cfg) = state.config.get_untracked()
+                                && let Some(src) = cfg.sources.into_iter().find(|s| s.id == id)
+                            {
+                                let content = src.content.unwrap_or_default();
+                                baseline.set(content.clone());
+                                draft.set(content);
+                                validation.set(None);
+                            }
                         }
-                    }
-                >
-                    {move || state.config.get().map(|c| c.sources.into_iter().map(|s| {
-                        let label = s.path.clone().or(s.name.clone()).unwrap_or_else(|| s.id.clone());
-                        view! { <option value=s.id>{label}</option> }
-                    }).collect_view())}
-                </select>
-                <div class="rp-cluster">
+                    >
+                        {move || state.config.get().map(|c| c.sources.into_iter().map(|s| {
+                            let label = s.path.clone().or(s.name.clone()).unwrap_or_else(|| s.id.clone());
+                            view! { <option value=s.id>{label}</option> }
+                        }).collect_view())}
+                    </select>
+                    <button type="button" class="rp-btn secondary sm" on:click=move |_| new_src_open.set(true)>
+                        "+ 新建片段"
+                    </button>
+                    <Show when=move || is_dirty.get()>
+                        <span class="rp-light warn"><span class="rp-dot"></span>"未保存更改"</span>
+                        <button
+                            type="button"
+                            class="rp-btn quiet sm"
+                            on:click=move |_| draft.set(baseline.get_untracked())
+                        >
+                            "还原"
+                        </button>
+                    </Show>
+                </div>
+
+                <div class="rp-cluster" style="flex-wrap:wrap;">
+                    <input
+                        node_ref=file_input_ref
+                        type="file"
+                        accept=".dae,.conf,.txt"
+                        style="display:none;"
+                        on:change=on_file_selected
+                    />
+                    <button
+                        type="button"
+                        class="rp-btn secondary sm"
+                        on:click=move |_| {
+                            if let Some(el) = file_input_ref.get() {
+                                el.click();
+                            }
+                        }
+                    >
+                        "打开本地文件"
+                    </button>
+                    <button type="button" class="rp-btn secondary sm" on:click=on_export_file>
+                        {move || state.t("ov.export")}
+                    </button>
                     <button type="button" class="rp-btn secondary sm" on:click=move |_| preview_mode.update(|v| *v = !*v)>
-                        {move || if preview_mode.get() { "Edit" } else { "Highlight" }}
+                        {move || if preview_mode.get() { "编辑" } else { "高亮预览" }}
                     </button>
                     <button type="button" class="rp-btn secondary sm" disabled=move || busy.get() on:click=on_validate>
                         {move || state.t("config.validate")}
                     </button>
-                    <button type="button" class="rp-btn secondary sm" disabled=move || busy.get() on:click=on_import>
+                    <button type="button" class="rp-btn secondary sm" disabled=move || busy.get() on:click=move |_| import_confirm.set(true)>
                         {move || state.t("config.backup.import")}
                     </button>
-                    <button type="button" class="rp-btn accent sm" disabled=move || busy.get() on:click=on_save>
+                    <button type="button" class="rp-btn accent sm" disabled=move || busy.get() || !is_dirty.get() on:click=on_save>
                         {move || state.t("config.save")}
                     </button>
                 </div>
@@ -194,11 +306,47 @@ pub fn ConfigPage() -> impl IntoView {
                 }}
             </section>
 
-            {move || validation.get().map(|v| view! {
-                <section class="rp-card">
-                    <h3 class="rp-h3" style="margin-bottom:8px;">{state.t("config.validate")}</h3>
-                    <pre class="rp-limit-snippet" style="overflow:auto;max-height:240px;">{serde_json::to_string_pretty(&v).unwrap_or_default()}</pre>
-                </section>
+            {move || validation.get().map(|v| {
+                let valid = v.get("valid").and_then(Value::as_bool).unwrap_or_else(|| {
+                    v.get("diagnostics")
+                        .and_then(Value::as_array)
+                        .is_none_or(|d| d.is_empty())
+                });
+                let diags = v
+                    .get("diagnostics")
+                    .or_else(|| v.get("errors"))
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                view! {
+                    <section class="rp-card">
+                        <div class="rp-between" style="margin-bottom:8px;">
+                            <StatusLight
+                                tone=if valid { "ok" } else { "err" }
+                                text=if valid { "语法与拓扑校验通过".into() } else { "配置存在校验问题".into() }
+                            />
+                            <button type="button" class="rp-btn quiet sm" on:click=move |_| validation.set(None)>"×"</button>
+                        </div>
+                        {(!diags.is_empty()).then(|| view! {
+                            <div style="display:flex;flex-direction:column;gap:6px;">
+                                {diags.into_iter().map(|d| {
+                                    let sev = d.get("severity").and_then(Value::as_str).unwrap_or("error").to_uppercase();
+                                    let path = d.get("path").or_else(|| d.get("file")).and_then(Value::as_str).unwrap_or("config.dae");
+                                    let line = d.get("line").and_then(Value::as_u64).unwrap_or(1);
+                                    let msg = d.get("message").and_then(Value::as_str).unwrap_or("校验错误").to_string();
+                                    let loc = format!("{path}:{line}");
+                                    view! {
+                                        <div style="padding:6px 8px;border-radius:8px;background:var(--rp-surface);">
+                                            <span class="rp-badge" style="margin-right:8px;">{sev}</span>
+                                            <code style="margin-right:8px;">{loc}</code>
+                                            <span>{msg}</span>
+                                        </div>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        })}
+                    </section>
+                }
             })}
 
             {move || revisions.get().filter(|r| !r.revisions.is_empty()).map(|revs| view! {
@@ -225,16 +373,15 @@ pub fn ConfigPage() -> impl IntoView {
                                             let api = state.client();
                                             spawn_local(async move {
                                                 match api.activate_config_revision(rnum).await {
-                                                    Ok(_) => {
-                                                        state.toast("positive", state.t("ui.saved"), None);
-                                                        state.refresh_all();
+                                                    Ok(op) => {
+                                                        state.poll_operation(op.operation_id, state.t("ui.saved"));
                                                     }
                                                     Err(e) => state.toast("negative", state.t("ui.failed"), Some(e)),
                                                 }
                                             });
                                         }
                                     >
-                                        {if is_active { "Active" } else { "Activate" }}
+                                        {if is_active { "当前生效" } else { "回滚至此版本" }}
                                     </button>
                                 </div>
                             }
@@ -242,6 +389,55 @@ pub fn ConfigPage() -> impl IntoView {
                     </div>
                 </section>
             })}
+
+            <Show when=move || new_src_open.get()>
+                <div class="rp-ios-sheet-backdrop" on:click=move |_| new_src_open.set(false)>
+                    <form
+                        class="rp-dialog rp-card rp-ios-sheet"
+                        style="width:min(460px,92vw);display:flex;flex-direction:column;gap:12px;"
+                        on:click=move |ev| ev.stop_propagation()
+                        on:submit=create_source
+                    >
+                        <h3 class="rp-h3">"新建配置片段"</h3>
+                        <label class="rp-field">
+                            <span class="rp-label">"相对文件名 (.dae)"</span>
+                            <input
+                                class="rp-input"
+                                placeholder="rules.d/custom.dae"
+                                prop:value=move || new_src_path.get()
+                                on:input=move |ev| new_src_path.set(event_target_value(&ev))
+                            />
+                        </label>
+                        <label class="rp-field">
+                            <span class="rp-label">"初始内容"</span>
+                            <textarea
+                                class="rp-input"
+                                rows="6"
+                                style="font-family:monospace;font-size:12px;"
+                                prop:value=move || new_src_content.get()
+                                on:input=move |ev| new_src_content.set(event_target_value(&ev))
+                            />
+                        </label>
+                        <div class="rp-ios-sheet-actions">
+                            <button type="button" class="rp-btn secondary" on:click=move |_| new_src_open.set(false)>
+                                {move || state.t("ui.cancel")}
+                            </button>
+                            <button type="submit" class="rp-btn accent" disabled=move || busy.get()>
+                                {move || state.t("ui.add")}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </Show>
+
+            <ConfirmSheet
+                open=import_confirm
+                title=Signal::derive(move || state.t("config.backup.import"))
+                message=Signal::derive(move || "从磁盘重新导入 config.dae 将生成新版本并覆盖当前数据库草稿，确定继续？".into())
+                confirm_label=Signal::derive(move || state.t("config.backup.import"))
+                destructive=false
+                on_confirm=on_import_disk
+            />
         </div>
     }
 }
@@ -252,7 +448,48 @@ pub fn SettingsPage() -> impl IntoView {
     let base_input = RwSignal::new(state.api_base.get_untracked());
     let token_input = RwSignal::new(state.api_token.get_untracked().unwrap_or_default());
     let geodata = RwSignal::new(None::<Value>);
+    let geo_busy = RwSignal::new(false);
     let rt_settings = RwSignal::new(None::<Value>);
+    let rt_saving = RwSignal::new(false);
+
+    // Editable Runtime Settings signals
+    let rt_level = RwSignal::new("info".to_string());
+    let rt_rec_flows = RwSignal::new("auto".to_string());
+    let rt_rec_logs = RwSignal::new("auto".to_string());
+    let rt_rec_dns = RwSignal::new("auto".to_string());
+    let rt_log_buf = RwSignal::new("512".to_string());
+    let rt_dns_max = RwSignal::new("512".to_string());
+    let rt_flow_max = RwSignal::new("512".to_string());
+    let rt_flow_ret = RwSignal::new("300".to_string());
+
+    let sync_rt_signals = move |rs: &Value| {
+        if let Some(lv) = rs.get("log").and_then(|l| l.get("level")).and_then(Value::as_str) {
+            rt_level.set(lv.to_string());
+        }
+        if let Some(n) = rs.get("log").and_then(|l| l.get("buffered_records")).and_then(Value::as_u64) {
+            rt_log_buf.set(n.to_string());
+        }
+        if let Some(n) = rs.get("dns_log").and_then(|l| l.get("max_records")).and_then(Value::as_u64) {
+            rt_dns_max.set(n.to_string());
+        }
+        if let Some(n) = rs.get("flows").and_then(|f| f.get("max_flows")).and_then(Value::as_u64) {
+            rt_flow_max.set(n.to_string());
+        }
+        if let Some(n) = rs.get("flows").and_then(|f| f.get("retention_seconds")).and_then(Value::as_u64) {
+            rt_flow_ret.set(n.to_string());
+        }
+        if let Some(rec) = rs.get("recording") {
+            if let Some(m) = rec.get("flows").and_then(|x| x.get("mode")).and_then(Value::as_str) {
+                rt_rec_flows.set(m.to_string());
+            }
+            if let Some(m) = rec.get("logs").and_then(|x| x.get("mode")).and_then(Value::as_str) {
+                rt_rec_logs.set(m.to_string());
+            }
+            if let Some(m) = rec.get("dns_log").and_then(|x| x.get("mode")).and_then(Value::as_str) {
+                rt_rec_dns.set(m.to_string());
+            }
+        }
+    };
 
     Effect::new(move |_| {
         let _ = state.reload_nonce.get();
@@ -262,10 +499,107 @@ pub fn SettingsPage() -> impl IntoView {
                 geodata.set(Some(g));
             }
             if let Ok(rs) = api.runtime_settings().await {
+                sync_rt_signals(&rs);
                 rt_settings.set(Some(rs));
             }
         });
     });
+
+    let apply_rt_patch = move |patch: Value| {
+        rt_saving.set(true);
+        let api = state.client();
+        spawn_local(async move {
+            match api.patch_runtime_settings(patch).await {
+                Ok(updated) => {
+                    sync_rt_signals(&updated);
+                    rt_settings.set(Some(updated));
+                    state.toast("positive", state.t("ui.saved"), None);
+                }
+                Err(e) => state.toast("negative", state.t("ui.writeFailed"), Some(e)),
+            }
+            rt_saving.set(false);
+        });
+    };
+
+    let save_runtime_settings = move |ev: web_sys::SubmitEvent| {
+        ev.prevent_default();
+        let Some(cur) = rt_settings.get_untracked() else {
+            return;
+        };
+        let rec = cur.get("recording").cloned().unwrap_or_else(|| json!({}));
+        let allow_flows = rec
+            .get("flows")
+            .and_then(|x| x.get("allowed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let allow_logs = rec
+            .get("logs")
+            .and_then(|x| x.get("allowed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let allow_dns = rec
+            .get("dns_log")
+            .and_then(|x| x.get("allowed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+
+        let mut patch = serde_json::Map::new();
+        let mf = rt_rec_flows.get_untracked();
+        if allow_flows || mf != "on" {
+            patch.insert("record_flows".into(), json!(mf));
+        }
+        let ml = rt_rec_logs.get_untracked();
+        if allow_logs || ml != "on" {
+            patch.insert("record_logs".into(), json!(ml));
+        }
+        let md = rt_rec_dns.get_untracked();
+        if allow_dns || md != "on" {
+            patch.insert("record_dns_log".into(), json!(md));
+        }
+        if allow_logs {
+            let buf = rt_log_buf
+                .get_untracked()
+                .parse::<usize>()
+                .unwrap_or(512)
+                .clamp(64, 512);
+            patch.insert(
+                "log".into(),
+                json!({
+                    "level": rt_level.get_untracked(),
+                    "buffered_records": buf,
+                }),
+            );
+        }
+        if allow_dns {
+            let max_r = rt_dns_max
+                .get_untracked()
+                .parse::<usize>()
+                .unwrap_or(512)
+                .clamp(64, 512);
+            patch.insert("dns_log".into(), json!({ "max_records": max_r }));
+        }
+        if allow_flows {
+            let max_f = rt_flow_max
+                .get_untracked()
+                .parse::<usize>()
+                .unwrap_or(1024)
+                .clamp(64, 1024);
+            let ret_s = rt_flow_ret
+                .get_untracked()
+                .parse::<u64>()
+                .unwrap_or(300)
+                .clamp(1, 300);
+            patch.insert(
+                "flows".into(),
+                json!({
+                    "max_flows": max_f,
+                    "retention_seconds": ret_s,
+                }),
+            );
+        }
+
+        apply_rt_patch(Value::Object(patch));
+    };
 
     view! {
         <div class="rp-page" style="display:flex;flex-direction:column;gap:14px;">
@@ -327,6 +661,283 @@ pub fn SettingsPage() -> impl IntoView {
                 </div>
             </section>
 
+            // Interactive Runtime Settings Card (`PATCH /api/v1/runtime/settings`) — instant click-to-apply + ring buffer controls!
+            <section class="rp-card" id="runtime">
+                <div class="rp-between" style="margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+                    <div class="rp-cluster">
+                        <h2 class="rp-h3" style="margin:0;">{move || state.t("settings.runtime")}</h2>
+                        <span
+                            class="rp-badge"
+                            style=move || {
+                                let is_rt = rt_settings
+                                    .get()
+                                    .and_then(|rs| rs.get("source").and_then(Value::as_str).map(|s| s == "runtime"))
+                                    .unwrap_or(false);
+                                if is_rt {
+                                    "background:color-mix(in srgb,var(--rp-accent) 22%,transparent);color:var(--rp-text);"
+                                } else {
+                                    ""
+                                }
+                            }
+                        >
+                            {move || {
+                                match rt_settings
+                                    .get()
+                                    .and_then(|rs| rs.get("source").and_then(Value::as_str).map(ToString::to_string))
+                                    .as_deref()
+                                {
+                                    Some("runtime") => "临时覆盖生效中",
+                                    Some(_) => "配置文件默认",
+                                    None => "加载中…",
+                                }
+                            }}
+                        </span>
+                    </div>
+                    <button
+                        type="button"
+                        class="rp-btn quiet sm"
+                        disabled=move || rt_saving.get()
+                        on:click=move |_| {
+                            let cur = rt_settings.get_untracked();
+                            let allow = |k: &str| {
+                                cur.as_ref()
+                                    .and_then(|rs| rs.get("recording")?.get(k)?.get("allowed")?.as_bool())
+                                    .unwrap_or(true)
+                            };
+                            let mf = if allow("flows") { "auto" } else { "off" };
+                            let ml = if allow("logs") { "auto" } else { "off" };
+                            let md = if allow("dns_log") { "auto" } else { "off" };
+                            rt_level.set("info".to_string());
+                            rt_rec_flows.set(mf.to_string());
+                            rt_rec_logs.set(ml.to_string());
+                            rt_rec_dns.set(md.to_string());
+                            rt_log_buf.set("512".to_string());
+                            rt_dns_max.set("512".to_string());
+                            rt_flow_max.set("1024".to_string());
+                            rt_flow_ret.set("300".to_string());
+                            let mut patch = serde_json::Map::new();
+                            patch.insert("record_flows".into(), json!(mf));
+                            patch.insert("record_logs".into(), json!(ml));
+                            patch.insert("record_dns_log".into(), json!(md));
+                            if allow("logs") {
+                                patch.insert("log".into(), json!({ "level": "info", "buffered_records": 512 }));
+                            }
+                            if allow("dns_log") {
+                                patch.insert("dns_log".into(), json!({ "max_records": 512 }));
+                            }
+                            if allow("flows") {
+                                patch.insert("flows".into(), json!({ "max_flows": 1024, "retention_seconds": 300 }));
+                            }
+                            apply_rt_patch(Value::Object(patch));
+                        }
+                    >
+                        "恢复默认"
+                    </button>
+                </div>
+
+                <form on:submit=save_runtime_settings style="display:flex;flex-direction:column;gap:12px;">
+                    <div class="rp-between" style="flex-wrap:wrap;gap:8px;">
+                        <span class="rp-label">"实时日志级别"</span>
+                        <div class="rp-seg" data-size="M" style="flex-wrap:wrap;">
+                            {["trace", "debug", "info", "warn", "error"].into_iter().map(|lv| view! {
+                                <button
+                                    type="button"
+                                    class="rp-btn"
+                                    data-size="M"
+                                    disabled=move || rt_saving.get()
+                                    data-selected=move || (rt_level.get() == lv).then_some("true")
+                                    on:click=move |_| {
+                                        rt_level.set(lv.to_string());
+                                        apply_rt_patch(json!({ "log": { "level": lv } }));
+                                    }
+                                >
+                                    {lv.to_uppercase()}
+                                </button>
+                            }).collect_view()}
+                        </div>
+                    </div>
+
+                    <div class="rp-between" style="flex-wrap:wrap;gap:8px;">
+                        <span class="rp-label">"连接流记录策略 (Flows)"</span>
+                        <div class="rp-seg" data-size="M">
+                            {[("auto", "按需 Auto"), ("on", "常开 On"), ("off", "关闭 Off")].into_iter().map(|(m, lbl)| view! {
+                                <button
+                                    type="button"
+                                    class="rp-btn"
+                                    data-size="M"
+                                    disabled=move || {
+                                        let allowed = rt_settings
+                                            .get()
+                                            .and_then(|rs| rs.get("recording")?.get("flows")?.get("allowed")?.as_bool())
+                                            .unwrap_or(true);
+                                        rt_saving.get() || (m == "on" && !allowed)
+                                    }
+                                    data-selected=move || (rt_rec_flows.get() == m).then_some("true")
+                                    on:click=move |_| {
+                                        rt_rec_flows.set(m.to_string());
+                                        apply_rt_patch(json!({ "record_flows": m }));
+                                    }
+                                >
+                                    {lbl}
+                                </button>
+                            }).collect_view()}
+                        </div>
+                    </div>
+
+                    <div class="rp-between" style="flex-wrap:wrap;gap:8px;">
+                        <span class="rp-label">"运行日志记录策略 (Logs)"</span>
+                        <div class="rp-seg" data-size="M">
+                            {[("auto", "按需 Auto"), ("on", "常开 On"), ("off", "关闭 Off")].into_iter().map(|(m, lbl)| view! {
+                                <button
+                                    type="button"
+                                    class="rp-btn"
+                                    data-size="M"
+                                    disabled=move || {
+                                        let allowed = rt_settings
+                                            .get()
+                                            .and_then(|rs| rs.get("recording")?.get("logs")?.get("allowed")?.as_bool())
+                                            .unwrap_or(true);
+                                        rt_saving.get() || (m == "on" && !allowed)
+                                    }
+                                    data-selected=move || (rt_rec_logs.get() == m).then_some("true")
+                                    on:click=move |_| {
+                                        rt_rec_logs.set(m.to_string());
+                                        apply_rt_patch(json!({ "record_logs": m }));
+                                    }
+                                >
+                                    {lbl}
+                                </button>
+                            }).collect_view()}
+                        </div>
+                    </div>
+
+                    <div class="rp-between" style="flex-wrap:wrap;gap:8px;">
+                        <span class="rp-label">"DNS 日志记录策略 (DNS Log)"</span>
+                        <div class="rp-seg" data-size="M">
+                            {[("auto", "按需 Auto"), ("on", "常开 On"), ("off", "关闭 Off")].into_iter().map(|(m, lbl)| view! {
+                                <button
+                                    type="button"
+                                    class="rp-btn"
+                                    data-size="M"
+                                    disabled=move || {
+                                        let allowed = rt_settings
+                                            .get()
+                                            .and_then(|rs| rs.get("recording")?.get("dns_log")?.get("allowed")?.as_bool())
+                                            .unwrap_or(true);
+                                        rt_saving.get() || (m == "on" && !allowed)
+                                    }
+                                    data-selected=move || (rt_rec_dns.get() == m).then_some("true")
+                                    on:click=move |_| {
+                                        rt_rec_dns.set(m.to_string());
+                                        apply_rt_patch(json!({ "record_dns_log": m }));
+                                    }
+                                >
+                                    {lbl}
+                                </button>
+                            }).collect_view()}
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;">
+                        <label class="rp-field">
+                            <span class="rp-label">"日志缓冲条数 (64–512)"</span>
+                            <input class="rp-input" type="number" min="64" max="512" prop:value=move || rt_log_buf.get() on:input=move |ev| rt_log_buf.set(event_target_value(&ev)) />
+                        </label>
+                        <label class="rp-field">
+                            <span class="rp-label">"DNS 日志条数 (64–512)"</span>
+                            <input class="rp-input" type="number" min="64" max="512" prop:value=move || rt_dns_max.get() on:input=move |ev| rt_dns_max.set(event_target_value(&ev)) />
+                        </label>
+                        <label class="rp-field">
+                            <span class="rp-label">"流记录上限 (64–1024)"</span>
+                            <input class="rp-input" type="number" min="64" max="1024" prop:value=move || rt_flow_max.get() on:input=move |ev| rt_flow_max.set(event_target_value(&ev)) />
+                        </label>
+                        <label class="rp-field">
+                            <span class="rp-label">"流保留秒数 (1–300)"</span>
+                            <input class="rp-input" type="number" min="1" max="300" prop:value=move || rt_flow_ret.get() on:input=move |ev| rt_flow_ret.set(event_target_value(&ev)) />
+                        </label>
+                    </div>
+
+                    <div class="rp-cluster">
+                        <button type="submit" class="rp-btn accent sm" disabled=move || rt_saving.get()>
+                            "应用缓冲参数"
+                        </button>
+                    </div>
+                </form>
+            </section>
+
+            // Structured Geodata Card (`/api/v1/geodata` + `/api/v1/geodata/update`)
+            <section class="rp-card" id="geodata">
+                <div class="rp-between" style="margin-bottom:10px;">
+                    <h2 class="rp-h3">{move || state.t("settings.geodata")}</h2>
+                    <button
+                        type="button"
+                        class="rp-btn accent sm"
+                        disabled=move || geo_busy.get()
+                        on:click=move |_| {
+                            geo_busy.set(true);
+                            let api = state.client();
+                            spawn_local(async move {
+                                match api.update_geodata().await {
+                                    Ok(op) => state.poll_operation(op.operation_id, state.t("ov.succeeded")),
+                                    Err(e) => state.toast("negative", state.t("ui.failed"), Some(e)),
+                                }
+                                geo_busy.set(false);
+                            });
+                        }
+                    >
+                        "立即更新数据库"
+                    </button>
+                </div>
+                {move || match geodata.get() {
+                    None => view! { <p class="rp-label">{state.t("ov.loading")}</p> }.into_any(),
+                    Some(g) => {
+                        let assets: Vec<(String, Value)> = if let Some(arr) = g.get("assets").or_else(|| g.get("files")).and_then(Value::as_array) {
+                            arr.iter()
+                                .enumerate()
+                                .map(|(i, item)| {
+                                    let k = item.get("kind").or_else(|| item.get("name")).and_then(Value::as_str).unwrap_or(if i == 0 { "geoip" } else { "geosite" }).to_string();
+                                    (k, item.clone())
+                                })
+                                .collect()
+                        } else {
+                            ["geoip", "geosite"]
+                                .into_iter()
+                                .filter_map(|k| g.get(k).map(|v| (k.to_uppercase(), v.clone())))
+                                .collect()
+                        };
+                        if assets.is_empty() {
+                            return view! { <p class="rp-empty">{state.t("ui.empty")}</p> }.into_any();
+                        }
+                        view! {
+                            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;">
+                                {assets.into_iter().map(|(title, item)| {
+                                    let present = item.get("present").or_else(|| item.get("exists")).and_then(Value::as_bool).unwrap_or(true);
+                                    let size = value_u64(&item.get("size_bytes").cloned())
+                                        .or_else(|| value_u64(&item.get("bytes").cloned()))
+                                        .map(format_bytes)
+                                        .unwrap_or_else(|| "—".into());
+                                    let sha = item.get("sha256").and_then(Value::as_str).map(|s| s.chars().take(12).collect::<String>()).unwrap_or_else(|| "—".into());
+                                    let mtime = item.get("modified_at").or_else(|| item.get("updated_at")).and_then(Value::as_str).unwrap_or("—").to_string();
+                                    view! {
+                                        <div class="rp-card" style="background:var(--rp-surface);">
+                                            <div class="rp-between" style="margin-bottom:6px;">
+                                                <strong>{title.to_uppercase()}</strong>
+                                                <StatusLight tone=if present { "ok" } else { "warn" } text=if present { "已就绪".into() } else { "缺失".into() } />
+                                            </div>
+                                            <div class="rp-kv">
+                                                <div><span class="k">"文件大小"</span><span class="v">{size}</span></div>
+                                                <div><span class="k">"SHA-256"</span><span class="v"><code>{sha}</code></span></div>
+                                                <div><span class="k">"更新时间"</span><span class="v">{mtime}</span></div>
+                                            </div>
+                                        </div>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        }.into_any()
+                    }
+                }}
+            </section>
+
             // Backend Connection Card
             <section class="rp-card" id="backend">
                 <h2 class="rp-h3" style="margin-bottom:10px;">{move || state.t("settings.backend")}</h2>
@@ -375,39 +986,6 @@ pub fn SettingsPage() -> impl IntoView {
                     </div>
                 </form>
             </section>
-
-            // Geodata Card
-            <section class="rp-card" id="geodata">
-                <div class="rp-between" style="margin-bottom:8px;">
-                    <h2 class="rp-h3">{move || state.t("settings.geodata")}</h2>
-                    <button
-                        type="button"
-                        class="rp-btn secondary sm"
-                        on:click=move |_| {
-                            let api = state.client();
-                            spawn_local(async move {
-                                match api.update_geodata().await {
-                                    Ok(_) => state.toast("positive", state.t("ov.succeeded"), None),
-                                    Err(e) => state.toast("negative", state.t("ui.failed"), Some(e)),
-                                }
-                            });
-                        }
-                    >
-                        {move || state.t("ui.refresh")}
-                    </button>
-                </div>
-                {move || geodata.get().map(|g| view! {
-                    <pre class="rp-limit-snippet" style="overflow:auto;max-height:200px;">{serde_json::to_string_pretty(&g).unwrap_or_default()}</pre>
-                })}
-            </section>
-
-            // Runtime Settings Card
-            {move || rt_settings.get().map(|rs| view! {
-                <section class="rp-card" id="runtime">
-                    <h2 class="rp-h3" style="margin-bottom:8px;">{move || state.t("settings.runtime")}</h2>
-                    <pre class="rp-limit-snippet" style="overflow:auto;max-height:220px;">{serde_json::to_string_pretty(&rs).unwrap_or_default()}</pre>
-                </section>
-            })}
         </div>
     }
 }
@@ -600,8 +1178,8 @@ fn CoreUpdateCard() -> impl IntoView {
                 </div>
 
                 <Show when=move || confirm_open.get()>
-                    <div class="rp-modal" style="position:fixed;inset:0;z-index:900;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;">
-                        <div class="rp-dialog rp-card" role="dialog" aria-modal="true" style="width:min(440px,92vw);padding:20px;display:flex;flex-direction:column;gap:12px;">
+                    <div class="rp-ios-sheet-backdrop" on:click=move |_| confirm_open.set(false)>
+                        <div class="rp-dialog rp-card rp-ios-sheet" role="dialog" aria-modal="true" style="width:min(440px,92vw);padding:20px;display:flex;flex-direction:column;gap:12px;" on:click=move |ev| ev.stop_propagation()>
                             <h3 class="rp-h3">{move || state.t("settings.coreUpdateConfirmTitle")}</h3>
                             <p class="rp-label">
                                 {move || {
@@ -613,7 +1191,7 @@ fn CoreUpdateCard() -> impl IntoView {
                                     )
                                 }}
                             </p>
-                            <div class="rp-cluster" style="justify-content:flex-end;">
+                            <div class="rp-ios-sheet-actions">
                                 <button type="button" class="rp-btn secondary sm" on:click=move |_| confirm_open.set(false)>
                                     {move || state.t("ui.cancel")}
                                 </button>

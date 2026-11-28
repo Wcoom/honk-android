@@ -145,9 +145,7 @@ impl Values {
                 config.experimental.native_api.record_logs,
                 config.experimental.native_api.record_dns_log,
             ],
-            modes: [if std::env::var_os("HONK_RECORD_ALWAYS").is_some()
-                || (!cfg!(test) && !std::path::Path::new("/var/lib").is_dir())
-            {
+            modes: [if std::env::var_os("HONK_RECORD_ALWAYS").is_some() {
                 RecorderMode::On
             } else {
                 RecorderMode::Auto

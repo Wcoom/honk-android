@@ -51,10 +51,16 @@ pub struct HonkNativeClient {
 
 impl HonkNativeClient {
     pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> ApiResult<Self> {
-        let http = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .map_err(|e| format!("build http client failed: {e}"))?;
+        static SHARED_HTTP: std::sync::OnceLock<Result<Client, String>> = std::sync::OnceLock::new();
+        let http = SHARED_HTTP
+            .get_or_init(|| {
+                Client::builder()
+                    .timeout(Duration::from_secs(15))
+                    .pool_idle_timeout(Duration::from_secs(30))
+                    .build()
+                    .map_err(|e| format!("build http client failed: {e}"))
+            })
+            .clone()?;
         Ok(Self {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
@@ -109,7 +115,7 @@ impl HonkNativeClient {
     }
 
     pub async fn runtime(&self) -> ApiResult<Value> {
-        self.get_json("/api/v1/runtime").await
+        self.get_json("/api/v1/runtime?detail=full").await
     }
 
     pub async fn runtime_memory(&self) -> ApiResult<Value> {
@@ -131,11 +137,15 @@ impl HonkNativeClient {
         self.get_json("/api/v1/groups").await
     }
 
+    pub async fn group_detail(&self, group_id: &str) -> ApiResult<Value> {
+        self.get_json(&format!("/api/v1/groups/{group_id}")).await
+    }
+
     pub async fn select_group_member(&self, group_id: &str, member: &str) -> ApiResult<Value> {
         self.send_json(
             reqwest::Method::PUT,
             &format!("/api/v1/groups/{group_id}/selection"),
-            Some(serde_json::json!({ "member": member, "selected": member })),
+            Some(serde_json::json!({ "member_id": member, "network": "both" })),
         )
         .await
     }
@@ -143,14 +153,43 @@ impl HonkNativeClient {
     pub async fn clear_group_selection(&self, group_id: &str) -> ApiResult<Value> {
         self.send_json(
             reqwest::Method::DELETE,
-            &format!("/api/v1/groups/{group_id}/selection"),
+            &format!("/api/v1/groups/{group_id}/selection?network=both"),
             None,
         )
         .await
     }
 
+    pub async fn probe_group(&self, group_id: &str) -> ApiResult<Value> {
+        let key = format!(
+            "box-probe-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(1)
+        );
+        let payload = serde_json::json!({
+            "target": { "type": "group", "group_id": group_id, "members": "leaves" },
+            "kind": "http",
+            "transport": ["tcp"],
+            "ip_version": "any",
+            "warmth": "warm",
+        });
+        let resp = self
+            .auth(self.http.post(self.url("/api/v1/probes")))
+            .header("Idempotency-Key", key)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("POST /api/v1/probes failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("POST /api/v1/probes HTTP {}", resp.status()));
+        }
+        let text = resp.text().await.unwrap_or_default();
+        serde_json::from_str(&text).or(Ok(Value::Null))
+    }
+
     pub async fn nodes(&self) -> ApiResult<Value> {
-        self.get_json("/api/v1/nodes").await
+        self.get_json("/api/v1/nodes?limit=200").await
     }
 
     pub async fn probe_nodes(&self, payload: Value) -> ApiResult<Value> {
@@ -159,24 +198,36 @@ impl HonkNativeClient {
     }
 
     pub async fn providers(&self) -> ApiResult<Value> {
-        self.get_json("/api/v1/providers").await
+        self.get_json("/api/v1/providers?limit=200").await
     }
 
     pub async fn refresh_provider(&self, id: &str) -> ApiResult<Value> {
-        self.send_json(
-            reqwest::Method::POST,
-            &format!("/api/v1/providers/{id}/refresh"),
-            None,
-        )
-        .await
+        let key = format!(
+            "box-prov-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(1)
+        );
+        let resp = self
+            .auth(self.http.post(self.url(&format!("/api/v1/providers/{id}/refresh"))))
+            .header("Idempotency-Key", key)
+            .send()
+            .await
+            .map_err(|e| format!("POST /api/v1/providers/{id}/refresh failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("POST /api/v1/providers/{id}/refresh HTTP {}", resp.status()));
+        }
+        let text = resp.text().await.unwrap_or_default();
+        serde_json::from_str(&text).or(Ok(Value::Null))
     }
 
     pub async fn connections(&self) -> ApiResult<Value> {
-        self.get_json("/api/v1/connections").await
+        self.get_json("/api/v1/connections?detail=full").await
     }
 
     pub async fn close_all_connections(&self) -> ApiResult<Value> {
-        self.send_json(reqwest::Method::DELETE, "/api/v1/connections", None)
+        self.send_json(reqwest::Method::DELETE, "/api/v1/connections?all=true", None)
             .await
     }
 
@@ -194,14 +245,50 @@ impl HonkNativeClient {
     }
 
     pub async fn routing_trace(&self, req: &HonkRouteTraceRequest) -> ApiResult<Value> {
-        let body = serde_json::to_value(req).map_err(|e| e.to_string())?;
+        let mut input = serde_json::Map::new();
+        let net = req
+            .protocol
+            .as_deref()
+            .unwrap_or("tcp")
+            .to_ascii_lowercase();
+        input.insert("network".into(), serde_json::json!(net));
+        input.insert(
+            "dst_port".into(),
+            serde_json::json!(req.dst_port.unwrap_or(443)),
+        );
+        if let Some(d) = req.domain.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            input.insert("domain".into(), serde_json::json!(d));
+        }
+        if let Some(ip) = req.dst_ip.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            input.insert("dst_ip".into(), serde_json::json!(ip));
+        }
+        if let Some(p) = req.process_name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            input.insert("pname".into(), serde_json::json!(p));
+        }
+        let body = serde_json::json!({ "input": Value::Object(input) });
         self.send_json(reqwest::Method::POST, "/api/v1/routing/trace", Some(body))
             .await
     }
 
     pub async fn reload(&self) -> ApiResult<Value> {
-        self.send_json(reqwest::Method::POST, "/api/v1/operations/reload", None)
+        let key = format!(
+            "box-reload-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(1)
+        );
+        let resp = self
+            .auth(self.http.post(self.url("/api/v1/operations/reload")))
+            .header("Idempotency-Key", key)
+            .send()
             .await
+            .map_err(|e| format!("POST /api/v1/operations/reload failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("POST /api/v1/operations/reload HTTP {}", resp.status()));
+        }
+        let text = resp.text().await.unwrap_or_default();
+        serde_json::from_str(&text).or(Ok(Value::Null))
     }
 
     pub async fn check_core_update(&self, refresh: bool) -> ApiResult<Value> {

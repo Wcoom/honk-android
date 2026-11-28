@@ -5,6 +5,7 @@ use doona_common::palettes::PALETTES;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::liquid_bar::LiquidHubBar;
 use crate::pages;
 use crate::state::{AppState, AuthGate, HUBS, page_title_key, use_app_state};
 use crate::ui::{AboutModal, SearchModal, ToastViewport, icons};
@@ -163,20 +164,24 @@ fn LoginScreen(mode: String, setup_required: bool, rejected: bool) -> impl IntoV
 fn MainShell() -> impl IntoView {
     let state = use_app_state();
     let reloading = RwSignal::new(false);
+    let reload_confirm_open = RwSignal::new(false);
 
-    let on_reload = move |_| {
+    let run_reload = move || {
+        reload_confirm_open.set(false);
         reloading.set(true);
         let api = state.client();
         spawn_local(async move {
             match api.start_reload().await {
-                Ok(_) => {
-                    state.toast("positive", state.t("ov.succeeded"), None);
-                    state.refresh_all();
+                Ok(op) => {
+                    state.poll_operation(op.operation_id, state.t("ov.succeeded"));
                 }
                 Err(e) => state.toast("negative", state.t("ov.failed"), Some(e)),
             }
             reloading.set(false);
         });
+    };
+    let on_reload = move |_| {
+        reload_confirm_open.set(true);
     };
 
     view! {
@@ -343,41 +348,72 @@ fn MainShell() -> impl IntoView {
                         </div>
                     })}
 
-                    {move || match state.route.get().as_str() {
-                        "overview" => view! { <pages::overview::OverviewPage /> }.into_any(),
-                        "connections" => view! { <pages::traffic::ConnectionsPage /> }.into_any(),
-                        "flows" => view! { <pages::traffic::FlowsPage /> }.into_any(),
-                        "dns" => view! { <pages::traffic::DnsPage /> }.into_any(),
-                        "logs" => view! { <pages::traffic::LogsPage /> }.into_any(),
-                        "events" => view! { <pages::traffic::EventsPage /> }.into_any(),
-                        "policies" => view! { <pages::routing::PoliciesPage /> }.into_any(),
-                        "nodes" => view! { <pages::routing::NodesPage /> }.into_any(),
-                        "rules" => view! { <pages::routing::RulesPage /> }.into_any(),
-                        "config" => view! { <pages::settings::ConfigPage /> }.into_any(),
-                        "settings" => view! { <pages::settings::SettingsPage /> }.into_any(),
-                        _ => view! { <pages::activity::ActivityPage /> }.into_any(),
+                    {move || {
+                        let current = state.route.get();
+                        let dir = state.nav_dir.get_untracked().css_attr();
+                        let parity = (state.nav_seq.get_untracked() % 2).to_string();
+                        let body = match current.as_str() {
+                            "overview" => view! { <pages::overview::OverviewPage /> }.into_any(),
+                            "connections" => view! { <pages::traffic::ConnectionsPage /> }.into_any(),
+                            "flows" => view! { <pages::traffic::FlowsPage /> }.into_any(),
+                            "dns" => view! { <pages::traffic::DnsPage /> }.into_any(),
+                            "logs" => view! { <pages::traffic::LogsPage /> }.into_any(),
+                            "events" => view! { <pages::traffic::EventsPage /> }.into_any(),
+                            "policies" => view! { <pages::routing::PoliciesPage /> }.into_any(),
+                            "nodes" => view! { <pages::routing::NodesPage /> }.into_any(),
+                            "rules" => view! { <pages::routing::RulesPage /> }.into_any(),
+                            "config" => view! { <pages::settings::ConfigPage /> }.into_any(),
+                            "settings" => view! { <pages::settings::SettingsPage /> }.into_any(),
+                            _ => view! { <pages::activity::ActivityPage /> }.into_any(),
+                        };
+                        view! {
+                            <div class="rp-route-stage" data-nav-dir=dir data-nav-parity=parity>
+                                {body}
+                            </div>
+                        }
                     }}
                 </div>
             </main>
 
-            <nav class="rp-hubbar" aria-label=move || state.t("shell.hubs")>
-                {HUBS.iter().map(|hub| {
-                    let first = hub.pages[0];
-                    let href = format!("#{first}");
-                    view! {
-                        <a
-                            href=href
-                            aria-current=move || {
-                                let cur = state.route.get();
-                                hub.pages.contains(&cur.as_str()).then_some("page")
-                            }
-                        >
-                            <span class="rp-hubbar-pill">{icons::hub_icon(hub.id)}</span>
-                            <span>{move || state.t(hub.title_key)}</span>
-                        </a>
-                    }
-                }).collect_view()}
-            </nav>
+            <LiquidHubBar />
+
+            <Show when=move || reload_confirm_open.get()>
+                <div
+                    class="rp-ios-sheet-backdrop"
+                    on:click=move |_| reload_confirm_open.set(false)
+                >
+                    <div
+                        class="rp-dialog rp-card rp-ios-sheet"
+                        role="dialog"
+                        aria-modal="true"
+                        on:click=move |ev| ev.stop_propagation()
+                    >
+                        <h2 class="rp-h3">{move || state.t("ov.reload")}</h2>
+                        <p class="rp-note">{move || match state.lang.get() {
+                            Lang::En => "Hot-reload the active core configuration? Existing connections stay intact when possible.",
+                            Lang::ZhTw => "確定要熱重載目前生效的核心設定嗎？既有連線將盡可能保持不斷開。",
+                            Lang::ZhCn => "确定要热重载当前生效的核心配置吗？现有连接将尽可能保持不中断。",
+                        }}</p>
+                        <div class="rp-ios-sheet-actions">
+                            <button
+                                type="button"
+                                class="rp-btn secondary"
+                                on:click=move |_| reload_confirm_open.set(false)
+                            >
+                                {move || state.t("ui.close")}
+                            </button>
+                            <button
+                                type="button"
+                                class="rp-btn accent"
+                                disabled=move || reloading.get()
+                                on:click=move |_| run_reload()
+                            >
+                                {move || state.t("ov.reload")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </Show>
         </div>
     }
 }

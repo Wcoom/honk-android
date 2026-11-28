@@ -13,8 +13,8 @@ android {
         applicationId = "com.boxproxy.honk"
         minSdk = 29
         targetSdk = 35
-        versionCode = 216
-        versionName = "26.11.28.v1.1.0"
+        versionCode = 217
+        versionName = "26.11.28.v1.2.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")

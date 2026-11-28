@@ -85,6 +85,27 @@ object RustBridge {
         fd: Int,
         scopeMaskJson: ByteArray,
     ): ByteArray
+
+    @JvmStatic
+    external fun nativeLiquidGlassShadersJson(): String
+
+    @JvmStatic
+    external fun nativeLiquidTabCreate(tabsCount: Int, initialIndex: Int): Long
+
+    @JvmStatic
+    external fun nativeLiquidTabDestroy(handle: Long)
+
+    @JvmStatic
+    external fun nativeLiquidTabEvent(handle: Long, kind: Int, a: Float, b: Float): Int
+
+    @JvmStatic
+    external fun nativeLiquidTabStep(
+        handle: Long,
+        dtSecs: Float,
+        barWidthPx: Float,
+        density: Float,
+        outBuf: FloatArray,
+    ): Boolean
 }
 
 /**

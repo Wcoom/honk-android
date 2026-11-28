@@ -692,7 +692,7 @@ impl SupervisorState {
         mut commands: mpsc::Receiver<SupervisorCommand>,
         merge_tx: mpsc::Sender<ControlCommand>,
     ) {
-        let mut ticks = tokio::time::interval(Duration::from_secs(1));
+        let mut ticks = tokio::time::interval(Duration::from_secs(15));
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             self.start_pending(MAX_ACTIVE_FETCHES);

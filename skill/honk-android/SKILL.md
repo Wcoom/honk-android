@@ -19,8 +19,8 @@ This skill enables an AI agent to end-to-end deploy, configure, migrate, verify,
 ## Bundle Layout (Relative to Repo / Release Root)
 
 - `bin/honk-android-arm64` — Static `aarch64-unknown-linux-musl` `honk-core` binary built with `ebpf,rprx,clash-api,native-ui,jemalloc` (includes embedded Doona UI `c7f29e3`, dedicated leaf cgroup `/sys/fs/cgroup/honk` memory telemetry, `/api/v1/x-honk/core/update` self-updater, ARM64 `kprobe`/`kretprobe` UDP receive trace, full `BPF_PROG_QUERY` datapath hook verification, RFC 1035 case-insensitive DNS validation, and Android UDP bootstrap retry + fallback resolver).
-- `bin/boxctl-android-arm64` — Static `aarch64-unknown-linux-musl` `boxctl` supporting `honk` core, `ebpf` mode, `--store db`, `HONK_RECORD_ALWAYS=1`, dedicated `/honk` cgroup isolation, and `com.boxproxy.honk` home resolution.
-- `apk/BoxProxy-honk-arm64.apk` — Coexisting pure-Rust MVI BoxProxy ARM64 APK (`v216 / 26.11.28.v1.1.0`, `package="com.boxproxy.honk"`, label `BoxProxy Honk`, tile `Box Honk`, built-in `Honk` updater under `工具 -> 更新核心`, boot script `/data/adb/service.d/boxproxy-honk.sh`, Home `WebUI` -> `http://127.0.0.1:9527/ui/`).
+- `bin/boxctl-android-arm64` — Static `aarch64-unknown-linux-musl` `boxctl` supporting `honk` core, `ebpf` mode, `--store db`, on-demand `RecorderMode::Auto` battery-friendly telemetry, dedicated `/honk` cgroup isolation, and `com.boxproxy.honk` home resolution.
+- `apk/BoxProxy-honk-arm64.apk` — Coexisting pure-Rust MVI + Liquid Glass BoxProxy ARM64 APK (`v217 / 26.11.28.v1.2.0`, `package="com.boxproxy.honk"`, label `BoxProxy Honk`, tile `Box Honk`, built-in `Honk` updater under `工具 -> 更新核心`, boot script `/data/adb/service.d/boxproxy-honk.sh`, Home `WebUI` -> `http://127.0.0.1:9527/ui/`).
 - `config/config.example.dae` — Sanitized Android-ready configuration template.
 - `rust/xtask/` (`honk-xtask`) — Pure-Rust build & idempotent ADB deployment CLI (`cargo run --manifest-path rust/xtask/Cargo.toml -- deploy`, defaults to `--pkg com.boxproxy.honk`).
 - `skill/honk-android/references/troubleshooting.md` — Diagnostic cookbook and Android GKI 6.6 runtime reference.

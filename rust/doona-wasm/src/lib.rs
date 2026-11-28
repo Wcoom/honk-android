@@ -1,5 +1,6 @@
 //! Pure Rust WASM (Leptos CSR) frontend for Doona (`/ui/`).
 
+pub mod liquid_bar;
 pub mod mode_dae;
 pub mod pages;
 pub mod shell;

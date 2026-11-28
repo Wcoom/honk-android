@@ -66,7 +66,6 @@ pub(super) fn core_env(config: &Config) -> Vec<(&'static str, String)> {
         "v2fly" => vec![("V2RAY_LOCATION_ASSET", asset_dir)],
         "honk" => vec![
             ("HONK_RUN_DIR", run_dir),
-            ("HONK_RECORD_ALWAYS", "1".to_string()),
             ("SSL_CERT_DIR", "/apex/com.android.conscrypt/cacerts".to_string()),
         ],
         _ => Vec::new(),

@@ -14,8 +14,9 @@ pub fn SparkSvg(
 ) -> impl IntoView {
     let (line, area) = sparkline_paths(&values, width, height);
     let view_box = format!("0 0 {width} {height}");
+    let style_str = format!("width:100%;height:{height:.0}px;display:block;");
     view! {
-        <svg class="rp-spark" viewBox=view_box preserveAspectRatio="none" aria-hidden="true" style="width:100%;height:32px;display:block;">
+        <svg class="rp-spark" viewBox=view_box preserveAspectRatio="none" aria-hidden="true" style=style_str>
             <path d=area fill=color fill-opacity="0.16" stroke="none" />
             <path d=line fill="none" stroke=color stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
@@ -28,13 +29,15 @@ pub fn DualAreaSvg(
     secondary: Vec<f64>,
     color_a: &'static str,
     color_b: &'static str,
+    #[prop(default = 120.0)] height: f64,
 ) -> impl IntoView {
     let width = 480.0;
-    let height = 140.0;
     let (line_a, area_a) = sparkline_paths(&primary, width, height);
     let (line_b, area_b) = sparkline_paths(&secondary, width, height);
+    let view_box = format!("0 0 {width} {height}");
+    let style_str = format!("width:100%;height:{height:.0}px;display:block;");
     view! {
-        <svg viewBox="0 0 480 140" preserveAspectRatio="none" aria-hidden="true" style="width:100%;height:140px;display:block;">
+        <svg viewBox=view_box preserveAspectRatio="none" aria-hidden="true" style=style_str>
             <path d=area_a fill=color_a fill-opacity="0.18" stroke="none" />
             <path d=line_a fill="none" stroke=color_a stroke-width="2" stroke-linecap="round" />
             <path d=area_b fill=color_b fill-opacity="0.14" stroke="none" />
@@ -95,8 +98,8 @@ pub fn SearchModal() -> impl IntoView {
     view! {
         <Show when=move || state.search_open.get()>
             <div
-                class="rp-modal"
-                style="position:fixed;inset:0;z-index:900;background:rgba(0,0,0,0.45);display:flex;align-items:flex-start;justify-content:center;padding-top:12vh;"
+                class="rp-ios-sheet-backdrop"
+                style="align-items:flex-start;padding-top:12vh;"
                 on:click=move |_| state.search_open.set(false)
             >
                 <div
@@ -170,8 +173,7 @@ pub fn AboutModal() -> impl IntoView {
     view! {
         <Show when=move || state.about_open.get()>
             <div
-                class="rp-modal"
-                style="position:fixed;inset:0;z-index:900;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;"
+                class="rp-ios-sheet-backdrop"
                 on:click=move |_| state.about_open.set(false)
             >
                 <div
@@ -280,5 +282,115 @@ pub mod icons {
                 <circle cx="12" cy="12" r="9" /><path d="M12 3v18a9 9 0 0 0 0-18z" fill="currentColor" />
             </svg>
         }
+    }
+}
+
+/// Triggers a real browser file download using a `Blob` URL and temporary `<a download>`.
+pub fn download_text_file(filename: &str, content: &str, mime: &str) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        let Some(window) = web_sys::window() else {
+            return false;
+        };
+        let Some(doc) = window.document() else {
+            return false;
+        };
+        let parts = js_sys::Array::new();
+        parts.push(&wasm_bindgen::JsValue::from_str(content));
+        let bag = web_sys::BlobPropertyBag::new();
+        bag.set_type(mime);
+        let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&parts, &bag) else {
+            return false;
+        };
+        let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+            return false;
+        };
+        let Ok(el) = doc.create_element("a") else {
+            let _ = web_sys::Url::revoke_object_url(&url);
+            return false;
+        };
+        if let Ok(anchor) = el.dyn_into::<web_sys::HtmlAnchorElement>() {
+            anchor.set_href(&url);
+            anchor.set_download(filename);
+            anchor.click();
+        }
+        let _ = web_sys::Url::revoke_object_url(&url);
+        true
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (filename, content, mime);
+        false
+    }
+}
+
+/// Copies UTF-8 text to the browser clipboard when supported.
+pub fn copy_to_clipboard(text: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            let clip = window.navigator().clipboard();
+            let _ = clip.write_text(text);
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = text;
+    }
+}
+
+/// Reusable iOS-style confirmation sheet preventing accidental destructive actions.
+#[component]
+pub fn ConfirmSheet(
+    open: RwSignal<bool>,
+    title: Signal<String>,
+    message: Signal<String>,
+    confirm_label: Signal<String>,
+    #[prop(default = true)] destructive: bool,
+    on_confirm: Callback<()>,
+) -> impl IntoView {
+    let state = use_app_state();
+    let btn_cls = if destructive {
+        "rp-btn negative"
+    } else {
+        "rp-btn accent"
+    };
+    view! {
+        <Show when=move || open.get()>
+            <div
+                class="rp-ios-sheet-backdrop"
+                on:click=move |_| open.set(false)
+            >
+                <div
+                    class="rp-dialog rp-card rp-ios-sheet"
+                    role="dialog"
+                    aria-modal="true"
+                    on:click=move |ev| ev.stop_propagation()
+                >
+                    <h2 class="rp-h3">{move || title.get()}</h2>
+                    <p class="rp-note">{move || message.get()}</p>
+                    <div class="rp-ios-sheet-actions">
+                        <button
+                            type="button"
+                            class="rp-btn secondary"
+                            on:click=move |_| open.set(false)
+                        >
+                            {move || state.t("ui.cancel")}
+                        </button>
+                        <button
+                            type="button"
+                            class=btn_cls
+                            on:click=move |_| {
+                                open.set(false);
+                                on_confirm.run(());
+                            }
+                        >
+                            {move || confirm_label.get()}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </Show>
     }
 }

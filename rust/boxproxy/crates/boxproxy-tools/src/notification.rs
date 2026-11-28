@@ -31,7 +31,9 @@ pub fn render_notification_template(template: &str, v: &NotificationRenderVars) 
         .replace("{upload}", &v.upload)
         .replace("{download}", &v.download)
         .replace("{totalUpload}", &v.total_upload)
+        .replace("{total_upload}", &v.total_upload)
         .replace("{totalDownload}", &v.total_download)
+        .replace("{total_download}", &v.total_download)
 }
 
 #[cfg(test)]

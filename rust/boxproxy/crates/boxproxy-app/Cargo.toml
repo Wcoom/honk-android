@@ -12,5 +12,6 @@ boxproxy-engine = { path = "../boxproxy-engine" }
 boxproxy-schema = { path = "../boxproxy-schema" }
 boxproxy-store = { path = "../boxproxy-store" }
 boxproxy-tools = { path = "../boxproxy-tools" }
+liquid-glass = { path = "../../../liquid-glass" }
 jni = "0.21"
 serde_json.workspace = true

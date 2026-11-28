@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 console_error_panic_hook = "0.1"
 doona-common = { path = "../doona-common" }
 doona-logic = { path = "../doona-logic" }
+liquid-glass = { path = "../liquid-glass" }
 leptos = { version = "0.8", features = ["csr"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 serde = { version = "1", features = ["derive"] }
@@ -20,6 +21,7 @@ wasm-bindgen = "=0.2.130"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
     "Document",
+    "DomRect",
     "Element",
     "Event",
     "HtmlElement",
@@ -30,6 +32,8 @@ web-sys = { version = "0.3", features = [
     "Location",
     "MediaQueryList",
     "Navigator",
+    "Performance",
+    "PointerEvent",
     "Storage",
     "Window",
 ] }

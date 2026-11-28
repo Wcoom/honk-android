@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 console_error_panic_hook = "0.1"
 doona-common = { path = "../doona-common" }
 doona-logic = { path = "../doona-logic" }
+liquid-glass = { path = "../liquid-glass" }
 js-sys = "0.3"
 leptos = { version = "0.8", features = ["csr"] }
 serde = { version = "1", features = ["derive"] }
@@ -25,9 +26,12 @@ web-sys = { version = "0.3", features = [
     "BlobPropertyBag",
     "Clipboard",
     "Document",
+    "DomRect",
     "Element",
     "Event",
     "EventTarget",
+    "File",
+    "FileList",
     "HashChangeEvent",
     "Headers",
     "History",
@@ -40,6 +44,8 @@ web-sys = { version = "0.3", features = [
     "Location",
     "MediaQueryList",
     "Navigator",
+    "Performance",
+    "PointerEvent",
     "ReadableStream",
     "ReadableStreamDefaultReader",
     "Request",

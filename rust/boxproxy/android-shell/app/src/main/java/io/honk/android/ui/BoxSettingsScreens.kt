@@ -152,20 +152,20 @@ private val ACCENT_PRESETS: List<Pair<String, Int>> = listOf(
 
 private val CONFIG_OVERRIDE_KEYS: List<Pair<String, String>> = listOf(
     "override_enabled" to "启用核心自动覆写总开关",
-    "override_tproxy_port" to "覆写 TProxy 端口",
-    "override_redir_port" to "覆写 Redirect 端口",
-    "override_mixed_port" to "覆写 Mixed 端口",
+    "override_tproxy" to "覆写 TProxy 透明代理",
+    "override_redir" to "覆写 Redirect 端口",
+    "mixed_port" to "覆写 Mixed 混合端口",
     "override_tun" to "覆写 TUN 接口与路由表",
     "override_dns" to "覆写 DNS 监听与上游",
-    "override_fake_ip" to "覆写 Fake-IP 网段",
+    "fake_ip_range" to "覆写 Fake-IP 网段",
     "override_external_controller" to "覆写 External Controller API",
     "override_secret" to "覆写 API Secret",
     "override_external_ui" to "覆写本地 WebUI 路径",
     "override_ipv6" to "覆写 IPv6 配置",
-    "override_sniffer" to "覆写域名嗅探 Sniffer",
-    "override_geodata" to "覆写 GeoIP/GeoSite 路径",
-    "override_proxy_providers" to "合并订阅 Providers 清单",
-    "override_scripts" to "合并 JS 覆写脚本清单",
+    "sniffer_enable" to "覆写域名嗅探 Sniffer",
+    "geodata_mode" to "覆写 GeoIP/GeoSite 模式",
+    "override_unified_delay" to "启用统一延迟测速 (Unified Delay)",
+    "scripts_enabled" to "合并覆写脚本清单",
 )
 
 private fun updateAppSetting(appSettings: JSONObject, mutate: JSONObject.() -> Unit) {
@@ -218,13 +218,22 @@ fun SettingsTabScreen(
     var showTileTargetDialog by remember { mutableStateOf(false) }
     var showPanelEntryDialog by remember { mutableStateOf(false) }
 
+    val lang = LocalAppLang.current
     Column(modifier = Modifier.fillMaxSize().background(p.background)) {
-        MiuixTabHeader(title = "设置", collapsed = collapsed)
+        MiuixTabHeader(
+            title = uiTr(lang, "设置", "設定", "Settings", "Настройки"),
+            collapsed = collapsed,
+        )
 
         LazyColumn(
             state = listState,
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = 8.dp,
+                bottom = LocalLiquidDockBottomPadding.current,
+            ),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
             // Card 1: 基础代理配置 · 其他代理配置
@@ -235,6 +244,7 @@ fun SettingsTabScreen(
                         icon = { ToolRowGlyph("sliders", p.textPrimary) },
                         onClick = { navigateTo("proxy_config") },
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "其他代理配置",
                         icon = { ToolRowGlyph("server", p.textPrimary) },
@@ -253,11 +263,13 @@ fun SettingsTabScreen(
                         isDropdown = true,
                         onClick = { showLangDialog = true },
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "主题设置",
                         icon = { ToolRowGlyph("brush", p.textPrimary) },
                         onClick = { navigateTo("theme_settings") },
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "备份与恢复",
                         icon = { ToolRowGlyph("layers", p.textPrimary) },
@@ -277,6 +289,7 @@ fun SettingsTabScreen(
                             dispatchAsync("set_boot_auto_start") { put("enabled", enabled) }
                         },
                     )
+                    MiuixInsetDivider()
                     MiuixSwitchRow(
                         title = "镜像下载",
                         icon = { ToolRowGlyph("download", p.textPrimary) },
@@ -290,6 +303,7 @@ fun SettingsTabScreen(
                         },
                         onRowClick = { showMirrorDialog = true },
                     )
+                    MiuixInsetDivider()
                     MiuixSwitchRow(
                         title = "GitHub Token",
                         icon = { ToolRowGlyph("lock", p.textPrimary) },
@@ -316,6 +330,7 @@ fun SettingsTabScreen(
                         isDropdown = true,
                         onClick = { showTileTargetDialog = true },
                     )
+                    MiuixInsetDivider()
                     MiuixSwitchRow(
                         title = "通知",
                         icon = { ToolRowGlyph("bell", p.textPrimary) },
@@ -326,6 +341,7 @@ fun SettingsTabScreen(
                         },
                         onRowClick = { navigateTo("notification_settings") },
                     )
+                    MiuixInsetDivider()
                     MiuixSwitchRow(
                         title = "显示底栏面板入口",
                         icon = { ToolRowGlyph("link", p.textPrimary) },
@@ -334,6 +350,7 @@ fun SettingsTabScreen(
                             updateAppSetting(appSettings) { put("show_proxy_selector_bottom_bar_item", enabled) }
                         },
                     )
+                    MiuixInsetDivider()
                     MiuixNavRow(
                         title = "默认面板页面",
                         icon = { ToolRowGlyph("grid", p.textPrimary) },
@@ -341,6 +358,7 @@ fun SettingsTabScreen(
                         isDropdown = true,
                         onClick = { showPanelEntryDialog = true },
                     )
+                    MiuixInsetDivider()
                     MiuixSwitchRow(
                         title = "启动时打开面板",
                         icon = { ToolRowGlyph("book", p.textPrimary) },
@@ -465,71 +483,52 @@ private fun MiuixBackupRestoreSheet(
         .put("user_scripts", userScriptsScope)
         .put("core_binaries", coreBinariesScope)
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable(onClick = onDismiss)
-                .padding(horizontal = 16.dp, vertical = 22.dp),
-            contentAlignment = Alignment.BottomCenter,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(p.card)
-                    .clickable(enabled = false) {}
-                    .padding(horizontal = 22.dp, vertical = 22.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+    IosBottomSheetDialog(onDismiss = onDismiss) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = "备份与恢复",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = p.textPrimary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = "备份或恢复应用数据，恢复会覆盖当前数据",
+                fontSize = 15.sp,
+                color = p.textSecondary,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                ScopeCheckRow("应用设置与 box.db 数据库", appSettingsScope) { appSettingsScope = it }
+                ScopeCheckRow("运行配置与规则数据", runtimeDataScope) { runtimeDataScope = it }
+                ScopeCheckRow("用户 Shell / JS 脚本", userScriptsScope) { userScriptsScope = it }
+                ScopeCheckRow("核心二进制文件", coreBinariesScope) { coreBinariesScope = it }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Text(
-                    text = "备份与恢复",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = p.textPrimary,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    text = "备份或恢复应用数据，恢复会覆盖当前数据",
-                    fontSize = 15.sp,
-                    color = p.textSecondary,
-                )
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    ScopeCheckRow("应用设置与 box.db 数据库", appSettingsScope) { appSettingsScope = it }
-                    ScopeCheckRow("运行配置与规则数据", runtimeDataScope) { runtimeDataScope = it }
-                    ScopeCheckRow("用户 Shell / JS 脚本", userScriptsScope) { userScriptsScope = it }
-                    ScopeCheckRow("核心二进制文件", coreBinariesScope) { coreBinariesScope = it }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                        .iosPressScale { onRestore(buildScope()) }
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(p.background),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(50.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(p.background)
-                            .clickable { onRestore(buildScope()) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("恢复", fontSize = 17.sp, fontWeight = FontWeight.Medium, color = p.accent)
-                    }
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(50.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(p.background)
-                            .clickable { onBackup(buildScope()) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("备份", fontSize = 17.sp, fontWeight = FontWeight.Medium, color = p.accent)
-                    }
+                    Text("恢复", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = p.accent)
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                        .iosPressScale { onBackup(buildScope()) }
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(p.accentSoft),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("备份", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = p.accent)
                 }
             }
         }
@@ -1027,7 +1026,7 @@ fun ThemeSettingsScreen(state: JSONObject) {
     val accentColorInt = appSettings.optInt("accent_color", 0xFF455A8A.toInt())
     val enableBlur = appSettings.optBoolean("enable_blur", true)
     val topBarStyle = appSettings.strOr("top_bar_style", "Classic")
-    val bottomBarStyle = appSettings.strOr("bottom_bar_style", "Classic")
+    val bottomBarStyle = appSettings.strOr("bottom_bar_style", "LiquidGlass")
     val swipeBack = appSettings.optBoolean("enable_swipe_back", true)
     val predictiveBack = appSettings.optBoolean("enable_predictive_back_animation", true)
     val followEdge = appSettings.optBoolean("predictive_back_animation_follow_edge", true)
@@ -1070,6 +1069,7 @@ fun ThemeSettingsScreen(state: JSONObject) {
                         isDropdown = true,
                         onClick = { showUiModePicker = true },
                     )
+                    MiuixInsetDivider(startIndent = 20.dp)
                     MiuixSettingTextRow(
                         title = "主题模式",
                         trailingText = when (themeMode) {
@@ -1098,6 +1098,7 @@ fun ThemeSettingsScreen(state: JSONObject) {
                     MiuixSettingSwitchRow("使用 Monet 取色", monetEnabled) { v ->
                         updateAppSetting(appSettings) { put("miuix_monet_enabled", v) }
                     }
+                    MiuixInsetDivider(startIndent = 20.dp)
                     MiuixSettingTextRow(
                         title = "色彩风格",
                         trailingText = PALETTE_STYLE_OPTIONS.firstOrNull { it.first == paletteStyle }?.second ?: paletteStyle,
@@ -1105,12 +1106,14 @@ fun ThemeSettingsScreen(state: JSONObject) {
                         swatchColors = swatchDots,
                         onClick = { showPalettePicker = true },
                     )
+                    MiuixInsetDivider(startIndent = 20.dp)
                     MiuixSettingTextRow(
                         title = "色彩标准",
                         trailingText = COLOR_SPEC_OPTIONS.firstOrNull { it.first == colorSpec }?.second ?: colorSpec,
                         isDropdown = true,
                         onClick = { showSpecPicker = true },
                     )
+                    MiuixInsetDivider(startIndent = 20.dp)
                     MiuixSettingTextRow(
                         title = "强调色",
                         trailingText = accentName,
@@ -1127,12 +1130,14 @@ fun ThemeSettingsScreen(state: JSONObject) {
                     MiuixSettingSwitchRow("模糊效果", enableBlur) { v ->
                         updateAppSetting(appSettings) { put("enable_blur", v) }
                     }
+                    MiuixInsetDivider(startIndent = 20.dp)
                     MiuixSettingTextRow(
                         title = "顶栏样式",
                         trailingText = TOP_BAR_OPTIONS.firstOrNull { it.first == topBarStyle }?.second ?: "经典",
                         isDropdown = true,
                         onClick = { showTopBarPicker = true },
                     )
+                    MiuixInsetDivider(startIndent = 20.dp)
                     MiuixSettingTextRow(
                         title = "底栏样式",
                         trailingText = BOTTOM_BAR_OPTIONS.firstOrNull { it.first == bottomBarStyle }?.second ?: "经典",
@@ -1148,9 +1153,11 @@ fun ThemeSettingsScreen(state: JSONObject) {
                     MiuixSettingSwitchRow("横滑返回", swipeBack) { v ->
                         updateAppSetting(appSettings) { put("enable_swipe_back", v) }
                     }
+                    MiuixInsetDivider(startIndent = 20.dp)
                     MiuixSettingSwitchRow("预测性返回动画", predictiveBack) { v ->
                         updateAppSetting(appSettings) { put("enable_predictive_back_animation", v) }
                     }
+                    MiuixInsetDivider(startIndent = 20.dp)
                     MiuixSettingSwitchRow("动画方向跟随滑动边缘", followEdge) { v ->
                         updateAppSetting(appSettings) { put("predictive_back_animation_follow_edge", v) }
                     }

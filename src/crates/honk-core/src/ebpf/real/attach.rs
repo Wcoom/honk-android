@@ -265,6 +265,10 @@ impl RealEbpfBackend {
         p.load().map_err(|error| {
             anyhow::anyhow!("required socket identity program {create_name} load: {error}")
         })?;
+        // Note: aya uses `BPF_LINK_CREATE` on Linux >= 5.7, which is inherently
+        // multi-attach inside `cgroup_bpf_link_attach` and rejects non-zero
+        // `link_create.flags` (including `BPF_F_ALLOW_MULTI`) with `EINVAL`.
+        // Always pass `CgroupAttachMode::Single` (`flags = 0`) here.
         let link_id = p
             .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
             .map_err(|error| {
@@ -482,7 +486,18 @@ fn upgrade_android_cgroup_legacy_hooks(cgroup_file: &std::fs::File) {
     ];
 
     for attach_type in hooks {
-        let mut prog_ids = [0u32; 16];
+        let mut probe_attr: bpf_attr = unsafe { core::mem::zeroed() };
+        probe_attr.query.__bindgen_anon_1.target_fd = cgroup_fd;
+        probe_attr.query.attach_type = attach_type;
+        if unsafe { super::syscall::bpf_syscall(BPF_PROG_QUERY as _, &mut probe_attr) }.is_err() {
+            continue;
+        }
+        let initial_cnt = unsafe { probe_attr.query.__bindgen_anon_2.prog_cnt } as usize;
+        let initial_flags = unsafe { probe_attr.query.attach_flags };
+        if initial_cnt == 0 || (initial_flags & BPF_F_ALLOW_MULTI) != 0 {
+            continue;
+        }
+        let mut prog_ids = vec![0u32; initial_cnt + 8];
         let mut attr: bpf_attr = unsafe { core::mem::zeroed() };
         attr.query.__bindgen_anon_1.target_fd = cgroup_fd;
         attr.query.attach_type = attach_type;
@@ -520,7 +535,13 @@ fn upgrade_android_cgroup_legacy_hooks(cgroup_file: &std::fs::File) {
             aattr.__bindgen_anon_5.attach_type = attach_type;
             aattr.__bindgen_anon_5.attach_flags = BPF_F_ALLOW_MULTI;
             if let Err(errno) = unsafe { super::syscall::bpf_syscall(BPF_PROG_ATTACH as _, &mut aattr) } {
-                warn!(attach_type, prog_id = *id, errno, "failed to upgrade legacy cgroup hook to multi");
+                warn!(attach_type, prog_id = *id, errno, "failed to upgrade legacy cgroup hook to multi; restoring original attachment");
+                let mut rattr: bpf_attr = unsafe { core::mem::zeroed() };
+                rattr.__bindgen_anon_5.__bindgen_anon_1.target_fd = cgroup_fd;
+                rattr.__bindgen_anon_5.attach_bpf_fd = prog_fd.as_raw_fd() as u32;
+                rattr.__bindgen_anon_5.attach_type = attach_type;
+                rattr.__bindgen_anon_5.attach_flags = flags;
+                let _ = unsafe { super::syscall::bpf_syscall(BPF_PROG_ATTACH as _, &mut rattr) };
             } else {
                 info!(attach_type, prog_id = *id, "upgraded Android legacy cgroup hook to BPF_F_ALLOW_MULTI");
             }

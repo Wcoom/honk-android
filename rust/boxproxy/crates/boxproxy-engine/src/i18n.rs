@@ -46,15 +46,15 @@ pub fn tr(locale: &str, key: &str) -> &'static str {
         ("ru", "btn_restart") => "Перезапуск",
         (_, "btn_restart") => "Restart",
 
-        ("zh-CN", "btn_open_panel") => "面板",
-        ("zh-TW", "btn_open_panel") => "面板",
-        ("ru", "btn_open_panel") => "Панель",
-        (_, "btn_open_panel") => "Panel",
+        ("zh-CN", "btn_open_panel" | "btn_panel") => "面板",
+        ("zh-TW", "btn_open_panel" | "btn_panel") => "面板",
+        ("ru", "btn_open_panel" | "btn_panel") => "Панель",
+        (_, "btn_open_panel" | "btn_panel") => "Panel",
 
-        ("zh-CN", "btn_open_web_ui") => "WebUI",
-        ("zh-TW", "btn_open_web_ui") => "WebUI",
-        ("ru", "btn_open_web_ui") => "WebUI",
-        (_, "btn_open_web_ui") => "WebUI",
+        ("zh-CN", "btn_open_web_ui" | "btn_web_ui") => "WebUI",
+        ("zh-TW", "btn_open_web_ui" | "btn_web_ui") => "WebUI",
+        ("ru", "btn_open_web_ui" | "btn_web_ui") => "WebUI",
+        (_, "btn_open_web_ui" | "btn_web_ui") => "WebUI",
 
         _ => "Box Honk",
     }

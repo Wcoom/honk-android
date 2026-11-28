@@ -1,6 +1,8 @@
 //! Reactive global application state, polling loop, auth/discovery, and hash router for Doona Full (`/ui/`).
 
+use std::cell::Cell;
 use std::collections::VecDeque;
+use std::rc::Rc;
 
 use doona_common::client::ApiClient;
 use doona_common::i18n::{self, Lang};
@@ -12,6 +14,7 @@ use doona_common::model::{
 use doona_common::palettes::split_palette;
 use doona_common::palettes::DEFAULT_PALETTE;
 use leptos::prelude::*;
+use liquid_glass::NavDirection;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
@@ -82,12 +85,19 @@ pub fn page_title_key(route: &str) -> &'static str {
 pub fn parse_hash(hash: &str) -> (String, String) {
     let stripped = hash.trim_start_matches('#').trim_start_matches('/');
     let (path, query) = stripped.split_once('?').unwrap_or((stripped, ""));
-    let route = if ROUTES.contains(&path) {
-        path.to_string()
-    } else {
-        "activity".to_string()
-    };
-    (route, query.to_string())
+    match path {
+        "system" => ("overview".to_string(), query.to_string()),
+        "subscriptions" => {
+            let q = if query.is_empty() {
+                "tab=subscriptions".to_string()
+            } else {
+                format!("tab=subscriptions&{query}")
+            };
+            ("nodes".to_string(), q)
+        }
+        p if ROUTES.contains(&p) => (p.to_string(), query.to_string()),
+        _ => ("activity".to_string(), query.to_string()),
+    }
 }
 
 pub fn query_param(query: &str, key: &str) -> Option<String> {
@@ -126,6 +136,8 @@ pub struct AppState {
     pub scheme: RwSignal<String>,
     pub palette: RwSignal<String>,
     pub route: RwSignal<String>,
+    pub nav_dir: RwSignal<NavDirection>,
+    pub nav_seq: RwSignal<u64>,
     pub query: RwSignal<String>,
     pub api_base: RwSignal<String>,
     pub api_token: RwSignal<Option<String>>,
@@ -184,6 +196,8 @@ impl AppState {
             scheme: RwSignal::new(init_scheme),
             palette: RwSignal::new(init_palette),
             route: RwSignal::new(init_route),
+            nav_dir: RwSignal::new(NavDirection::CrossFade),
+            nav_seq: RwSignal::new(0),
             query: RwSignal::new(init_query),
             api_base: RwSignal::new(init_base),
             api_token: RwSignal::new(init_token),
@@ -269,6 +283,11 @@ impl AppState {
     }
 
     pub fn navigate(&self, target_route: &str, query: Option<&str>) {
+        let prev = self.route.get_untracked();
+        if prev != target_route {
+            self.nav_dir.set(compute_nav_direction(&prev, target_route));
+            self.nav_seq.update(|s| *s += 1);
+        }
         let hash = match query {
             Some(q) if !q.is_empty() => format!("#{target_route}?{q}"),
             _ => format!("#{target_route}"),
@@ -310,6 +329,86 @@ impl AppState {
 
     pub fn dismiss_toast(&self, id: u64) {
         self.toasts.update(|list| list.retain(|t| t.id != id));
+    }
+
+    /// Resolves a Catalog Group UUID or Node UUID into its human-readable display name.
+    pub fn resolve_catalog_name(&self, id: &str) -> Option<String> {
+        if let Some(g) = self.groups.get_untracked().iter().find(|g| g.id == id) {
+            return Some(g.name.clone());
+        }
+        if let Some(nl) = self.nodes.get_untracked()
+            && let Some(n) = nl.nodes.iter().find(|n| n.id == id)
+        {
+            return Some(n.name.clone());
+        }
+        None
+    }
+
+    /// Formats a `chain` of Catalog UUIDs (or names) into a human-readable `A → B → C` path,
+    /// falling back gracefully to `outbound` when `chain` is empty or unmapped.
+    pub fn format_chain(&self, chain: &[String], outbound: Option<&str>) -> String {
+        let groups = self.groups.get();
+        let nodes = self.nodes.get();
+        if !chain.is_empty() {
+            let mut labels: Vec<String> = Vec::with_capacity(chain.len());
+            for hop in chain {
+                if let Some(g) = groups.iter().find(|g| g.id == *hop) {
+                    labels.push(g.name.clone());
+                } else if let Some(ref nl) = nodes
+                    && let Some(n) = nl.nodes.iter().find(|n| n.id == *hop)
+                {
+                    labels.push(n.name.clone());
+                } else if hop.len() == 36 && hop.as_bytes().get(8) == Some(&b'-') {
+                    // Unresolved transient UUID: skip if outbound fallback exists, else shorten
+                    if outbound.is_none_or(str::is_empty) {
+                        labels.push(hop.chars().take(8).collect());
+                    }
+                } else if !hop.is_empty() {
+                    labels.push(hop.clone());
+                }
+            }
+            if !labels.is_empty() {
+                return labels.join(" → ");
+            }
+        }
+        outbound
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| "—".to_string())
+    }
+
+    /// Polls an accepted async Native API operation (`/api/v1/operations/{id}`) until completion,
+    /// then refreshes global state and surfaces final status feedback.
+    pub fn poll_operation(&self, op_id: String, success_msg: String) {
+        if op_id.trim().is_empty() {
+            self.refresh_all();
+            return;
+        }
+        let state = *self;
+        spawn_local(async move {
+            let api = state.client();
+            for _ in 0..45 {
+                sleep_ms(380).await;
+                match api.operation(&op_id).await {
+                    Ok(op) => match op.status.as_str() {
+                        "succeeded" | "completed" => {
+                            state.toast("positive", success_msg, None);
+                            state.refresh_all();
+                            return;
+                        }
+                        "failed" | "cancelled" | "canceled" => {
+                            let detail = op.error.map(|e| format!("{}: {}", e.code, e.message));
+                            state.toast("negative", state.t("ui.failed"), detail);
+                            state.refresh_all();
+                            return;
+                        }
+                        _ => {}
+                    },
+                    Err(_) => break,
+                }
+            }
+            state.refresh_all();
+        });
     }
 
     pub fn bootstrap(&self) {
@@ -383,6 +482,8 @@ impl AppState {
 
     pub async fn poll_telemetry_once(&self) {
         let api = self.client();
+        let cur_route = self.route.get_untracked();
+        let need_heavy = matches!(cur_route.as_str(), "activity" | "overview");
         if let Ok(rt) = api.runtime().await {
             let down = rt.download_rate();
             let up = rt.upload_rate();
@@ -395,25 +496,33 @@ impl AppState {
             self.runtime.set(Some(rt));
             self.global_error.set(None);
         }
-        if let Ok(mem) = api.runtime_memory().await {
+        if (need_heavy || self.memory.get_untracked().is_none())
+            && let Ok(mem) = api.runtime_memory().await
+        {
             let rss = mem.rss().or_else(|| mem.cgroup_current()).unwrap_or(0) as f64;
             push_ring(&self.rss_ring, rss);
             self.memory.set(Some(mem));
         }
-        if let Ok(dp) = api.datapath().await {
+        if (need_heavy || self.datapath.get_untracked().is_none())
+            && let Ok(dp) = api.datapath().await
+        {
             self.datapath.set(Some(dp));
         }
     }
 
     pub fn start_background_tasks(&self) {
         let state = *self;
-        // Hashchange listener
         if let Some(w) = web_sys::window() {
             let on_hash = Closure::wrap(Box::new(move || {
                 if let Some(win) = web_sys::window()
                     && let Ok(h) = win.location().hash()
                 {
                     let (r, q) = parse_hash(&h);
+                    let prev = state.route.get_untracked();
+                    if prev != r {
+                        state.nav_dir.set(compute_nav_direction(&prev, &r));
+                        state.nav_seq.update(|s| *s += 1);
+                    }
                     state.route.set(r);
                     state.query.set(q);
                 }
@@ -437,11 +546,22 @@ impl AppState {
             let _ = w.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
             on_key.forget();
 
-            // 2-second telemetry poll timer
+            // Battery-smart 2-second telemetry poll timer with `document.hidden()` pause + single-flight guard
+            let in_flight = Rc::new(Cell::new(false));
+            let in_flight_tick = in_flight.clone();
             let on_tick = Closure::wrap(Box::new(move || {
+                let hidden = web_sys::window()
+                    .and_then(|win| win.document())
+                    .is_some_and(|doc| doc.hidden());
+                if hidden || in_flight_tick.get() {
+                    return;
+                }
                 if state.auth_gate.get_untracked() == AuthGate::Ready {
+                    in_flight_tick.set(true);
+                    let flag = in_flight_tick.clone();
                     spawn_local(async move {
                         state.poll_telemetry_once().await;
+                        flag.set(false);
                     });
                 }
             }) as Box<dyn FnMut()>);
@@ -450,7 +570,66 @@ impl AppState {
                 2000,
             );
             on_tick.forget();
+
+            // Instant refresh upon returning from background / screen-off (`visibilitychange`)
+            if let Some(doc) = w.document() {
+                let in_flight_vis = in_flight;
+                let on_vis = Closure::wrap(Box::new(move || {
+                    let visible = web_sys::window()
+                        .and_then(|win| win.document())
+                        .is_some_and(|d| !d.hidden());
+                    if visible
+                        && !in_flight_vis.get()
+                        && state.auth_gate.get_untracked() == AuthGate::Ready
+                    {
+                        in_flight_vis.set(true);
+                        let flag = in_flight_vis.clone();
+                        spawn_local(async move {
+                            state.poll_telemetry_once().await;
+                            flag.set(false);
+                        });
+                    }
+                }) as Box<dyn FnMut()>);
+                let _ = doc.add_event_listener_with_callback(
+                    "visibilitychange",
+                    on_vis.as_ref().unchecked_ref(),
+                );
+                on_vis.forget();
+            }
         }
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn compute_nav_direction(from: &str, to: &str) -> NavDirection {
+    if from == to {
+        return NavDirection::CrossFade;
+    }
+    let locate = |r: &str| -> (usize, usize) {
+        for (hi, hub) in HUBS.iter().enumerate() {
+            if let Some(pi) = hub.pages.iter().position(|&p| p == r) {
+                return (hi, pi);
+            }
+        }
+        (0, 0)
+    };
+    let (fh, fp) = locate(from);
+    let (th, tp) = locate(to);
+    if fh != th {
+        if th > fh {
+            NavDirection::TabForward
+        } else {
+            NavDirection::TabBackward
+        }
+    } else if tp > fp {
+        NavDirection::Push
+    } else {
+        NavDirection::Pop
     }
 }
 
@@ -517,3 +696,18 @@ pub fn remove_storage(key: &str) {
 pub fn use_app_state() -> AppState {
     expect_context::<AppState>()
 }
+
+#[cfg(target_arch = "wasm32")]
+async fn sleep_ms(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(w) = web_sys::window() {
+            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+        } else {
+            let _ = resolve.call0(&wasm_bindgen::JsValue::NULL);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn sleep_ms(_ms: i32) {}

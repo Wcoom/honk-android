@@ -1,5 +1,5 @@
 diff --git a/crates/honk-config/src/config.rs b/crates/honk-config/src/config.rs
-index 8581046..f1beab9 100644
+index 8581046..517f94a 100644
 --- a/crates/honk-config/src/config.rs
 +++ b/crates/honk-config/src/config.rs
 @@ -203,7 +203,9 @@ impl GlobalConfig {
@@ -13,7 +13,7 @@ index 8581046..f1beab9 100644
          } else {
              self.so_mark_from_dae
          }
-@@ -281,9 +283,123 @@ fn interface_host_cidrs(iface: &str) -> Vec<String> {
+@@ -281,9 +283,218 @@ fn interface_host_cidrs(iface: &str) -> Vec<String> {
  }
  
  /// Interface owning the lowest-metric IPv4 default route.
@@ -35,12 +35,31 @@ index 8581046..f1beab9 100644
 +}
 +
 +/// Probe the outbound interface chosen by Android netd's policy routing tables:
-+///  1. Read `/proc/thread-self/net/fib_trie` for a per-interface policy table
-+///     `Id <1000 + ifindex>:` containing `/0 universe UNICAST` (netd's exact
-+///     table numbering convention: `ROUTE_TABLE_OFFSET_FROM_INDEX = 1000`);
-+///  2. Or connect a UDP socket (`223.5.5.5:53`, no wire traffic) to get the
-+///     chosen source IPv4 and match it via rtnetlink `RTM_GETADDR` or `getifaddrs`.
++///  1. Connect non-transmitting UDP sockets (`AF_INET` `223.5.5.5:53` and `AF_INET6`
++///     `[2400:3200::1]:53`) so the Linux kernel evaluates netd's active `ip rule`
++///     priorities; if IPv4 lands on a 464XLAT `v4-*` CLAT interface, prefer the
++///     underlying physical `AF_INET6` interface (`rmnet_data*` / `wlan*`).
++///  2. Fall back to `/proc/thread-self/net/fib_trie` per-interface policy tables
++///     (`Id <1000 + ifindex>:` containing `/0 universe UNICAST`), skipping IMS/tunnel
++///     pseudo-interfaces and supporting arbitrary `ifindex` values (`> 1000`).
 +pub fn default_route_interface_by_socket_probe() -> Option<String> {
++    let v4_iface = socket_probe_v4();
++    if let Some(ref name) = v4_iface
++        && !name.starts_with("v4-")
++    {
++        return v4_iface;
++    }
++    if let Some(v6_iface) = socket_probe_v6() {
++        return Some(v6_iface);
++    }
++    if let Some(v4) = v4_iface {
++        if let Some(phys) = v4.strip_prefix("v4-")
++            && nix::if_name_exists(phys)
++        {
++            return Some(phys.to_string());
++        }
++        return Some(v4);
++    }
 +    if let Ok(trie) = std::fs::read_to_string("/proc/thread-self/net/fib_trie")
 +        .or_else(|_| std::fs::read_to_string("/proc/net/fib_trie"))
 +        && let Some(ifindex) = parse_android_netd_default_ifindex(&trie)
@@ -48,6 +67,29 @@ index 8581046..f1beab9 100644
 +    {
 +        return Some(name);
 +    }
++    None
++}
++
++fn is_candidate_wan_iface(name: &str) -> bool {
++    !name.is_empty()
++        && name != "lo"
++        && name != "dummy0"
++        && !name.starts_with("dae")
++        && !name.starts_with("tun")
++        && !name.starts_with("ims")
++        && !name.starts_with("r_rmnet")
++}
++
++mod nix {
++    pub fn if_name_exists(name: &str) -> bool {
++        let Ok(cstr) = std::ffi::CString::new(name) else {
++            return false;
++        };
++        unsafe { libc::if_nametoindex(cstr.as_ptr()) != 0 }
++    }
++}
++
++fn socket_probe_v4() -> Option<String> {
 +    use std::net::UdpSocket;
 +    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
 +    sock.connect("223.5.5.5:53").ok()?;
@@ -77,7 +119,49 @@ index 8581046..f1beab9 100644
 +                    let name = std::ffi::CStr::from_ptr(ifa.ifa_name)
 +                        .to_string_lossy()
 +                        .into_owned();
-+                    if name != "lo" && !name.starts_with("dae") {
++                    if is_candidate_wan_iface(&name) {
++                        found = Some(name);
++                        break;
++                    }
++                }
++            }
++            cur = ifa.ifa_next;
++        }
++        libc::freeifaddrs(head);
++        found
++    }
++}
++
++fn socket_probe_v6() -> Option<String> {
++    use std::net::UdpSocket;
++    let sock = UdpSocket::bind("[::]:0").ok()?;
++    sock.connect("[2400:3200::1]:53").ok()?;
++    let local_ip = match sock.local_addr().ok()? {
++        std::net::SocketAddr::V6(v6) => *v6.ip(),
++        _ => return None,
++    };
++    if local_ip.is_unspecified() || local_ip.is_loopback() || local_ip.is_unicast_link_local() {
++        return None;
++    }
++    let target = local_ip.octets();
++    unsafe {
++        let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
++        if libc::getifaddrs(&mut head) != 0 {
++            return None;
++        }
++        let mut found: Option<String> = None;
++        let mut cur = head;
++        while !cur.is_null() {
++            let ifa = &*cur;
++            if !ifa.ifa_addr.is_null() && (*ifa.ifa_addr).sa_family as i32 == libc::AF_INET6 {
++                let a = (*(ifa.ifa_addr as *const libc::sockaddr_in6))
++                    .sin6_addr
++                    .s6_addr;
++                if a == target {
++                    let name = std::ffi::CStr::from_ptr(ifa.ifa_name)
++                        .to_string_lossy()
++                        .into_owned();
++                    if is_candidate_wan_iface(&name) && !name.starts_with("v4-") {
 +                        found = Some(name);
 +                        break;
 +                    }
@@ -95,6 +179,7 @@ index 8581046..f1beab9 100644
 +pub fn parse_android_netd_default_ifindex(trie: &str) -> Option<u32> {
 +    let mut current_table: Option<u32> = None;
 +    let mut prev_zero = false;
++    let mut fallback_ifindex: Option<u32> = None;
 +    for line in trie.lines() {
 +        let trimmed = line.trim();
 +        if let Some(rest) = trimmed.strip_prefix("Id ") {
@@ -108,18 +193,28 @@ index 8581046..f1beab9 100644
 +            continue;
 +        }
 +        if let Some(table_id) = current_table
-+            && (1001..2000).contains(&table_id)
++            && table_id > 1000
 +        {
 +            if trimmed == "|-- 0.0.0.0" {
 +                prev_zero = true;
 +            } else if prev_zero && trimmed.starts_with("/0 universe UNICAST") {
-+                return Some(table_id - 1000);
++                let idx = table_id - 1000;
++                if let Some(name) = ifindex_to_name(idx) {
++                    if !name.starts_with("v4-") {
++                        return Some(idx);
++                    }
++                    fallback_ifindex.get_or_insert(idx);
++                } else if fallback_ifindex.is_none() {
++                    // Unit-test / offline trie without live kernel interfaces
++                    fallback_ifindex = Some(idx);
++                }
++                prev_zero = false;
 +            } else {
 +                prev_zero = false;
 +            }
 +        }
 +    }
-+    None
++    fallback_ifindex
 +}
 +
 +fn ifindex_to_name(ifindex: u32) -> Option<String> {
@@ -131,10 +226,10 @@ index 8581046..f1beab9 100644
 +    let name = unsafe { std::ffi::CStr::from_ptr(ptr) }
 +        .to_string_lossy()
 +        .into_owned();
-+    if name.is_empty() || name == "lo" || name == "dummy0" || name.starts_with("dae") {
-+        None
-+    } else {
++    if is_candidate_wan_iface(&name) {
 +        Some(name)
++    } else {
++        None
 +    }
  }
  
@@ -195,6 +290,70 @@ index dc3bee2..872fb20 100644
          ] {
              let config = parse_dae_config_with_detailed_diagnostics(
                  &format!("global {{ so_mark_from_dae: {value} }}"),
+diff --git a/crates/honk-core/build.rs b/crates/honk-core/build.rs
+index 64e41d3..e20349b 100644
+--- a/crates/honk-core/build.rs
++++ b/crates/honk-core/build.rs
+@@ -220,7 +220,7 @@ struct Compressed {
+ fn encode(file: &std::path::Path) -> anyhow::Result<Option<Compressed>> {
+     use std::io::Write;
+ 
+-    const TEXT: &[&str] = &["css", "html", "js", "json", "svg", "txt", "webmanifest"];
++    const TEXT: &[&str] = &["css", "html", "js", "json", "svg", "txt", "wasm", "webmanifest"];
+     if !file
+         .extension()
+         .and_then(|extension| extension.to_str())
+diff --git a/crates/honk-core/src/clash_api.rs b/crates/honk-core/src/clash_api.rs
+index 8012558..2800629 100644
+--- a/crates/honk-core/src/clash_api.rs
++++ b/crates/honk-core/src/clash_api.rs
+@@ -1470,7 +1470,17 @@ fn ensure_traffic_sampler(s: &Arc<ClashState>) {
+         loop {
+             tick.tick().await;
+             if tx.receiver_count() == 0 {
+-                continue;
++                state
++                    .stream_samplers
++                    .traffic_started
++                    .store(false, std::sync::atomic::Ordering::Release);
++                if tx.receiver_count() == 0 {
++                    break;
++                }
++                state
++                    .stream_samplers
++                    .traffic_started
++                    .store(true, std::sync::atomic::Ordering::Release);
+             }
+             let current = traffic_totals(&state).await;
+             let frame = Arc::new(Bytes::from(
+@@ -1517,14 +1527,25 @@ fn ensure_memory_sampler(s: &Arc<ClashState>) {
+     {
+         return;
+     }
+-    let tx = s.stream_samplers.memory.clone();
++    let state = Arc::clone(s);
++    let tx = state.stream_samplers.memory.clone();
+     tokio::spawn(async move {
+         let mut tick = tokio::time::interval(Duration::from_secs(1));
+         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+         loop {
+             tick.tick().await;
+             if tx.receiver_count() == 0 {
+-                continue;
++                state
++                    .stream_samplers
++                    .memory_started
++                    .store(false, std::sync::atomic::Ordering::Release);
++                if tx.receiver_count() == 0 {
++                    break;
++                }
++                state
++                    .stream_samplers
++                    .memory_started
++                    .store(true, std::sync::atomic::Ordering::Release);
+             }
+             let frame = Arc::new(Bytes::from(
+                 serde_json::json!({
 diff --git a/crates/honk-core/src/control/bootstrap.rs b/crates/honk-core/src/control/bootstrap.rs
 index 55c041a..a6d13d4 100644
 --- a/crates/honk-core/src/control/bootstrap.rs
@@ -246,6 +405,29 @@ index 1c7370d..7e75cbe 100644
          self.alive_set.set_direct_check_addr(direct_target);
          // No new generation-owned work may start on the old snapshot. Its
          // DNS runtime still owns it until old leases and transports retire;
+diff --git a/crates/honk-core/src/control/runtime.rs b/crates/honk-core/src/control/runtime.rs
+index 2876902..a14c953 100644
+--- a/crates/honk-core/src/control/runtime.rs
++++ b/crates/honk-core/src/control/runtime.rs
+@@ -129,8 +129,18 @@ pub(super) async fn run_tcp_admission_scaler(
+     let mut target = target_cell.load(std::sync::atomic::Ordering::Acquire);
+     let mut interval = tokio::time::interval(TCP_ADMISSION_SCALE_INTERVAL);
+     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
++    let mut idle_ticks: u64 = 0;
+     loop {
+         interval.tick().await;
++        let active_permits = target.saturating_sub(semaphore.available_permits());
++        if active_permits == 0 {
++            idle_ticks = idle_ticks.wrapping_add(1);
++            if !idle_ticks.is_multiple_of(10) {
++                continue;
++            }
++        } else {
++            idle_ticks = 0;
++        }
+         if let Some(open_fds) = open_fd_count() {
+             resize_tcp_admission(&semaphore, &mut target, budget, &stats, open_fds);
+             target_cell.store(target, std::sync::atomic::Ordering::Release);
 diff --git a/crates/honk-core/src/control/tests/bond_binding.rs b/crates/honk-core/src/control/tests/bond_binding.rs
 index 3ccea79..08ebba4 100644
 --- a/crates/honk-core/src/control/tests/bond_binding.rs
@@ -553,7 +735,7 @@ index 79cbd25..c3df191 100644
      /// Atomically publish a complete compiled routing plan into an inactive slot.
      /// Implementations stage every generation-owned fact map and program before
 diff --git a/crates/honk-core/src/ebpf/real/attach.rs b/crates/honk-core/src/ebpf/real/attach.rs
-index a3038f8..8fb1d2b 100644
+index a3038f8..a0d4cd0 100644
 --- a/crates/honk-core/src/ebpf/real/attach.rs
 +++ b/crates/honk-core/src/ebpf/real/attach.rs
 @@ -34,9 +34,24 @@ impl RealEbpfBackend {
@@ -591,7 +773,14 @@ index a3038f8..8fb1d2b 100644
          let (create_name, cg_addr_names) = match pname_mode {
              process_name::PnameCaptureMode::Argv0 => (
                  "tproxy_wan_cg_sock_create",
-@@ -252,7 +268,7 @@ impl RealEbpfBackend {
+@@ -249,10 +265,14 @@ impl RealEbpfBackend {
+         p.load().map_err(|error| {
+             anyhow::anyhow!("required socket identity program {create_name} load: {error}")
+         })?;
++        // Note: aya uses `BPF_LINK_CREATE` on Linux >= 5.7, which is inherently
++        // multi-attach inside `cgroup_bpf_link_attach` and rejects non-zero
++        // `link_create.flags` (including `BPF_F_ALLOW_MULTI`) with `EINVAL`.
++        // Always pass `CgroupAttachMode::Single` (`flags = 0`) here.
          let link_id = p
              .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
              .map_err(|error| {
@@ -600,7 +789,7 @@ index a3038f8..8fb1d2b 100644
              })?;
          cgroup_sock_links.push(p.take_link(link_id)?);
          for name in &cg_addr_names {
-@@ -268,7 +284,7 @@ impl RealEbpfBackend {
+@@ -268,7 +288,7 @@ impl RealEbpfBackend {
              let link_id = p
                  .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
                  .map_err(|error| {
@@ -609,7 +798,7 @@ index a3038f8..8fb1d2b 100644
                  })?;
              cgroup_sock_addr_links.push(p.take_link(link_id)?);
          }
-@@ -411,6 +427,16 @@ impl RealEbpfBackend {
+@@ -411,6 +431,16 @@ impl RealEbpfBackend {
          }
          let name = std::ffi::CString::new(iface)
              .map_err(|e| anyhow::anyhow!("interface name '{}': {}", iface, e))?;
@@ -626,7 +815,7 @@ index a3038f8..8fb1d2b 100644
          let id = p
              .attach(name.as_c_str(), dir)
              .map_err(|e| anyhow::anyhow!("attach '{}': {} (raw={:?})", prog, e, e))?;
-@@ -429,3 +455,75 @@ impl RealEbpfBackend {
+@@ -429,3 +459,92 @@ impl RealEbpfBackend {
          Self::attach_tc_at(bpf, prog, iface, aya::programs::TcAttachType::Ingress)
      }
  }
@@ -657,7 +846,18 @@ index a3038f8..8fb1d2b 100644
 +    ];
 +
 +    for attach_type in hooks {
-+        let mut prog_ids = [0u32; 16];
++        let mut probe_attr: bpf_attr = unsafe { core::mem::zeroed() };
++        probe_attr.query.__bindgen_anon_1.target_fd = cgroup_fd;
++        probe_attr.query.attach_type = attach_type;
++        if unsafe { super::syscall::bpf_syscall(BPF_PROG_QUERY as _, &mut probe_attr) }.is_err() {
++            continue;
++        }
++        let initial_cnt = unsafe { probe_attr.query.__bindgen_anon_2.prog_cnt } as usize;
++        let initial_flags = unsafe { probe_attr.query.attach_flags };
++        if initial_cnt == 0 || (initial_flags & BPF_F_ALLOW_MULTI) != 0 {
++            continue;
++        }
++        let mut prog_ids = vec![0u32; initial_cnt + 8];
 +        let mut attr: bpf_attr = unsafe { core::mem::zeroed() };
 +        attr.query.__bindgen_anon_1.target_fd = cgroup_fd;
 +        attr.query.attach_type = attach_type;
@@ -695,7 +895,13 @@ index a3038f8..8fb1d2b 100644
 +            aattr.__bindgen_anon_5.attach_type = attach_type;
 +            aattr.__bindgen_anon_5.attach_flags = BPF_F_ALLOW_MULTI;
 +            if let Err(errno) = unsafe { super::syscall::bpf_syscall(BPF_PROG_ATTACH as _, &mut aattr) } {
-+                warn!(attach_type, prog_id = *id, errno, "failed to upgrade legacy cgroup hook to multi");
++                warn!(attach_type, prog_id = *id, errno, "failed to upgrade legacy cgroup hook to multi; restoring original attachment");
++                let mut rattr: bpf_attr = unsafe { core::mem::zeroed() };
++                rattr.__bindgen_anon_5.__bindgen_anon_1.target_fd = cgroup_fd;
++                rattr.__bindgen_anon_5.attach_bpf_fd = prog_fd.as_raw_fd() as u32;
++                rattr.__bindgen_anon_5.attach_type = attach_type;
++                rattr.__bindgen_anon_5.attach_flags = flags;
++                let _ = unsafe { super::syscall::bpf_syscall(BPF_PROG_ATTACH as _, &mut rattr) };
 +            } else {
 +                info!(attach_type, prog_id = *id, "upgraded Android legacy cgroup hook to BPF_F_ALLOW_MULTI");
 +            }
@@ -2522,7 +2728,7 @@ index 8a0ac31..fc64a11 100644
      disable_transparent_huge_pages()?;
  
 diff --git a/crates/honk-core/src/native_api.rs b/crates/honk-core/src/native_api.rs
-index 3f4907f..4833b33 100644
+index 3f4907f..4b86233 100644
 --- a/crates/honk-core/src/native_api.rs
 +++ b/crates/honk-core/src/native_api.rs
 @@ -6,6 +6,7 @@ pub(crate) mod catalog;
@@ -2593,6 +2799,67 @@ index 3f4907f..4833b33 100644
              ui: ui::load(&settings.ui).await?,
              settings,
              instance_id: observation.core.instance_id.clone(),
+@@ -320,6 +360,9 @@ async fn ui_fallback(
+     Extension(id): Extension<RequestId>,
+     request: Request,
+ ) -> Response {
++    if matches!(request.uri().path(), "/lite" | "/lite/") {
++        return axum::response::Redirect::temporary("/ui/lite/").into_response();
++    }
+     if matches!(request.uri().path(), "/" | "/ui") || request.uri().path().starts_with("/ui/") {
+         return state
+             .ui
+@@ -521,6 +564,11 @@ fn connection(state: &NativeState, entry: &ConnectionEntry, full: bool) -> Conne
+         .native_flow_id
+         .as_deref()
+         .and_then(|id| state.observation.core.flows.connection_evidence(id));
++    let fallback_started = || {
++        SystemTime::now()
++            .checked_sub(entry.start_time.elapsed())
++            .map(timestamp)
++    };
+     Connection {
+         id: entry.id.clone(),
+         flow_id: entry.native_flow_id.clone(),
+@@ -529,18 +577,23 @@ fn connection(state: &NativeState, entry: &ConnectionEntry, full: bool) -> Conne
+         src: full.then(|| entry.source.clone()),
+         dst: full.then(|| entry.destination.clone()),
+         domain: full.then(|| entry.domain.clone()),
+-        outbound: entry.routed_outbound.clone(),
++        outbound: entry
++            .routed_outbound
++            .clone()
++            .or_else(|| (!entry.proxy.is_empty()).then(|| entry.proxy.clone())),
+         chain: evidence
+             .as_ref()
+             .map(|value| value.chain.clone())
+-            .unwrap_or_default(),
++            .filter(|c| !c.is_empty())
++            .unwrap_or_else(|| entry.chains.clone()),
+         chain_source: evidence
+             .as_ref()
+-            .map_or("unknown", |value| value.chain_source),
++            .map_or("evaluation", |value| value.chain_source),
+         rule_id: evidence.as_ref().and_then(|value| value.rule_id.clone()),
+         rule_expression: evidence
+             .as_ref()
+-            .and_then(|value| value.rule_expression.clone()),
++            .and_then(|value| value.rule_expression.clone())
++            .or_else(|| (!entry.rule.is_empty()).then(|| entry.rule.clone())),
+         rule_source: evidence
+             .as_ref()
+             .map_or(crate::observe::vocab::RuleSource::Unknown, |value| {
+@@ -548,7 +601,9 @@ fn connection(state: &NativeState, entry: &ConnectionEntry, full: bool) -> Conne
+             }),
+         ingress: None,
+         domain_source: evidence.as_ref().and_then(|value| value.domain_source),
+-        started_at: evidence.map(|value| value.started_at),
++        started_at: evidence
++            .map(|value| value.started_at)
++            .or_else(fallback_started),
+         observed_by: "userspace",
+         upload_bytes: Some(entry.upload.load(Ordering::Relaxed).to_string()),
+         download_bytes: Some(entry.download.load(Ordering::Relaxed).to_string()),
 diff --git a/crates/honk-core/src/native_api/config.rs b/crates/honk-core/src/native_api/config.rs
 index ecff621..4673c58 100644
 --- a/crates/honk-core/src/native_api/config.rs
@@ -4364,17 +4631,15 @@ index 38f2181..9636b07 100644
              "/api/v1/datapath",
              resource(
 diff --git a/crates/honk-core/src/native_api/settings.rs b/crates/honk-core/src/native_api/settings.rs
-index 1dddb6a..f323fea 100644
+index 1dddb6a..38f1e90 100644
 --- a/crates/honk-core/src/native_api/settings.rs
 +++ b/crates/honk-core/src/native_api/settings.rs
-@@ -145,7 +145,13 @@ impl Values {
+@@ -145,7 +145,11 @@ impl Values {
                  config.experimental.native_api.record_logs,
                  config.experimental.native_api.record_dns_log,
              ],
 -            modes: [RecorderMode::Auto; 3],
-+            modes: [if std::env::var_os("HONK_RECORD_ALWAYS").is_some()
-+                || (!cfg!(test) && !std::path::Path::new("/var/lib").is_dir())
-+            {
++            modes: [if std::env::var_os("HONK_RECORD_ALWAYS").is_some() {
 +                RecorderMode::On
 +            } else {
 +                RecorderMode::Auto
@@ -4382,7 +4647,7 @@ index 1dddb6a..f323fea 100644
              attached: false,
              demand: Demand::NONE,
          }
-@@ -604,7 +610,7 @@ pub(super) async fn patch(
+@@ -604,7 +608,7 @@ pub(super) async fn patch(
          .as_object_mut()
          .and_then(|object| object.remove("geodata"))
          .map(|patch| {
@@ -4432,7 +4697,7 @@ index 7ee2138..f42e986 100644
      anyhow!("configuration db: {error}")
  }
 diff --git a/crates/honk-core/src/native_api/telemetry.rs b/crates/honk-core/src/native_api/telemetry.rs
-index c6d1cde..c6a176f 100644
+index c6d1cde..7442f56 100644
 --- a/crates/honk-core/src/native_api/telemetry.rs
 +++ b/crates/honk-core/src/native_api/telemetry.rs
 @@ -443,6 +443,64 @@ fn cgroup_directory(membership: &str, mountinfo: &str) -> Option<PathBuf> {
@@ -4500,15 +4765,73 @@ index c6d1cde..c6a176f 100644
  fn cgroup_events(contents: &str) -> [Option<u64>; 3] {
      let mut result = [None; 3];
      for (index, name) in ["high", "oom", "oom_kill"].into_iter().enumerate() {
-@@ -544,32 +602,55 @@ async fn read_memory(proc_self: &Path) -> MemoryReading {
+@@ -530,46 +588,107 @@ fn ebpf_bytes(proc_self: &Path) -> Option<u64> {
+ }
+ 
+ async fn read_memory(proc_self: &Path) -> MemoryReading {
++    static CACHED_MOUNTS: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
++    static CACHED_EBPF: parking_lot::Mutex<Option<(Instant, Option<(u64, SystemTime)>)>> =
++        parking_lot::Mutex::new(None);
++
++    let is_real_self = proc_self == Path::new("/proc/self");
+     let fds = proc_self.to_path_buf();
+-    let (status, membership, mounts, ebpf) = tokio::join!(
++    let cached_ebpf = if is_real_self {
++        let guard = CACHED_EBPF.lock();
++        guard
++            .filter(|(ts, _)| ts.elapsed() < Duration::from_secs(10))
++            .map(|(_, val)| val)
++    } else {
++        None
++    };
++
++    let (status, membership, mounts_fresh, ebpf_fresh) = tokio::join!(
+         bounded_read(proc_self.join("status"), 64 * 1024),
+         bounded_read(proc_self.join("cgroup"), 64 * 1024),
+-        bounded_read(proc_self.join("mountinfo"), 256 * 1024),
+-        tokio::task::spawn_blocking(
+-            move || ebpf_bytes(&fds).map(|bytes| (bytes, SystemTime::now()))
+-        ),
++        async {
++            if is_real_self && CACHED_MOUNTS.get().is_some() {
++                None
++            } else {
++                bounded_read(proc_self.join("mountinfo"), 256 * 1024).await
++            }
++        },
++        async {
++            if let Some(val) = cached_ebpf {
++                Ok(val)
++            } else {
++                tokio::task::spawn_blocking(move || {
++                    ebpf_bytes(&fds).map(|bytes| (bytes, SystemTime::now()))
++                })
++                .await
++            }
++        },
+     );
++
++    let mounts_opt: Option<&str> = if is_real_self {
++        CACHED_MOUNTS.get_or_init(|| mounts_fresh).as_deref()
++    } else {
++        mounts_fresh.as_deref()
++    };
++    let ebpf_val = ebpf_fresh.ok().flatten();
++    if is_real_self && cached_ebpf.is_none() {
++        *CACHED_EBPF.lock() = Some((Instant::now(), ebpf_val));
++    }
++
+     let mut reading = MemoryReading {
+         rss: status.as_deref().and_then(rss),
          cgroup: None,
-         ebpf: ebpf.ok().flatten(),
+-        ebpf: ebpf.ok().flatten(),
++        ebpf: ebpf_val,
      };
 -    let Some(directory) = membership
 -        .as_deref()
 -        .zip(mounts.as_deref())
 -        .and_then(|(membership, mounts)| cgroup_directory(membership, mounts))
-+    let (Some(membership_text), Some(mounts_text)) = (membership.as_deref(), mounts.as_deref())
++    let (Some(membership_text), Some(mounts_text)) = (membership.as_deref(), mounts_opt)
      else {
          return reading;
      };
@@ -4673,6 +4996,116 @@ index 4b242ed..46f6499 100644
                  "runtime_mode": {"available":false},
              },
              "config_validate": {"available":config.running(),"modes":["syntax","full"],"max_bytes":crate::configuration::MAX_SOURCE_BYTES,"max_sources":crate::configuration::MAX_SOURCES},
+diff --git a/crates/honk-core/src/native_api/ui.rs b/crates/honk-core/src/native_api/ui.rs
+index e89f78b..a937796 100644
+--- a/crates/honk-core/src/native_api/ui.rs
++++ b/crates/honk-core/src/native_api/ui.rs
+@@ -21,7 +21,10 @@ const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+ pub(super) enum Ui {
+     Directory(Box<(ServeDir, ServeFile)>),
+     #[cfg(feature = "native-ui")]
+-    Embedded(&'static [(&'static str, EmbeddedAsset)]),
++    Embedded {
++        primary: &'static [(&'static str, EmbeddedAsset)],
++        lite: Option<&'static [(&'static str, EmbeddedAsset)]>,
++    },
+ }
+ 
+ pub(super) async fn load(path: &str) -> anyhow::Result<Option<Ui>> {
+@@ -35,11 +38,17 @@ pub(super) async fn load(path: &str) -> anyhow::Result<Option<Ui>> {
+                 include!(concat!(env!("OUT_DIR"), "/native_ui_assets.rs"));
+             static LITE: &[(&str, EmbeddedAsset)] =
+                 include!(concat!(env!("OUT_DIR"), "/native_ui_lite_assets.rs"));
+-            return Ok(Some(Ui::Embedded(if path == "embedded-lite" {
+-                LITE
++            return Ok(Some(if path == "embedded-lite" {
++                Ui::Embedded {
++                    primary: LITE,
++                    lite: None,
++                }
+             } else {
+-                STANDARD
+-            })));
++                Ui::Embedded {
++                    primary: STANDARD,
++                    lite: Some(LITE),
++                }
++            }));
+         }
+         #[cfg(not(feature = "native-ui"))]
+         anyhow::bail!("{path} native UI requires the native-ui feature");
+@@ -81,7 +90,8 @@ impl Ui {
+         let hashed = request
+             .uri()
+             .path()
+-            .strip_prefix("/ui/")
++            .strip_prefix("/ui/lite/")
++            .or_else(|| request.uri().path().strip_prefix("/ui/"))
+             .is_some_and(is_hashed_asset);
+         let mut response = self.respond(request).await;
+         let cache = cache_control(hashed, response.status());
+@@ -130,11 +140,32 @@ impl Ui {
+         let (files, index) = match self {
+             Self::Directory(directory) => (&directory.0, &directory.1),
+             #[cfg(feature = "native-ui")]
+-            Self::Embedded(files) => {
++            Self::Embedded { primary, lite } => {
++                if let Some(lite_files) = lite {
++                    if decoded == "lite" {
++                        return Redirect::temporary("/ui/lite/").into_response();
++                    }
++                    if let Some(lite_rel) = decoded.strip_prefix("lite/") {
++                        let lite_nav = !lite_rel.contains('.')
++                            && !matches!(
++                                lite_rel.split('/').next(),
++                                Some("assets" | "fonts" | "icons")
++                            );
++                        return embedded_response(
++                            lite_files,
++                            lite_rel,
++                            lite_nav,
++                            "/ui/lite/",
++                            request.method() == Method::HEAD,
++                            negotiate(request.headers()),
++                        );
++                    }
++                }
+                 return embedded_response(
+-                    files,
++                    primary,
+                     &decoded,
+                     navigation,
++                    "/ui/",
+                     request.method() == Method::HEAD,
+                     negotiate(request.headers()),
+                 );
+@@ -313,6 +344,7 @@ fn embedded_response(
+     files: &'static [(&'static str, EmbeddedAsset)],
+     path: &str,
+     navigation: bool,
++    fallback_root: &'static str,
+     head: bool,
+     encoding: Encoding,
+ ) -> Response {
+@@ -321,8 +353,8 @@ fn embedded_response(
+     let path = if path.is_empty() { "index.html" } else { path };
+     let Ok(index) = files.binary_search_by(|(name, _)| name.cmp(&path)) else {
+         return if navigation {
+-            // The hash router's relative assets and service worker require /ui/.
+-            Redirect::temporary("/ui/").into_response()
++            // The hash router's relative assets and service worker require trailing slash root.
++            Redirect::temporary(fallback_root).into_response()
+         } else {
+             StatusCode::NOT_FOUND.into_response()
+         };
+@@ -334,6 +366,7 @@ fn embedded_response(
+         "css" => "text/css",
+         "svg" => "image/svg+xml",
+         "json" => "application/json",
++        "wasm" => "application/wasm",
+         "webmanifest" => "application/manifest+json",
+         "png" => "image/png",
+         "webp" => "image/webp",
 diff --git a/crates/honk-core/src/netlink.rs b/crates/honk-core/src/netlink.rs
 index cae0955..b36a979 100644
 --- a/crates/honk-core/src/netlink.rs
@@ -5023,6 +5456,19 @@ index cae0955..b36a979 100644
  }
  
  #[cfg(test)]
+diff --git a/crates/honk-core/src/subscription/supervisor.rs b/crates/honk-core/src/subscription/supervisor.rs
+index d64f1f3..1ca851c 100644
+--- a/crates/honk-core/src/subscription/supervisor.rs
++++ b/crates/honk-core/src/subscription/supervisor.rs
+@@ -692,7 +692,7 @@ impl SupervisorState {
+         mut commands: mpsc::Receiver<SupervisorCommand>,
+         merge_tx: mpsc::Sender<ControlCommand>,
+     ) {
+-        let mut ticks = tokio::time::interval(Duration::from_secs(1));
++        let mut ticks = tokio::time::interval(Duration::from_secs(15));
+         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+         loop {
+             self.start_pending(MAX_ACTIVE_FETCHES);
 diff --git a/crates/honk-core/tests/native_api_test/security.rs b/crates/honk-core/tests/native_api_test/security.rs
 index cc441af..5e741aa 100644
 --- a/crates/honk-core/tests/native_api_test/security.rs
@@ -7325,7 +7771,7 @@ index f3f8510..61fb9c7 100644
      out.listener_l4proto = tctx.listener_l4proto;
      out.is_fragmented = tctx.is_fragmented;
 diff --git a/crates/honk-outbound/src/bootstrap.rs b/crates/honk-outbound/src/bootstrap.rs
-index 827bac6..758154d 100644
+index 827bac6..1f9419f 100644
 --- a/crates/honk-outbound/src/bootstrap.rs
 +++ b/crates/honk-outbound/src/bootstrap.rs
 @@ -27,7 +27,7 @@ use wire::{
@@ -7369,10 +7815,55 @@ index 827bac6..758154d 100644
  /// Snapshot the process-wide resolver for compatibility callers that do not
  /// already own a configuration generation.
  pub fn global() -> Option<BootstrapResolver> {
-@@ -214,6 +232,26 @@ where
+@@ -200,10 +218,35 @@ where
+         });
+     }
+     let mut configured_error: Option<io::Error> = None;
++    if let Ok(contents) = tokio::fs::read_to_string("/etc/hosts").await {
++        let mut addrs = hosts_addresses(&contents, host);
++        addrs.retain(|ip| families.matches(*ip));
++        if !addrs.is_empty() {
++            if let Some(mut observation) =
++                LookupObservation::start(host, "UNKNOWN", LookupOrigin::Hosts)
++            {
++                observation.finish(Ok::<_, &io::Error>(addrs.iter().copied()));
++            }
++            return Ok(ResolvedRecords {
++                ips: addrs,
++                min_ttl: None,
++            });
++        }
++    }
++    let has_distinct_fallback = global_fallback().is_some_and(|fb| Some(fb) != resolver);
+     if let Some(resolver) = resolver {
++        let now = tokio::time::Instant::now();
++        let primary_deadline = match deadline {
++            Some(dl) if has_distinct_fallback && dl > now => {
++                let rem = dl - now;
++                let half = (rem / 2).max(Duration::from_millis(800)).min(rem);
++                Some(now + half)
++            }
++            other => other,
++        };
+         let result = {
+             let _guard = admit().await?;
+-            resolver.query_records(host, families, deadline).await
++            resolver.query_records(host, families, primary_deadline).await
+         };
+         match result {
+             Ok(records) if !records.ips.is_empty() => return Ok(records),
+@@ -214,19 +257,24 @@ where
              }
          }
      }
+-    if let Ok(contents) = tokio::fs::read_to_string("/etc/hosts").await {
+-        let mut addrs = hosts_addresses(&contents, host);
+-        addrs.retain(|ip| families.matches(*ip));
+-        if !addrs.is_empty() {
+-            if let Some(mut observation) =
+-                LookupObservation::start(host, "UNKNOWN", LookupOrigin::Hosts)
+-            {
+-                observation.finish(Ok::<_, &io::Error>(addrs.iter().copied()));
 +    if let Some(fallback) = global_fallback().filter(|fb| Some(*fb) != resolver) {
 +        if let Some(err) = deadline_expired_error(deadline, &mut configured_error) {
 +            return Err(err);
@@ -7390,12 +7881,14 @@ index 827bac6..758154d 100644
 +            Err(e) => {
 +                tracing::debug!("fallback bootstrap resolution of '{}' failed: {}", host, e);
 +                configured_error = Some(e);
-+            }
-+        }
-+    }
-     if let Ok(contents) = tokio::fs::read_to_string("/etc/hosts").await {
-         let mut addrs = hosts_addresses(&contents, host);
-         addrs.retain(|ip| families.matches(*ip));
+             }
+-            return Ok(ResolvedRecords {
+-                ips: addrs,
+-                min_ttl: None,
+-            });
+         }
+     }
+     // Short-circuit after local /etc/hosts lookup and again after reading
 diff --git a/crates/honk-outbound/src/bootstrap/tests.rs b/crates/honk-outbound/src/bootstrap/tests.rs
 index 6a5878c..bd4fe61 100644
 --- a/crates/honk-outbound/src/bootstrap/tests.rs
@@ -7427,28 +7920,3 @@ index 6a5878c..bd4fe61 100644
  fn v4(d: u8) -> IpAddr {
      IpAddr::V4(Ipv4Addr::new(192, 0, 2, d))
  }
-diff --git a/crates/honk-core/build.rs b/crates/honk-core/build.rs
-index 64e41d3..e20349b 100644
---- a/crates/honk-core/build.rs
-+++ b/crates/honk-core/build.rs
-@@ -220,7 +220,7 @@ struct Compressed {
- fn encode(file: &std::path::Path) -> anyhow::Result<Option<Compressed>> {
-     use std::io::Write;
- 
--    const TEXT: &[&str] = &["css", "html", "js", "json", "svg", "txt", "webmanifest"];
-+    const TEXT: &[&str] = &["css", "html", "js", "json", "svg", "txt", "wasm", "webmanifest"];
-     if !file
-         .extension()
-         .and_then(|extension| extension.to_str())
-diff --git a/crates/honk-core/src/native_api/ui.rs b/crates/honk-core/src/native_api/ui.rs
-index e89f78b..1dfe54c 100644
---- a/crates/honk-core/src/native_api/ui.rs
-+++ b/crates/honk-core/src/native_api/ui.rs
-@@ -334,6 +334,7 @@ fn embedded_response(
-         "css" => "text/css",
-         "svg" => "image/svg+xml",
-         "json" => "application/json",
-+        "wasm" => "application/wasm",
-         "webmanifest" => "application/manifest+json",
-         "png" => "image/png",
-         "webp" => "image/webp",

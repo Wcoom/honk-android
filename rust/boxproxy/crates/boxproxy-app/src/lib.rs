@@ -14,17 +14,24 @@ use boxproxy_engine::{
 use boxproxy_schema::NetworkObservation;
 use boxproxy_store::BackupScope;
 use boxproxy_tools::InstalledAppInfo;
-use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring};
+use jni::objects::{GlobalRef, JByteArray, JClass, JFloatArray, JObject, JString, JValue};
+use jni::sys::{jboolean, jbyteArray, jfloat, jint, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
+use liquid_glass::{AgslShaderBundle, LiquidTabBarPhysics};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 static ENGINES: OnceLock<RwLock<BTreeMap<i64, Arc<BoxProxyEngine>>>> = OnceLock::new();
 static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
+static LIQUID_TABS: OnceLock<Mutex<BTreeMap<i64, LiquidTabBarPhysics>>> = OnceLock::new();
+static NEXT_TAB_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+fn liquid_tabs() -> &'static Mutex<BTreeMap<i64, LiquidTabBarPhysics>> {
+    LIQUID_TABS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
 
 fn registry() -> &'static RwLock<BTreeMap<i64, Arc<BoxProxyEngine>>> {
     ENGINES.get_or_init(|| RwLock::new(BTreeMap::new()))
@@ -496,4 +503,122 @@ pub extern "system" fn Java_io_honk_android_bridge_RustBridge_nativeRestoreBacku
         Err(e) => json_error_bytes(&e),
     };
     to_jbyte_array(&mut env, &payload)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_io_honk_android_bridge_RustBridge_nativeLiquidGlassShadersJson<
+    'local,
+>(
+    env: JNIEnv<'local>,
+    _cls: JClass<'local>,
+) -> jstring {
+    let json = serde_json::to_string(&AgslShaderBundle::build()).unwrap_or_else(|_| "{}".into());
+    env.new_string(json)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_io_honk_android_bridge_RustBridge_nativeLiquidTabCreate(
+    _env: JNIEnv<'_>,
+    _cls: JClass<'_>,
+    tabs_count: jint,
+    initial_index: jint,
+) -> jlong {
+    let handle = NEXT_TAB_HANDLE.fetch_add(1, Ordering::SeqCst);
+    let phys = LiquidTabBarPhysics::new(tabs_count.max(1) as usize, initial_index.max(0) as usize);
+    if let Ok(mut map) = liquid_tabs().lock() {
+        map.insert(handle, phys);
+    }
+    handle
+}
+
+#[no_mangle]
+pub extern "system" fn Java_io_honk_android_bridge_RustBridge_nativeLiquidTabDestroy(
+    _env: JNIEnv<'_>,
+    _cls: JClass<'_>,
+    handle: jlong,
+) {
+    if let Ok(mut map) = liquid_tabs().lock() {
+        map.remove(&handle);
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_io_honk_android_bridge_RustBridge_nativeLiquidTabEvent(
+    _env: JNIEnv<'_>,
+    _cls: JClass<'_>,
+    handle: jlong,
+    kind: jint,
+    a: jfloat,
+    b: jfloat,
+) -> jint {
+    let Ok(mut map) = liquid_tabs().lock() else {
+        return -1;
+    };
+    let Some(phys) = map.get_mut(&handle) else {
+        return -1;
+    };
+    match kind {
+        0 => {
+            phys.set_tabs_count(a.max(1.0) as usize, b.max(0.0) as usize);
+            phys.selected_index as jint
+        }
+        1 => {
+            phys.animate_to_tab(a.max(0.0) as usize);
+            phys.selected_index as jint
+        }
+        2 => {
+            phys.sync_external_tab(a.max(0.0) as usize);
+            phys.selected_index as jint
+        }
+        3 => {
+            phys.on_drag_start();
+            phys.selected_index as jint
+        }
+        4 => {
+            phys.on_drag_delta(a, b);
+            phys.value.target.round().max(0.0) as jint
+        }
+        5 => phys.on_drag_end() as jint,
+        _ => phys.selected_index as jint,
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_io_honk_android_bridge_RustBridge_nativeLiquidTabStep<'local>(
+    env: JNIEnv<'local>,
+    _cls: JClass<'local>,
+    handle: jlong,
+    dt_secs: jfloat,
+    bar_width_px: jfloat,
+    density: jfloat,
+    out_buf: JFloatArray<'local>,
+) -> jboolean {
+    let Ok(mut map) = liquid_tabs().lock() else {
+        return 1;
+    };
+    let Some(phys) = map.get_mut(&handle) else {
+        return 1;
+    };
+    let f = phys.step(dt_secs, bar_width_px, density);
+    let data = [
+        f.value,
+        f.press_progress,
+        f.panel_offset_x,
+        f.panel_scale,
+        f.droplet_scale_x,
+        f.droplet_scale_y,
+        f.droplet_refraction_height,
+        f.droplet_refraction_amount,
+        f.bar_refraction_height,
+        f.bar_refraction_amount,
+        f.highlight_alpha,
+        f.shadow_alpha,
+        f.inner_shadow_radius,
+        f.tab_content_scale,
+        f.highlight_center_frac,
+    ];
+    let _ = env.set_float_array_region(&out_buf, 0, &data);
+    u8::from(f.settled)
 }

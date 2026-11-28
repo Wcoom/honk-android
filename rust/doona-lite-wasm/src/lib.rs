@@ -4,7 +4,9 @@
 
 pub mod qr;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use doona_common::client::ApiClient;
 use doona_common::format::{format_bytes, format_latency};
@@ -14,6 +16,7 @@ use doona_common::model::{
     ProviderItem, RuntimeSnapshot, VersionInfo,
 };
 use leptos::prelude::*;
+use liquid_glass::{LiquidTabBarPhysics, LiquidTabFrame, NavDirection, build_svg_lens_assets};
 use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -89,6 +92,8 @@ struct LiteState {
     lang: RwSignal<Lang>,
     theme: RwSignal<String>,
     screen: RwSignal<String>,
+    nav_dir: RwSignal<NavDirection>,
+    nav_seq: RwSignal<u64>,
     api_base: RwSignal<String>,
     api_token: RwSignal<Option<String>>,
     connected: RwSignal<bool>,
@@ -127,6 +132,8 @@ impl LiteState {
             lang: RwSignal::new(lang),
             theme: RwSignal::new(theme),
             screen: RwSignal::new(screen),
+            nav_dir: RwSignal::new(NavDirection::CrossFade),
+            nav_seq: RwSignal::new(0),
             api_base: RwSignal::new(base),
             api_token: RwSignal::new(token),
             connected: RwSignal::new(false),
@@ -194,6 +201,17 @@ impl LiteState {
     }
 
     fn go(&self, s: &str) {
+        let prev = self.screen.get_untracked();
+        if prev != s {
+            let fi = SCREENS.iter().position(|&x| x == prev).unwrap_or(0);
+            let ti = SCREENS.iter().position(|&x| x == s).unwrap_or(0);
+            self.nav_dir.set(if ti >= fi {
+                NavDirection::TabForward
+            } else {
+                NavDirection::TabBackward
+            });
+            self.nav_seq.update(|n| *n += 1);
+        }
         if let Some(w) = web_sys::window() {
             let _ = w.location().set_hash(&format!("#{s}"));
         }
@@ -263,7 +281,19 @@ impl LiteState {
                 if let Some(win) = web_sys::window()
                     && let Ok(h) = win.location().hash()
                 {
-                    st.screen.set(parse_screen(&h));
+                    let next = parse_screen(&h);
+                    let prev = st.screen.get_untracked();
+                    if prev != next {
+                        let fi = SCREENS.iter().position(|&x| x == prev).unwrap_or(0);
+                        let ti = SCREENS.iter().position(|&x| x == next).unwrap_or(0);
+                        st.nav_dir.set(if ti >= fi {
+                            NavDirection::TabForward
+                        } else {
+                            NavDirection::TabBackward
+                        });
+                        st.nav_seq.update(|n| *n += 1);
+                    }
+                    st.screen.set(next);
                 }
             }) as Box<dyn FnMut()>);
             let _ = w.add_event_listener_with_callback("hashchange", on_hash.as_ref().unchecked_ref());
@@ -416,22 +446,305 @@ fn LiteShell() -> impl IntoView {
                         <button type="button" class="lite-btn sm" on:click=move |_| st.notice.set(None)>"×"</button>
                     </div>
                 })}
-                {move || match st.screen.get().as_str() {
-                    "nodes" => view! { <NodesScreen /> }.into_any(),
-                    "subscriptions" => view! { <SubscriptionsScreen /> }.into_any(),
-                    "routing" => view! { <RoutingScreen /> }.into_any(),
-                    "dns" => view! { <DnsScreen /> }.into_any(),
-                    _ => view! { <GroupsScreen /> }.into_any(),
+                {move || {
+                    let current = st.screen.get();
+                    let dir = st.nav_dir.get_untracked().css_attr();
+                    let parity = (st.nav_seq.get_untracked() % 2).to_string();
+                    let body = match current.as_str() {
+                        "nodes" => view! { <NodesScreen /> }.into_any(),
+                        "subscriptions" => view! { <SubscriptionsScreen /> }.into_any(),
+                        "routing" => view! { <RoutingScreen /> }.into_any(),
+                        "dns" => view! { <DnsScreen /> }.into_any(),
+                        _ => view! { <GroupsScreen /> }.into_any(),
+                    };
+                    view! {
+                        <div class="lite-route-stage" data-nav-dir=dir data-nav-parity=parity>
+                            {body}
+                        </div>
+                    }
                 }}
             </main>
+
+            <LiteLiquidBottomBar />
         </div>
+    }
+}
+
+#[component]
+fn LiteLiquidBottomBar() -> impl IntoView {
+    let st = expect_context::<LiteState>();
+    let lens = StoredValue::new(build_svg_lens_assets());
+    let tabs_count = SCREENS.len();
+    let init_idx = SCREENS
+        .iter()
+        .position(|&s| s == st.screen.get_untracked())
+        .unwrap_or(0);
+
+    let physics = Rc::new(RefCell::new(LiquidTabBarPhysics::new(tabs_count, init_idx)));
+    let frame_sig = RwSignal::new({
+        let mut p = physics.borrow_mut();
+        p.step(1.0 / 60.0, 380.0, 1.0)
+    });
+    let raf_active = Rc::new(RefCell::new(false));
+    let bar_width = Rc::new(RefCell::new(380.0f32));
+    let drag_state = Rc::new(RefCell::new(None::<(i32, f32, bool)>));
+    let bar_ref = NodeRef::<leptos::html::Div>::new();
+
+    let wake_raf: Rc<dyn Fn()> = {
+        let physics = physics.clone();
+        let raf_active = raf_active.clone();
+        let bar_width = bar_width.clone();
+        Rc::new(move || {
+            if *raf_active.borrow() {
+                return;
+            }
+            *raf_active.borrow_mut() = true;
+            let phys_c = physics.clone();
+            let active_c = raf_active.clone();
+            let width_c = bar_width.clone();
+            let last_ms = Rc::new(RefCell::new(None::<f64>));
+            type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
+            let cb_slot: RafClosureSlot = Rc::new(RefCell::new(None));
+            let cb_slot_inner = cb_slot.clone();
+
+            *cb_slot.borrow_mut() = Some(Closure::wrap(Box::new(move |now_ms: f64| {
+                let dt = {
+                    let mut prev = last_ms.borrow_mut();
+                    let dt = match *prev {
+                        Some(p) => ((now_ms - p) / 1000.0).clamp(0.001, 0.05) as f32,
+                        None => 1.0 / 60.0,
+                    };
+                    *prev = Some(now_ms);
+                    dt
+                };
+                let w = (*width_c.borrow()).max(180.0);
+                let frame: LiquidTabFrame = phys_c.borrow_mut().step(dt, w, 1.0);
+                frame_sig.set(frame);
+                if frame.settled {
+                    *active_c.borrow_mut() = false;
+                    let _ = cb_slot_inner.borrow_mut().take();
+                } else if let Some(win) = web_sys::window() {
+                    if let Some(ref c) = *cb_slot_inner.borrow() {
+                        let _ = win.request_animation_frame(c.as_ref().unchecked_ref());
+                    }
+                } else {
+                    *active_c.borrow_mut() = false;
+                }
+            }) as Box<dyn FnMut(f64)>));
+
+            if let Some(win) = web_sys::window() {
+                if let Some(ref c) = *cb_slot.borrow() {
+                    let _ = win.request_animation_frame(c.as_ref().unchecked_ref());
+                }
+            } else {
+                *raf_active.borrow_mut() = false;
+            }
+        })
+    };
+
+    {
+        let physics = physics.clone();
+        let wake = wake_raf.clone();
+        Effect::new(move |_| {
+            let cur = st.screen.get();
+            let idx = SCREENS.iter().position(|&s| s == cur).unwrap_or(0);
+            physics.borrow_mut().sync_external_tab(idx);
+            wake();
+        });
+    }
+
+    let on_down = {
+        let physics = physics.clone();
+        let drag_state = drag_state.clone();
+        let bar_width = bar_width.clone();
+        let wake = wake_raf.clone();
+        move |ev: web_sys::PointerEvent| {
+            if ev.button() != 0 {
+                return;
+            }
+            if let Some(el) = bar_ref.get() {
+                let rect = el.get_bounding_client_rect();
+                if rect.width() > 40.0 {
+                    *bar_width.borrow_mut() = rect.width() as f32;
+                }
+                let _ = el.set_pointer_capture(ev.pointer_id());
+            }
+            *drag_state.borrow_mut() = Some((ev.pointer_id(), ev.client_x() as f32, false));
+            physics.borrow_mut().on_drag_start();
+            wake();
+        }
+    };
+
+    let on_move = {
+        let physics = physics.clone();
+        let drag_state = drag_state.clone();
+        let bar_width = bar_width.clone();
+        let wake = wake_raf.clone();
+        move |ev: web_sys::PointerEvent| {
+            let mut ds = drag_state.borrow_mut();
+            let Some((pid, ref mut last_x, ref mut moved)) = *ds else {
+                return;
+            };
+            if ev.pointer_id() != pid {
+                return;
+            }
+            let x = ev.client_x() as f32;
+            let dx = x - *last_x;
+            if dx.abs() > 1.5 || *moved {
+                *moved = true;
+                *last_x = x;
+                let w = (*bar_width.borrow()).max(180.0);
+                let tab_w = ((w - 8.0) / (tabs_count as f32)).max(24.0);
+                physics.borrow_mut().on_drag_delta(dx, tab_w);
+                wake();
+            }
+        }
+    };
+
+    let finish = {
+        let physics = physics.clone();
+        let drag_state = drag_state.clone();
+        let wake = wake_raf.clone();
+        Rc::new(move |ev: web_sys::PointerEvent| {
+            let taken = {
+                let mut ds = drag_state.borrow_mut();
+                if ds.as_ref().is_some_and(|(pid, _, _)| *pid == ev.pointer_id()) {
+                    ds.take()
+                } else {
+                    None
+                }
+            };
+            let Some((_, _, moved)) = taken else {
+                return;
+            };
+            if let Some(el) = bar_ref.get() {
+                let _ = el.release_pointer_capture(ev.pointer_id());
+            }
+            let chosen = physics.borrow_mut().on_drag_end();
+            wake();
+            if moved
+                && let Some(&scr) = SCREENS.get(chosen)
+                && scr != st.screen.get_untracked()
+            {
+                st.go(scr);
+            }
+        })
+    };
+    let on_up = {
+        let f = finish.clone();
+        move |ev: web_sys::PointerEvent| f(ev)
+    };
+    let on_cancel = move |ev: web_sys::PointerEvent| finish(ev);
+
+    let bar_style = move || {
+        let f = frame_sig.get();
+        format!(
+            "transform:translate3d({:.2}px,0,0) scale({:.4});--lg-hl-x:{:.2}%;",
+            f.panel_offset_x,
+            f.panel_scale,
+            f.highlight_center_frac * 100.0
+        )
+    };
+    let droplet_style = move || {
+        let f = frame_sig.get();
+        let pct_w = 100.0 / (tabs_count as f32);
+        let pct_x = f.value * 100.0;
+        format!(
+            "width:calc({pct_w:.4}% - 2px);transform:translate3d({pct_x:.2}%,0,0) scale({:.4},{:.4});",
+            f.droplet_scale_x, f.droplet_scale_y
+        )
+    };
+
+    view! {
+        <svg aria-hidden="true" width="0" height="0" style="position:fixed;width:0;height:0;pointer-events:none;">
+            <defs>
+                {move || {
+                    let a = lens.get_value();
+                    let bs = format!("{:.2}", a.bar_scale);
+                    let rs = format!("{:.2}", a.droplet_red_scale);
+                    let gs = format!("{:.2}", a.droplet_scale);
+                    let bbs = format!("{:.2}", a.droplet_blue_scale);
+                    view! {
+                        <filter id="lite-lg-bar" x="-5%" y="-5%" width="110%" height="110%" color-interpolation-filters="sRGB">
+                            <feImage href=a.bar_map_uri.clone() result="barDisp" preserveAspectRatio="none" />
+                            <feDisplacementMap in="SourceGraphic" in2="barDisp" scale=bs xChannelSelector="R" yChannelSelector="G" result="ref" />
+                            <feColorMatrix in="ref" type="saturate" values="1.45" />
+                        </filter>
+                        <filter id="lite-lg-droplet" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+                            <feImage href=a.droplet_map_uri.clone() result="dropDisp" preserveAspectRatio="none" />
+                            <feDisplacementMap in="SourceGraphic" in2="dropDisp" scale=rs xChannelSelector="R" yChannelSelector="G" result="dR" />
+                            <feColorMatrix in="dR" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="cR" />
+                            <feDisplacementMap in="SourceGraphic" in2="dropDisp" scale=gs xChannelSelector="R" yChannelSelector="G" result="dG" />
+                            <feColorMatrix in="dG" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="cG" />
+                            <feDisplacementMap in="SourceGraphic" in2="dropDisp" scale=bbs xChannelSelector="R" yChannelSelector="G" result="dB" />
+                            <feColorMatrix in="dB" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="cB" />
+                            <feBlend in="cR" in2="cG" mode="screen" result="rg" />
+                            <feBlend in="rg" in2="cB" mode="screen" result="rgb" />
+                            <feColorMatrix in="rgb" type="saturate" values="1.35" />
+                        </filter>
+                    }
+                }}
+            </defs>
+        </svg>
+
+        <nav class="lite-lg-dock-wrap" aria-label="Bottom navigation">
+            <div
+                node_ref=bar_ref
+                class="lite-lg-dock"
+                style=bar_style
+                on:pointerdown=on_down
+                on:pointermove=on_move
+                on:pointerup=on_up
+                on:pointercancel=on_cancel
+            >
+                <div class="lite-lg-surface" aria-hidden="true"></div>
+                <div class="lite-lg-track">
+                    <div class="lite-lg-droplet" style=droplet_style aria-hidden="true"></div>
+                    {SCREENS.iter().enumerate().map(|(idx, &s)| {
+                        let href = format!("#{s}");
+                        let phys_tap = physics.clone();
+                        let wake_tap = wake_raf.clone();
+                        view! {
+                            <a
+                                class="lite-lg-tab"
+                                href=href
+                                aria-current=move || (st.screen.get() == s).then_some("page")
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    ev.prevent_default();
+                                    phys_tap.borrow_mut().animate_to_tab(idx);
+                                    wake_tap();
+                                    st.go(s);
+                                }
+                            >
+                                <span>{move || st.label_screen(s)}</span>
+                            </a>
+                        }
+                    }).collect_view()}
+                </div>
+            </div>
+        </nav>
     }
 }
 
 #[component]
 fn GroupsScreen() -> impl IntoView {
     let st = expect_context::<LiteState>();
-    let selected_group = RwSignal::new(String::new());
+    let collapsed = RwSignal::new(std::collections::HashSet::<String>::new());
+    let seeded = RwSignal::new(false);
+
+    Effect::new(move |_| {
+        let gs = st.groups.get();
+        if !gs.is_empty() && !seeded.get_untracked() {
+            let mut set = std::collections::HashSet::new();
+            for g in &gs {
+                if g.member_count > 12 {
+                    set.insert(g.id.clone());
+                }
+            }
+            collapsed.set(set);
+            seeded.set(true);
+        }
+    });
 
     view! {
         <div class="lite-page">
@@ -441,13 +754,23 @@ fn GroupsScreen() -> impl IntoView {
             </div>
             <div class="lite-grid">
                 {move || {
-                    let gs = st.groups.get();
+                    let all_gs = st.groups.get();
                     let dets = st.group_details.get();
                     let nodes = st.nodes.get().map(|n| n.nodes).unwrap_or_default();
-                    gs.into_iter().map(|g| {
+                    let lang = st.lang.get();
+                    all_gs.iter().map(|g| {
                         let gid = g.id.clone();
+                        let gid_tog = g.id.clone();
+                        let gid_chk = g.id.clone();
                         let gid_probe = g.id.clone();
                         let det = dets.get(&gid).cloned();
+                        let summary = doona_common::model::resolve_group_effective_summary(
+                            g,
+                            det.as_ref(),
+                            &all_gs,
+                            &nodes,
+                            lang,
+                        );
                         let active_id = det
                             .as_ref()
                             .and_then(|d| d.runtime.selection.tcp.as_ref())
@@ -455,14 +778,27 @@ fn GroupsScreen() -> impl IntoView {
                             .or_else(|| g.selection.tcp_member_id.clone())
                             .unwrap_or_default();
                         let can_sel = det.as_ref().is_some_and(|d| d.capabilities.can_select || d.capabilities.can_override);
-                        let is_open = selected_group.get().is_empty() || selected_group.get() == gid;
+                        let nodes_c = nodes.clone();
                         view! {
                             <section class="lite-card">
-                                <div class="lite-between">
-                                    <div>
+                                <div class="lite-between" style="gap:8px;">
+                                    <div
+                                        style="cursor:pointer;flex:1;min-width:0;"
+                                        on:click=move |_| {
+                                            let id = gid_tog.clone();
+                                            collapsed.update(|set| {
+                                                if !set.remove(&id) {
+                                                    set.insert(id);
+                                                }
+                                            });
+                                        }
+                                    >
+                                        <strong>{move || if collapsed.get().contains(&gid_chk) { "▸ " } else { "▾ " }}</strong>
                                         <strong>{g.name.clone()}</strong>
                                         " "
                                         <span class="lite-badge">{g.policy.kind.clone()}</span>
+                                        " "
+                                        <span class="lite-muted" style="font-size:12px;">{summary}</span>
                                     </div>
                                     <button type="button" class="lite-btn sm" on:click=move |_| {
                                         let id = gid_probe.clone();
@@ -478,13 +814,13 @@ fn GroupsScreen() -> impl IntoView {
                                         });
                                     }>{move || st.t("pol.probe")}</button>
                                 </div>
-                                {is_open.then(|| det.map(|d| view! {
+                                {move || (!collapsed.get().contains(&gid)).then(|| det.clone().map(|d| view! {
                                     <div class="lite-member-grid">
                                         {d.members.into_iter().map(|m| {
                                             let active = m.id == active_id;
                                             let mid = m.id.clone();
                                             let gid_c = gid.clone();
-                                            let lat = nodes.iter().find(|n| n.id == m.id).and_then(|n| n.best_latency_ms());
+                                            let lat = nodes_c.iter().find(|n| n.id == m.id).and_then(|n| n.best_latency_ms());
                                             view! {
                                                 <button
                                                     type="button"
@@ -524,6 +860,7 @@ fn NodesScreen() -> impl IntoView {
     let search = RwSignal::new(String::new());
     let name = RwSignal::new(String::new());
     let link = RwSignal::new(String::new());
+    let pending_del = RwSignal::new(None::<(String, String)>);
 
     let add_node = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
@@ -583,6 +920,7 @@ fn NodesScreen() -> impl IntoView {
                                     let nid_p = n.id.clone();
                                     let nid_d = n.id.clone();
                                     let share_name = n.name.clone();
+                                    let del_name = n.name.clone();
                                     let share_val = format!("honk://node/{}", n.id);
                                     let lat = format_latency(n.best_latency_ms());
                                     view! {
@@ -595,20 +933,20 @@ fn NodesScreen() -> impl IntoView {
                                                     let id = nid_p.clone();
                                                     let api = st.client();
                                                     spawn_local(async move {
-                                                        let _ = api.probe_node(&id).await;
-                                                        st.reload_data();
+                                                        match api.probe_node(&id).await {
+                                                            Ok(_) => {
+                                                                st.flash("ok", st.t("pol.probeStarted"));
+                                                                st.reload_data();
+                                                            }
+                                                            Err(e) => st.flash("err", e),
+                                                        }
                                                     });
                                                 }>{st.t("pol.probe")}</button>
                                                 <button type="button" class="lite-btn sm" on:click=move |_| {
                                                     st.share_payload.set(Some((share_name.clone(), share_val.clone())));
                                                 }>"QR"</button>
                                                 <button type="button" class="lite-btn sm" on:click=move |_| {
-                                                    let id = nid_d.clone();
-                                                    let api = st.client();
-                                                    spawn_local(async move {
-                                                        let _ = api.delete_node(&id).await;
-                                                        st.reload_data();
-                                                    });
+                                                    pending_del.set(Some((nid_d.clone(), del_name.clone())));
                                                 }>"×"</button>
                                             </td>
                                         </tr>
@@ -619,6 +957,26 @@ fn NodesScreen() -> impl IntoView {
                     </tbody>
                 </table>
             </section>
+            <Show when=move || pending_del.get().is_some()>
+                <div class="lite-modal-bg" on:click=move |_| pending_del.set(None)>
+                    <div class="lite-card lite-modal" style="display:flex;flex-direction:column;gap:12px;" on:click=move |ev| ev.stop_propagation()>
+                        <strong>{move || pending_del.get().map(|(_, n)| format!("删除节点 “{n}”？")).unwrap_or_default()}</strong>
+                        <div style="display:flex;gap:8px;justify-content:flex-end;">
+                            <button type="button" class="lite-btn sm" on:click=move |_| pending_del.set(None)>{move || st.t("ui.cancel")}</button>
+                            <button type="button" class="lite-btn primary sm" on:click=move |_| {
+                                if let Some((id, _)) = pending_del.get_untracked() {
+                                    pending_del.set(None);
+                                    let api = st.client();
+                                    spawn_local(async move {
+                                        let _ = api.delete_node(&id).await;
+                                        st.reload_data();
+                                    });
+                                }
+                            }>"确认删除"</button>
+                        </div>
+                    </div>
+                </div>
+            </Show>
         </div>
     }
 }
@@ -667,38 +1025,52 @@ fn SubscriptionsScreen() -> impl IntoView {
                         return view! { <p class="lite-muted">{st.t("act.noSubscriptions")}</p> }.into_any();
                     }
                     list.into_iter().map(|p| {
+                        let is_inline = p.id == "inline" || p.kind.as_deref() == Some("inline");
                         let pid_r = p.id.clone();
                         let pid_d = p.id.clone();
-                        let share_u = p.url.clone().unwrap_or_else(|| p.name.clone());
+                        let can_share = p.url.as_deref().is_some_and(|u| !u.is_empty() && !u.contains("***"));
+                        let share_u = p.url.clone().unwrap_or_default();
                         let share_n = p.name.clone();
+                        let disp_name = if is_inline && p.name == "inline" { "内置节点 (Inline)".to_string() } else { p.name };
                         view! {
                             <div class="lite-between lite-subscription-row" style="padding:10px 0;">
                                 <div>
-                                    <strong>{p.name}</strong>
+                                    <strong>{disp_name}</strong>
                                     " "
                                     <span class="lite-badge">{format!("{} nodes", p.node_count.unwrap_or(0))}</span>
                                 </div>
-                                <div style="display:flex;gap:6px;">
-                                    <button type="button" class="lite-btn sm" on:click=move |_| {
-                                        let id = pid_r.clone();
-                                        let api = st.client();
-                                        spawn_local(async move {
-                                            let _ = api.refresh_provider(&id).await;
-                                            st.reload_data();
-                                        });
-                                    }>{st.t("ui.refresh")}</button>
-                                    <button type="button" class="lite-btn sm" on:click=move |_| {
-                                        st.share_payload.set(Some((share_n.clone(), share_u.clone())));
-                                    }>"QR"</button>
-                                    <button type="button" class="lite-btn sm" on:click=move |_| {
-                                        let id = pid_d.clone();
-                                        let api = st.client();
-                                        spawn_local(async move {
-                                            let _ = api.delete_provider(&id).await;
-                                            st.reload_data();
-                                        });
-                                    }>"×"</button>
-                                </div>
+                                {(!is_inline).then(|| view! {
+                                    <div style="display:flex;gap:6px;">
+                                        <button type="button" class="lite-btn sm" on:click=move |_| {
+                                            let id = pid_r.clone();
+                                            let api = st.client();
+                                            spawn_local(async move {
+                                                match api.refresh_provider(&id).await {
+                                                    Ok(_) => {
+                                                        st.flash("ok", st.t("ui.refresh"));
+                                                        st.reload_data();
+                                                    }
+                                                    Err(e) => st.flash("err", e),
+                                                }
+                                            });
+                                        }>{st.t("ui.refresh")}</button>
+                                        {can_share.then(|| view! {
+                                            <button type="button" class="lite-btn sm" on:click=move |_| {
+                                                st.share_payload.set(Some((share_n.clone(), share_u.clone())));
+                                            }>"QR"</button>
+                                        })}
+                                        <button type="button" class="lite-btn sm" on:click=move |_| {
+                                            let id = pid_d.clone();
+                                            let api = st.client();
+                                            spawn_local(async move {
+                                                match api.delete_provider(&id).await {
+                                                    Ok(_) => st.reload_data(),
+                                                    Err(e) => st.flash("err", e),
+                                                }
+                                            });
+                                        }>"×"</button>
+                                    </div>
+                                })}
                             </div>
                         }
                     }).collect_view().into_any()
@@ -754,8 +1126,24 @@ fn RoutingScreen() -> impl IntoView {
                     <input class="lite-input" style="flex:1;" prop:value=move || trace_domain.get() on:input=move |ev| trace_domain.set(event_target_value(&ev)) />
                     <button type="submit" class="lite-btn primary sm">{move || st.t("rules.traceRun")}</button>
                 </form>
-                {move || trace_res.get().map(|v| view! {
-                    <pre class="lite-pre">{serde_json::to_string_pretty(&v).unwrap_or_default()}</pre>
+                {move || trace_res.get().map(|v| {
+                    let ev0 = v.get("evaluations").and_then(Value::as_array).and_then(|a| a.first());
+                    let dec = ev0.or_else(|| v.get("decision")).unwrap_or(&v);
+                    let out = dec.get("outbound").or_else(|| v.get("outbound")).and_then(|o| o.get("name").and_then(Value::as_str).or_else(|| o.as_str())).unwrap_or("—").to_string();
+                    let rule = ev0
+                        .and_then(|ev| ev.get("rules"))
+                        .and_then(Value::as_array)
+                        .and_then(|rs| rs.iter().find(|r| r.get("matched").and_then(Value::as_bool) == Some(true) || matches!(r.get("result").or_else(|| r.get("outcome")).and_then(Value::as_str), Some("matched" | "match"))))
+                        .and_then(|r| r.get("expression").and_then(Value::as_str))
+                        .or_else(|| v.get("matched_rule").or_else(|| dec.get("matched_rule")).and_then(|r| r.get("expression").and_then(Value::as_str).or_else(|| r.as_str())))
+                        .unwrap_or("fallback")
+                        .to_string();
+                    view! {
+                        <div style="margin-top:10px;padding:10px;border-radius:10px;border:1px solid var(--lite-border);display:flex;flex-direction:column;gap:4px;">
+                            <div><strong>"出站: "</strong><span class="lite-badge">{out}</span></div>
+                            <div><strong>"规则: "</strong><code>{rule}</code></div>
+                        </div>
+                    }
                 })}
             </section>
             <section class="lite-card">
@@ -832,15 +1220,45 @@ fn DnsScreen() -> impl IntoView {
                     <input class="lite-input" style="flex:1;" prop:value=move || domain.get() on:input=move |ev| domain.set(event_target_value(&ev)) />
                     <button type="submit" class="lite-btn primary sm">{move || st.t("dns.run")}</button>
                 </form>
-                {move || result.get().map(|v| view! {
-                    <pre class="lite-pre">{serde_json::to_string_pretty(&v).unwrap_or_default()}</pre>
+                {move || result.get().map(|v| {
+                    let queries = v.get("queries").or_else(|| v.get("results")).and_then(Value::as_array).cloned().unwrap_or_else(|| vec![v.clone()]);
+                    view! {
+                        <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">
+                            {queries.into_iter().map(|q| {
+                                let rcode = q.get("rcode").or_else(|| q.get("status")).and_then(Value::as_str).unwrap_or("NOERROR").to_string();
+                                let answers = q.get("answers").or_else(|| q.get("records")).and_then(Value::as_array).map(|arr| {
+                                    arr.iter().filter_map(|a| a.get("data").or_else(|| a.get("value")).and_then(Value::as_str)).collect::<Vec<_>>().join(", ")
+                                }).filter(|s| !s.is_empty()).unwrap_or_else(|| "—".into());
+                                view! {
+                                    <div style="padding:8px 10px;border-radius:10px;border:1px solid var(--lite-border);display:flex;justify-content:space-between;gap:8px;">
+                                        <span class="lite-badge">{rcode}</span>
+                                        <code style="word-break:break-all;">{answers}</code>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    }
                 })}
             </section>
-            {move || dns_rules.get().map(|r| view! {
-                <section class="lite-card">
-                    <h2 style="margin-top:0;font-size:15px;">"DNS Rules"</h2>
-                    <pre class="lite-pre">{serde_json::to_string_pretty(&r).unwrap_or_default()}</pre>
-                </section>
+            {move || dns_rules.get().map(|r| {
+                let upstreams = r.get("upstreams").and_then(Value::as_array).cloned().unwrap_or_default();
+                view! {
+                    <section class="lite-card">
+                        <h2 style="margin-top:0;font-size:15px;">"DNS Upstreams"</h2>
+                        <div style="display:flex;flex-direction:column;gap:6px;">
+                            {upstreams.into_iter().map(|u| {
+                                let n = u.get("name").and_then(Value::as_str).unwrap_or("upstream").to_string();
+                                let addr = u.get("url").or_else(|| u.get("address")).and_then(Value::as_str).unwrap_or("—").to_string();
+                                view! {
+                                    <div class="lite-between">
+                                        <strong>{n}</strong>
+                                        <code>{addr}</code>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    </section>
+                }
             })}
         </div>
     }

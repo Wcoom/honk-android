@@ -33,10 +33,10 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `honk-android-release-v1.1.0-arm64.tar.gz` | 完整正式版一体包（含纯 Rust `honk-core`、`boxctl` v15、`boxbpf`、纯 Rust 1:1 复刻版 `BoxProxy-honk-arm64.apk`、配置模板、指南、AI Skill、补丁与校验和） |
-| `honk-android-arm64` | 静态链接 `aarch64-unknown-linux-musl` 的 `honk-core`（支持 GKI 6.1+ / 6.6+，内嵌纯 Rust Leptos WASM 版 Doona `/ui/` 与 `/ui/lite/`，体积较 React 版缩小 1.43 MB，含「节点策略选择」规则分流联动、独立 cgroup 内存遥测与核心在线更新） |
+| `honk-android-release-v1.2.0-arm64.tar.gz` | 完整正式版一体包（含纯 Rust `honk-core`、`boxctl` v15、`boxbpf`、iOS 液态玻璃版 `BoxProxy-honk-arm64.apk`、配置模板、指南、AI Skill、补丁与校验和） |
+| `honk-android-arm64` | 静态链接 `aarch64-unknown-linux-musl` 的 `honk-core`（支持 GKI 6.1+ / 6.6+，双模内嵌纯 Rust Leptos WASM 版 Doona `/ui/` 与 `/ui/lite/`，按需录制省电架构 `RecorderMode::Auto`、双栈 WAN 自动探测、独立 cgroup 内存遥测与核心在线更新） |
 | `boxctl-android-arm64` | 统一升级至 `box.db` schema v15（21 表 + `meow` 核心 + `network_rule_groups` AST + `shared_network_*`）的静态 `boxctl` |
-| `BoxProxy-honk-arm64.apk` | **纯 Rust MVI 引擎（`libboxproxy_app.so`，全 58 模块）+ 1:1 HyperOS Miuix 前端与全设置复刻版**，独立包名 **`com.boxproxy.honk`**（`BoxProxy Honk`，`26.11.28.v1.1.0` / `v216`），R8 裁剪体积仅 **7.3 MB**（内嵌 `libboxproxy_app.so` + v15 `boxctl` + 纯 Rust `boxbpf`），可与官方原版 `com.boxproxy.box` 无缝共存 |
+| `BoxProxy-honk-arm64.apk` | **纯 Rust MVI 引擎（`libboxproxy_app.so`）+ 纯 Rust `liquid-glass` AGSL 液态玻璃底栏 & iOS 120Hz 动效客户端**，独立包名 **`com.boxproxy.honk`**（`BoxProxy Honk`，`26.11.28.v1.2.0` / `v217`），可与官方原版 `com.boxproxy.box` 无缝共存 |
 | `config.example.dae` | 脱敏后的 Android 全功能 7 源融合分流配置模板（含去广告、WebRTC 防泄漏、大陆 App/域名/IPv4+IPv6 直连及 `Wcoom/honk-rules-dat` 云端自动拉取） |
 | `SHA256SUMS.txt` | 所有发布产物的 SHA-256 校验值 |
 
